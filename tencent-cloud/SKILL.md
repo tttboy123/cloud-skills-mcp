@@ -144,4 +144,70 @@ bash scripts/cloudbase.sh functions
 | `UnauthorizedOperation` | 子账号没权限 | 腾讯云 CAM 控制台加权限 |
 | `RequestLimitExceeded` | API 调用频率超限 | 加 `--interval 1` 减慢 |
 
+## MCP 调用方式 (推荐, Phase 1 PoC)
+
+本 skill 同时支持 **bash 脚本 (fallback)** 和 **MCP server (推荐)** 两种调用方式。
+两者读同一份 macOS Keychain 凭证, 行为一致; MCP 工具会**强制要求 `force=true`**
+才会执行 `start` / `stop` 等破坏性操作。
+
+### 工具清单 (4 个 CVM)
+
+| MCP 工具 | 作用 | 是否需要 force |
+|---|---|---|
+| `tencent_cvm_list_instances` | 列 CVM 实例 | 否 |
+| `tencent_cvm_describe_instance` | 按 ID 查 CVM 详情 | 否 |
+| `tencent_cvm_start_instance` | 开机 CVM | **是** |
+| `tencent_cvm_stop_instance` | 关机 CVM | **是** |
+
+### 注册到 `~/.claude/mcp_servers.json`
+
+```json
+{
+  "mcpServers": {
+    "tencent-cloud": {
+      "command": "/Users/lune/bin/tencent-cloud-mcp",
+      "env": {}
+    }
+  }
+}
+```
+
+> 其他 5 个云 (aws / azure / gcp / alicloud / baiducloud) 在 Phase 2 注册。
+
+### stdio JSON-RPC 调用样例
+
+```bash
+# 列工具
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | /Users/lune/bin/tencent-cloud-mcp
+
+# 列出 ap-shanghai region 的 CVM
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call",
+       "params":{"name":"tencent_cvm_list_instances",
+                 "arguments":{"region":"ap-shanghai","limit":10}}}' \
+  | /Users/lune/bin/tencent-cloud-mcp
+
+# 启动 CVM (注意 force=true)
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call",
+       "params":{"name":"tencent_cvm_start_instance",
+                 "arguments":{"instance_id":"ins-abc123def","force":true}}}' \
+  | /Users/lune/bin/tencent-cloud-mcp
+```
+
+### 何时用 bash vs MCP
+
+| 场景 | 推荐 |
+|---|---|
+| 一次性手动查 (单条命令) | bash (`lighthouse.sh list`) |
+| Claude/Cursor 集成, 多步自动编排 | **MCP** (工具更细粒度, 错误处理一致) |
+| 需要 `--filter` / 模糊匹配 | bash (`lighthouse.sh list --filter web`) |
+| 危险操作需要二次确认 | **MCP** (force 守卫) |
+
+### 凭证 100% 复用
+
+- MCP server 跟 bash 共用 macOS Keychain (service=`tencent-cloud`)
+- env var 路径也兼容 (`TENCENTCLOUD_SECRET_ID` 带下划线)
+- MCP 错误信息自动 redact AKSK, 不会泄漏到 LLM context
+
+MCP server 源码: `~/Documents/Codex/2026-06-18/hermes-openclaw/agent-platform/internal/mcp/tencent/main.go`
+
 更多见 [references/troubleshooting.md](references/troubleshooting.md) (待写)
