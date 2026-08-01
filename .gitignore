@@ -1,0 +1,64 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Go
+# Binaries
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendored dependencies
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Credentials (NEVER commit)
+.env
+.env.local
+*.pem
+*.key
+secrets/
+.aws/
+.azure/
+.gcp/
+.bce/
+.aliyun/
+.tencentcloud/
+
+# MCP server builds
+build/
+*.mcp
+
+# OS / editor
+*~
+.fuse_hidden*
+.Trash-*
+thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Coverage
+coverage.out
+coverage.html
+
+# Logs
+*.log
+logs/
