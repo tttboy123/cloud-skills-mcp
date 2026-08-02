@@ -32,3 +32,5 @@ Example read: `baiducloud_api_read(method="GET", url="https://bcc.bj.baidubce.co
 Set `BCE_ACCESS_KEY_ID` and `BCE_SECRET_ACCESS_KEY` only in the MCP server environment. For IAM/STS temporary credentials, also set `BCE_SESSION_TOKEN` (or `BCE_SECURITY_TOKEN`). Credentials are signed internally and never returned or audited.
 
 Read [references/official-docs.md](references/official-docs.md) for v1/v2 signing, IAM/STS, BOS, and API-center references.
+
+The BCE-authenticated RTC large-model interaction server APIs remain ordinary v1 HTTPS calls. Do not route its interactive WebSocket through this Skill: the official direct and instance-token modes also require a purchased/activated product `licKey`, which is not AKSK/IAM and is intentionally absent from the MCP schema. The gateway also never returns the server-created 24-hour instance token.

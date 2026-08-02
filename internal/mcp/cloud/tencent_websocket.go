@@ -317,6 +317,17 @@ type tencentWebSocketConnection interface {
 	Close() error
 }
 
+// These aliases let non-Tencent signed WebSocket transports reuse the same
+// small connection seam without exposing provider-specific credentials or
+// handshake URLs through the MCP surface.
+type cloudWebSocketMessageType = tencentWebSocketMessageType
+type cloudWebSocketConnection = tencentWebSocketConnection
+
+const (
+	cloudWebSocketMessageText   = tencentWebSocketMessageText
+	cloudWebSocketMessageBinary = tencentWebSocketMessageBinary
+)
+
 type coderTencentWebSocketConnection struct {
 	connection *websocket.Conn
 }
@@ -2992,6 +3003,7 @@ func acceptTencentActionAudioText(messageType tencentWebSocketMessageType, data 
 }
 
 type tencentWebSocketOutputSink struct {
+	protocol      string
 	buffer        bytes.Buffer
 	temporary     *os.File
 	temporaryPath string
@@ -3001,8 +3013,14 @@ type tencentWebSocketOutputSink struct {
 	finished      bool
 }
 
+type cloudWebSocketOutputSink = tencentWebSocketOutputSink
+
 func newTencentWebSocketOutputSink(invocation Invocation, maxBodyBytes int64) (*tencentWebSocketOutputSink, error) {
-	sink := &tencentWebSocketOutputSink{maxBytes: maxBodyBytes}
+	return newWebSocketOutputSink(invocation, maxBodyBytes, "Tencent Cloud WebSocket")
+}
+
+func newWebSocketOutputSink(invocation Invocation, maxBodyBytes int64, protocol string) (*tencentWebSocketOutputSink, error) {
+	sink := &tencentWebSocketOutputSink{maxBytes: maxBodyBytes, protocol: protocol}
 	if invocation.ResponseFile == "" {
 		return sink, nil
 	}
@@ -3049,18 +3067,18 @@ func (sink *tencentWebSocketOutputSink) write(data []byte, newline bool) error {
 		messageBytes++
 	}
 	if sink.written+messageBytes > sink.maxBytes {
-		return fmt.Errorf("Tencent Cloud WebSocket response exceeds %d bytes", sink.maxBytes)
+		return fmt.Errorf("%s response exceeds %d bytes", sink.protocolName(), sink.maxBytes)
 	}
 	var writer io.Writer = &sink.buffer
 	if sink.temporary != nil {
 		writer = sink.temporary
 	}
 	if _, err := writer.Write(data); err != nil {
-		return fmt.Errorf("write Tencent Cloud WebSocket response: %w", err)
+		return fmt.Errorf("write %s response: %w", sink.protocolName(), err)
 	}
 	if newline {
 		if _, err := writer.Write([]byte{'\n'}); err != nil {
-			return fmt.Errorf("write Tencent Cloud WebSocket response: %w", err)
+			return fmt.Errorf("write %s response: %w", sink.protocolName(), err)
 		}
 	}
 	sink.written += messageBytes
@@ -3069,7 +3087,7 @@ func (sink *tencentWebSocketOutputSink) write(data []byte, newline bool) error {
 
 func (sink *tencentWebSocketOutputSink) finish(requestID string) ([]byte, error) {
 	if sink.finished {
-		return nil, fmt.Errorf("Tencent Cloud WebSocket response sink already finalized")
+		return nil, fmt.Errorf("%s response sink already finalized", sink.protocolName())
 	}
 	sink.finished = true
 	if sink.temporary == nil {
@@ -3081,6 +3099,13 @@ func (sink *tencentWebSocketOutputSink) finish(requestID string) ([]byte, error)
 		"content_type":  "application/x-ndjson",
 		"request_id":    requestID,
 	})
+}
+
+func (sink *tencentWebSocketOutputSink) protocolName() string {
+	if strings.TrimSpace(sink.protocol) == "" {
+		return "Tencent Cloud WebSocket"
+	}
+	return sink.protocol
 }
 
 func (sink *tencentWebSocketOutputSink) finishAudio(requestID, format string, sampleRate uint32) ([]byte, error) {

@@ -45,6 +45,12 @@ func classifyRead(provider Provider, request Invocation) bool {
 		}
 	case ProviderAWS, ProviderAlicloud, ProviderTencent:
 		action := strings.ToLower(strings.TrimSpace(request.Operation))
+		if provider == ProviderAWS && normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) == authSchemeAWSTranscribeWS {
+			switch action {
+			case "startstreamtranscriptionwebsocket", "startmedicalstreamtranscriptionwebsocket", "startcallanalyticsstreamtranscriptionwebsocket":
+				return true
+			}
+		}
 		if provider == ProviderTencent && normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3) == authSchemeTencentPodcastWS && action == "texttopodcaststreamaudiows" {
 			return true
 		}
@@ -86,9 +92,15 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if isCredentialIssuanceInvocation(request) {
 		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
 	}
+	awsScheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-	webSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
-	if webSocketScheme {
+	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
+	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
+	if awsWebSocketScheme {
+		if err := validateAWSTranscribeWebSocketInvocation(request); err != nil {
+			return err
+		}
+	} else if tencentWebSocketScheme {
 		switch tencentScheme {
 		case authSchemeTencentASRWS:
 			if err := validateTencentASRWebSocketInvocation(request); err != nil {
@@ -144,11 +156,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if !identifierPattern.MatchString(request.Operation) {
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
-		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
-		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a {
-			return fmt.Errorf("AWS auth_scheme must be sigv4 or sigv4a")
+		scheme := awsScheme
+		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSTranscribeWS {
+			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, or transcribe-ws")
 		}
-		if scheme == authSchemeAWSSigV4 && !identifierPattern.MatchString(request.Region) {
+		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSTranscribeWS) && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("AWS SigV4 requires a valid region")
 		}
 		if scheme == authSchemeAWSSigV4a {
@@ -367,7 +379,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsWebSocketScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported WebSocket auth_scheme")
 	}
@@ -443,7 +455,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
-	if request.Body != nil && request.BodyFile != "" {
+	if request.Body != nil && request.BodyFile != "" && !awsWebSocketScheme {
 		return fmt.Errorf("body and body_file are mutually exclusive")
 	}
 	if request.BodyFile != "" {

@@ -29,5 +29,8 @@
 - CAM resource role and temporary credentials: https://cloud.tencent.com/document/product/598/85616
 - Tencent Cloud API Explorer: https://console.cloud.tencent.com/api/explorer
 - COS GET Object and Range download: https://intl.cloud.tencent.com/document/product/436/7753
+- TRTC realtime ASR WebSocket, `SdkAppId`, and `UserSig` authentication: https://cloud.tencent.com/document/product/647/131297
 
 The universal adapter signs API 3.0 requests with recommended TC3 or the still-documented v1 HmacSHA1/HmacSHA256 query/form protocol, legacy qcloud API 2017 requests at their exact `/v2/index.php` path, COS data-plane requests with the COS REST signature, realtime ASR, virtual-number detection, SOE evaluation, speech-translation, voice-conversion, standard realtime TTS, streaming-text TTS, and large-model podcast WSS requests using their official raw canonical query plus HMAC-SHA1 algorithms, and MPS recognition/TTS WSS requests using their documented TC3 canonical `post` requests. Realtime ASR includes the operator-provided temporary credential token in the signed query when present. All signed WSS URLs remain internal to the connection dialer. It never executes TCCLI.
+
+The newer TRTC realtime-ASR WebSocket is a distinct product protocol: its official handshake requires TRTC `SdkAppId` plus `UserSig`, where `UserSig` is derived from the TRTC application's SDK secret key rather than CAM AKSK. It therefore remains credential-bound under this repository's AKSK/IAM-only entrypoint contract and is not aliased to the CAM-authenticated ASR scheme.

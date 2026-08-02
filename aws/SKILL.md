@@ -1,11 +1,11 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS requests in cloud-skills-mcp. Use for AWS, EC2, S3, S3 Multi-Region Access Points, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS and internally connected Amazon Transcribe WSS requests in cloud-skills-mcp. Use for AWS, EC2, S3, S3 Multi-Region Access Points, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, Transcribe streaming, or any documented AWS API.
 ---
 
 # AWS Cloud
 
-Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs the request in-process with AWS SigV4 or SigV4a, and never executes AWS CLI.
+Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs the request in-process with AWS SigV4 or SigV4a, connects supported Transcribe WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default) or `sigv4a` when the official endpoint requires multi-region signing.
+- `auth_scheme`: `sigv4` (default), `sigv4a` when the official endpoint requires multi-region signing, or `transcribe-ws` for standard, Medical, and Call Analytics streaming WebSocket sessions.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
@@ -28,7 +28,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `payload_mode=aws-eventstream`: for a finite SigV4 HTTP request whose `body_file` contains consecutive CRC-valid unsigned Amazon EventStream frames. The server validates the 24 MiB per-frame bound, adds signing envelopes and a terminal frame. This is not an interactive WebSocket transport.
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
-- `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root.
+- `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root. `transcribe-ws` requires raw finite audio in `body_file`; optional object `body` becomes the first signed `ConfigurationEvent`, so this scheme is the sole controlled case where both are accepted.
 - `response_file`: optional new approved-root file for large/binary responses. Use the documented `Range` header for objects larger than the configured per-call limit; existing files are never overwritten.
 
 Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="describe-instances", region="us-east-1", method="POST", url="https://ec2.us-east-1.amazonaws.com/", headers={"Content-Type":"application/x-www-form-urlencoded"}, body="Action=DescribeInstances&Version=2016-11-15&MaxResults=20")`.
@@ -39,10 +39,14 @@ Example signed checksum upload: `aws_api_mutate(auth_scheme="sigv4", payload_mod
 
 For an official multi-region S3 endpoint, use either streaming example with `auth_scheme="sigv4a"`, its exact multi-region URL, and the documented `region_set` instead of `region`.
 
-Example finite event stream: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-eventstream", service="transcribestreaming", operation="start-stream-transcription", region="us-east-1", method="POST", url="https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", body_file="/approved/streams/audio.events", response_file="/approved/streams/transcript.events", force=true)`.
+Example finite event stream: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-eventstream", service="transcribe", operation="StartStreamTranscription", region="us-east-1", method="POST", url="https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", body_file="/approved/streams/audio.events", response_file="/approved/streams/transcript.events", force=true)`.
+
+Example realtime transcription: `aws_api_read(auth_scheme="transcribe-ws", service="transcribe", operation="StartStreamTranscriptionWebSocket", region="us-west-2", method="GET", url="wss://transcribestreaming.us-west-2.amazonaws.com:8443/stream-transcription-websocket", parameters={"language-code":"en-US","media-encoding":"pcm","sample-rate":16000,"session-id":"session-1"}, body_file="/approved/audio/input.pcm", response_file="/approved/results/transcript.ndjson")`. The adapter creates the five-minute SigV4 handshake internally, signs every audio event in a chained outer EventStream frame, sends an empty signed terminal event, validates both CRC layers in provider responses, and atomically publishes only bounded JSON event payloads. PCM defaults to 100 ms chunks; use `stream_chunk_bytes` and `stream_interval_ms` only when the documented media format requires another cadence.
+
+For `/medical-stream-transcription-websocket`, use `StartMedicalStreamTranscriptionWebSocket` and include the documented `language-code`, `specialty`, and `type`. For `/call-analytics-stream-transcription-websocket`, use `StartCallAnalyticsStreamTranscriptionWebSocket`; when post-call or channel configuration is needed, pass its JSON object as `body` while audio remains in `body_file`.
 
 ## Credentials
 
 Use the AWS SDK credential chain: profiles/SSO, web identity, IAM roles, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / optional `AWS_SESSION_TOKEN`. Keep credentials in the server environment or official AWS config, never in MCP arguments.
 
-Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, or operation naming needs verification.
+Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, Transcribe streaming parameters, or operation naming needs verification.

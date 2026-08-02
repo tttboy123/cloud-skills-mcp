@@ -108,12 +108,14 @@ func (provider *awsDefaultCredentialProvider) Credentials(ctx context.Context) (
 }
 
 type AWSRESTConfig struct {
-	Credentials  AWSCredentialProvider
-	HTTP         HTTPDoer
-	MaxBodyBytes int64
-	Timeout      time.Duration
-	Now          func() time.Time
-	AllowedHosts []string
+	Credentials   AWSCredentialProvider
+	HTTP          HTTPDoer
+	MaxBodyBytes  int64
+	Timeout       time.Duration
+	Now           func() time.Time
+	WebSocketDial func(context.Context, string) (cloudWebSocketConnection, error)
+	StreamPause   func(context.Context, time.Duration) error
+	AllowedHosts  []string
 }
 
 type AWSRESTAdapter struct {
@@ -125,12 +127,18 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 		config.Credentials = &awsDefaultCredentialProvider{}
 	}
 	normalizeSignedHTTPConfig(&config.HTTP, &config.Timeout, &config.MaxBodyBytes, &config.Now)
+	if config.WebSocketDial == nil {
+		config.WebSocketDial = defaultAWSTranscribeWebSocketDial
+	}
+	if config.StreamPause == nil {
+		config.StreamPause = pauseTencentStream
+	}
 	return &AWSRESTAdapter{config: config}
 }
 
 func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS", Version: "sigv4+sigv4a",
+		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and Transcribe WSS", Version: "sigv4+sigv4a+transcribe-ws",
 		CredentialSource: credentialSource(ProviderAWS), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the AWS SDK credential chain; no cloud CLI is executed",
 	}, nil
@@ -138,16 +146,30 @@ func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 
 func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
 	return json.Marshal(map[string]string{
-		"api_reference":  "https://docs.aws.amazon.com/index.html#lang/en_us",
-		"authentication": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
-		"sigv4a":         "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html",
+		"api_reference":        "https://docs.aws.amazon.com/index.html#lang/en_us",
+		"authentication":       "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
+		"sigv4a":               "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html",
+		"transcribe_websocket": "https://docs.aws.amazon.com/transcribe/latest/dg/streaming-setting-up.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
-	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4 or sigv4a")
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSTranscribeWS {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, or transcribe-ws")
+	}
+	if scheme == authSchemeAWSTranscribeWS {
+		if err := validateAWSTranscribeWebSocketInvocation(invocation); err != nil {
+			return InvocationResult{}, err
+		}
+		credentials, err := adapter.config.Credentials.Credentials(ctx)
+		if err != nil {
+			return InvocationResult{}, err
+		}
+		if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
+			return InvocationResult{}, fmt.Errorf("AWS credential provider returned incomplete AKSK material")
+		}
+		return invokeAWSTranscribeWebSocket(ctx, adapter, credentials, invocation)
 	}
 	if !identifierPattern.MatchString(invocation.Service) {
 		return InvocationResult{}, fmt.Errorf("AWS signing requires a valid service")

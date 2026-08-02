@@ -31,7 +31,7 @@ and [Baidu BOS GetObject](https://cloud.baidu.com/doc/BOS/s/xkc5pcmcj).
 
 | Provider | Implemented | Still requiring implementation or proof |
 |---|---|---|
-| AWS | SigV4 and SigV4a header-signed HTTPS; SigV4/SigV4a S3 `aws-chunked` streaming payload signing with optional signed CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 trailer; finite SigV4 HTTP EventStream request signing and raw response-file streaming; AWS SDK default IAM/AKSK/STS chain | Interactive WebSocket sessions; service-by-service live vectors |
+| AWS | SigV4 and SigV4a header-signed HTTPS; SigV4/SigV4a S3 `aws-chunked` streaming payload signing with optional signed CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 trailer; finite SigV4 HTTP EventStream request signing and raw response-file streaming; standard, Medical, and Call Analytics Transcribe WSS with internal five-minute presigning, optional ConfigurationEvent, chained double-EventStream audio, bounded JSON event output, and AWS SDK default IAM/AKSK/STS chain | Interactive WebSocket sessions outside the implemented Transcribe family; service-by-service live vectors |
 | Azure | Entra bearer REST through non-CLI service principal, workload identity, or managed identity; public and sovereign endpoint/audience routing; Azure Maps public/geographic endpoint scope; Azure Health Data Services and legacy API for FHIR service audiences plus the shared DICOM audience | Official data planes that have no Entra authorization path; long-lived streaming/WebSocket protocols; service-by-service live vectors |
 | Google Cloud | ADC OAuth bearer REST on `googleapis.com`; public Discovery documents | APIs with no REST/HTTP transcoding; gRPC streaming and WebSocket transports; service-by-service live vectors |
 | Alibaba Cloud | ACS3 OpenAPI; legacy RPC/ROA V2; DataHub `DATAHUB` and OpenSearch V3 `OPENSEARCH` HMAC-SHA1; MaxCompute project/data/Tunnel ODPS V2/V4; classic Function Compute `FC`, current `fcapp.run` Trigger ACS3, and custom-domain Trigger POP HMAC-SHA1; OSS V1/V4 Header authentication; SLS v1/v4; MNS/SMQ; and Tablestore OTS v2/v4; credentials-go RAM/OIDC/ECS/AKSK/STS chain | Product-specific signatures or non-HTTP transports outside implemented families; service-by-service live vectors |
@@ -62,6 +62,17 @@ including PutObject and multipart upload operations behind the write gate.
   their AppKey/AppSecret or AppCode cannot be replaced by RAM AKSK. They remain
   outside the user-required AKSK/IAM-only credential surface; DataWorks
   platform resources exposed through Alibaba Cloud OpenAPI remain addressable.
+- Tencent TRTC's newer realtime-ASR WebSocket is not CAM AKSK-authenticated.
+  Its official handshake requires a TRTC `SdkAppId` and `UserSig` derived from
+  the TRTC application's SDK secret key. It is credential-bound under the
+  AKSK/IAM-only entrypoint contract; the CAM-authenticated ASR WebSocket remains
+  implemented separately.
+- Baidu RTC large-model interaction control-plane resources are BCE v1 HTTPS
+  and remain addressable through the generic adapter. Its interactive
+  WebSocket is credential-bound: both direct AK/SK and recommended private
+  instance-token modes still require a separately purchased and activated
+  `licKey`. The MCP server neither accepts that product credential nor exports
+  the 24-hour instance token.
 
 ## Completion rule
 
