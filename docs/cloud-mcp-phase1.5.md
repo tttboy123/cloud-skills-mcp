@@ -1,5 +1,8 @@
 # Cloud MCP Phase 1.5 — Hardening Contract
 
+> Historical phase contract. Current behavior is defined by
+> [`six-cloud-full-resource-contract.md`](six-cloud-full-resource-contract.md).
+
 Date: 2026-08-02
 
 ## Scope

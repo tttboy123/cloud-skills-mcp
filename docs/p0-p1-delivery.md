@@ -1,5 +1,8 @@
 # P0 / P1 交付状态
 
+> Historical slice report. Current behavior is defined by
+> [`six-cloud-full-resource-contract.md`](six-cloud-full-resource-contract.md).
+
 Date: 2026-08-02
 
 ## P0 可交付性

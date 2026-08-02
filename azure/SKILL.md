@@ -5,7 +5,7 @@ description: Operate or inspect any Azure resource or Microsoft Graph API throug
 
 # Azure Cloud
 
-Use the unified MCP server as a guarded `az rest` gateway. It accepts only HTTPS Azure/Microsoft endpoints and delegates tokens to the authenticated Azure CLI identity.
+Use the unified MCP server as a guarded Azure REST gateway. With Service Principal, Workload Identity, or Managed Identity configuration it uses the official Go `DefaultAzureCredential` chain directly for ARM, Microsoft Graph, and common data-plane audiences. Other validated Azure endpoints fall back to `az rest`.
 
 ## Workflow
 
@@ -28,6 +28,6 @@ Example read: `azure_api_read(method="GET", url="https://management.azure.com/su
 
 ## Credentials
 
-Authenticate the server process through `az login`, managed identity, workload identity, or an Azure service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`). Credentials stay in Azure CLI/environment state and are never MCP parameters.
+Authenticate the server process through managed identity, workload identity, an Azure service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`), or `az login`. Set `CLOUD_SKILLS_AZURE_USE_DEFAULT_CREDENTIAL=1` to explicitly select DefaultAzureCredential in an Azure-hosted environment without identity hint variables. Credentials stay in Azure Identity/Azure CLI state and are never MCP parameters.
 
 Read [references/official-docs.md](references/official-docs.md) before selecting authentication or an API version.

@@ -89,8 +89,8 @@ profile, IAM, ADC, service-principal or STS chain; credentials are never returne
 in MCP results or written to audit logs.
 
 AWS:       AWS profile/SSO/web identity/AKSK through AWS CLI
-Azure:     az login, managed identity or service principal through Azure CLI
-GCP:       Application Default Credentials or gcloud identity
+Azure:     DefaultAzureCredential (service principal/workload/managed identity) or az login
+GCP:       Google Auth Application Default Credentials or gcloud identity fallback
 Alibaba:   Alibaba Cloud CLI profile/RAM/AKSK
 Tencent:   TCCLI profile/CAM/AKSK
 Baidu:     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY, optional BCE_SESSION_TOKEN

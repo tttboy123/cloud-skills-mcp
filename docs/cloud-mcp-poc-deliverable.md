@@ -7,6 +7,9 @@ status: complete
 
 # Cloud MCP Phase 1 PoC — Deliverable
 
+> Historical Phase 1 record. Current behavior is defined by
+> [`six-cloud-full-resource-contract.md`](six-cloud-full-resource-contract.md).
+
 ## 1. 完成的工作
 
 ### 1.1 共享 SDK (`internal/mcp/sdk/`)

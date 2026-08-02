@@ -5,7 +5,7 @@ description: Operate or inspect any Google Cloud resource through cloud-skills-m
 
 # Google Cloud
 
-Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway accepts only `googleapis.com` HTTPS endpoints and gets access tokens from Application Default Credentials or the authenticated gcloud identity.
+Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway accepts only `googleapis.com` HTTPS endpoints and gets access tokens directly from the official Google Auth ADC chain, with authenticated gcloud identity as a compatibility fallback.
 
 ## Workflow
 

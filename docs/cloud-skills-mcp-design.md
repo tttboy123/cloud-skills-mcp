@@ -4,11 +4,12 @@
 > **Author**: Mavis (2026-08-01)
 > **Workspace**: `/Users/lune/Documents/Codex/2026-06-18/hermes-openclaw/agent-platform/`
 
-> **Current-state note (2026-08-02):** This is an aspirational design record.
-> The implemented product boundary is documented in `README.md` and
-> `docs/cloud-mcp-phase1.6-p1.md`: 15 Tencent tools for CVM, Lighthouse, CDB,
-> CloudBase and CLI diagnostics over stdio. COS, six-cloud native MCP and SSE
-> sections below are roadmap material, not shipped capability.
+> **Current-state note (2026-08-02):** This is a historical design record.
+> The active product boundary is defined by `README.md` and
+> `docs/six-cloud-full-resource-contract.md`: the universal stdio server covers
+> the six providers through 19 guarded gateway tools, while the 15 Tencent
+> fine-grained tools remain a compatibility surface. Phased resource lists and
+> placeholders below are retained as design history.
 
 ## 1. 目标
 

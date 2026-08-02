@@ -203,8 +203,8 @@ func validateRESTTarget(provider Provider, method, rawURL string) error {
 	allowed := false
 	switch provider {
 	case ProviderAzure:
-		allowed = host == "management.azure.com" || host == "graph.microsoft.com" ||
-			hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net")
+		allowed = host == "management.azure.com" || host == "graph.microsoft.com" || host == "api.loganalytics.io" ||
+			hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".azurecr.io", ".loganalytics.io", ".azureedge.net", ".trafficmanager.net")
 	case ProviderGCP:
 		allowed = host == "googleapis.com" || strings.HasSuffix(host, ".googleapis.com")
 	case ProviderBaidu:

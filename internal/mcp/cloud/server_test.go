@@ -203,6 +203,7 @@ func TestReadClassifierCannotBeDowngradedByCaller(t *testing.T) {
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "DescribeInstances"}, true, false},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "StartInstances"}, false, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://management.azure.com/subscriptions/sub/resources?api-version=2021-04-01"}, true, false},
+		{ProviderAzure, Invocation{Method: "GET", URL: "https://registry.azurecr.io/v2/repositories"}, true, false},
 		{ProviderAzure, Invocation{Method: "PUT", URL: "https://management.azure.com/subscriptions/sub/resourceGroups/rg?api-version=2021-04-01"}, false, false},
 		{ProviderGCP, Invocation{Method: "GET", URL: "https://compute.googleapis.com/compute/v1/projects/p/zones"}, true, false},
 		{ProviderBaidu, Invocation{Method: "GET", URL: "https://bcc.bj.baidubce.com/v2/instance"}, true, false},

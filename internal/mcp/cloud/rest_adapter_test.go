@@ -25,7 +25,7 @@ func TestAzureRESTAdapterUsesAzRestWithoutExposingCredentials(t *testing.T) {
 		}
 		return nil
 	}
-	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, TempDir: t.TempDir()})
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, TempDir: t.TempDir(), Env: []string{}})
 	result, err := adapter.Invoke(t.Context(), Invocation{
 		Provider: ProviderAzure, Method: "PUT",
 		URL:          "https://management.azure.com/subscriptions/sub/resourceGroups/rg?api-version=2021-04-01",
@@ -79,6 +79,69 @@ type doerFunc func(*http.Request) (*http.Response, error)
 
 func (function doerFunc) Do(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type staticAzureTokenProvider struct {
+	token string
+	err   error
+	scope string
+	calls int
+}
+
+func (provider *staticAzureTokenProvider) Token(_ context.Context, scope string) (string, error) {
+	provider.calls++
+	provider.scope = scope
+	return provider.token, provider.err
+}
+
+func TestAzureRESTAdapterUsesDefaultCredentialTokenWithoutCLIExposure(t *testing.T) {
+	tokens := &staticAzureTokenProvider{token: "azure-private-token"}
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("Authorization") != "Bearer azure-private-token" {
+			t.Fatalf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		if request.URL.Host != "management.azure.com" {
+			t.Fatalf("host=%s", request.URL.Host)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil || string(body) != `{"name":"demo"}` {
+			t.Fatalf("body=%s err=%v", body, err)
+		}
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"X-Ms-Request-Id": []string{"azure-request"}},
+			Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+		}, nil
+	})
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{Tokens: tokens, HTTP: doer})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAzure, Method: "PUT",
+		URL:  "https://management.azure.com/subscriptions/sub/resourceGroups/rg?api-version=2021-04-01",
+		Body: map[string]any{"name": "demo"},
+	})
+	if err != nil || string(result.Output) != `{"status":"ok"}` || result.RequestID != "azure-request" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if tokens.calls != 1 || tokens.scope != "https://management.azure.com/.default" {
+		t.Fatalf("token calls=%d scope=%q", tokens.calls, tokens.scope)
+	}
+}
+
+func TestAzureRESTAdapterMapsOfficialDataPlaneScopes(t *testing.T) {
+	tests := map[string]string{
+		"https://graph.microsoft.com/v1.0/users":                        "https://graph.microsoft.com/.default",
+		"https://account.blob.core.windows.net/container":               "https://storage.azure.com/.default",
+		"https://vault.vault.azure.net/secrets/name?api-version=7.4":    "https://vault.azure.net/.default",
+		"https://server.database.windows.net/management/health":         "https://database.windows.net/.default",
+		"https://namespace.servicebus.windows.net/queue/messages/head":  "https://servicebus.azure.net/.default",
+		"https://monitor.azure.com/subscriptions/sub/providers/metrics": "https://monitor.azure.com/.default",
+	}
+	for rawURL, want := range tests {
+		got, err := azureScopeForURL(rawURL)
+		if err != nil || got != want {
+			t.Errorf("url=%s scope=%q want=%q err=%v", rawURL, got, want, err)
+		}
+	}
 }
 
 func TestGCPRESTAdapterUsesTokenInternallyAndReturnsOnlyProviderResponse(t *testing.T) {

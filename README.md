@@ -16,8 +16,8 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
 | AWS | AWS CLI 任意 service/operation；Cloud Control 可作为标准资源模型 | Profile/SSO、IAM Role、Web Identity、AKSK/STS |
-| Azure | `az rest` 访问 ARM、Microsoft Graph 和官方 Azure REST endpoint | `az login`、Managed Identity、Workload Identity、Service Principal |
-| Google Cloud | 受限于 `googleapis.com` 的 authenticated REST + Discovery Service | ADC、Workload Identity、Impersonation、gcloud identity |
+| Azure | Azure Identity 直连 ARM/Graph/常见数据面，其他官方 endpoint 回退 `az rest` | `DefaultAzureCredential`、Managed Identity、Workload Identity、Service Principal、`az login` |
+| Google Cloud | Google Auth ADC 直连 `googleapis.com` REST + Discovery Service，gcloud identity fallback | ADC、Workload Identity、Impersonation、gcloud identity |
 | Alibaba Cloud | Alibaba Cloud CLI 任意 product/OpenAPI action | CLI profile、RAM role/STS、AKSK |
 | Tencent Cloud | TCCLI 任意 API 3.0 product/action | TCCLI profile、CAM role/STS、SecretId/SecretKey |
 | Baidu AI Cloud | 受限于 `baidubce.com` 的 BCE signed HTTPS | BCE AK/SK、IAM/STS temporary AK/SK/session token |
@@ -40,7 +40,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 
 ## 安装
 
-要求 Go 1.25.12+。按需安装官方 CLI：AWS CLI、Azure CLI、Google Cloud CLI、Alibaba Cloud CLI、TCCLI。百度 BCE REST adapter 不依赖额外 CLI。
+要求 Go 1.25.12+。AWS、Alibaba Cloud、Tencent Cloud 需要对应官方 CLI。Azure 非 ARM/Graph/常见数据面操作可能回退 Azure CLI；Google Cloud CLI 仅作为没有 ADC 时的兼容身份 fallback。百度 BCE adapter 不依赖额外 CLI。
 
 ```bash
 git clone https://github.com/tttboy123/cloud-skills-mcp.git
@@ -87,9 +87,9 @@ codex mcp add cloud-skills -- "$HOME/.local/bin/cloud-skills-mcp"
 ```text
 AWS       AWS_PROFILE / AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE /
           AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN)
-Azure     az login / managed identity /
+Azure     DefaultAzureCredential / az login / managed identity /
           AZURE_TENANT_ID + AZURE_CLIENT_ID + AZURE_CLIENT_SECRET
-GCP       ADC / GOOGLE_APPLICATION_CREDENTIALS / gcloud auth
+GCP       ADC / GOOGLE_APPLICATION_CREDENTIALS / workload identity / gcloud auth fallback
 Alibaba   aliyun profile / ALIBABACLOUD_ACCESS_KEY_ID + ALIBABACLOUD_ACCESS_KEY_SECRET
 Tencent   tccli profile / TENCENTCLOUD_SECRET_ID + TENCENTCLOUD_SECRET_KEY
 Baidu     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY (+ BCE_SESSION_TOKEN)

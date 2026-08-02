@@ -40,8 +40,8 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
 | AWS | AWS CLI service + operation, structured JSON input | Official AWS credential provider chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
-| Azure | `az rest` against validated Azure/ARM endpoints | Existing Azure CLI identity, managed identity, workload identity, or Service Principal |
-| Google Cloud | Authenticated REST against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or active gcloud identity |
+| Azure | Official Azure Identity direct REST for known audiences, with `az rest` fallback for other validated Azure endpoints | DefaultAzureCredential, Azure CLI identity, managed identity, workload identity, or Service Principal |
+| Google Cloud | Google Auth ADC authenticated REST against validated `googleapis.com` endpoints, with gcloud identity fallback | ADC, service account, workload identity federation, impersonation, or active gcloud identity |
 | Alibaba Cloud | Alibaba Cloud CLI product + OpenAPI action / REST-style plugin operation | OAuth, RAM role, STS, OIDC, profile, or AK/SK env through the official CLI chain |
 | Tencent Cloud | TCCLI product + API action with JSON input | CAM role/OIDC/profile or SecretId/SecretKey/STS env through TCCLI |
 | Baidu AI Cloud | BCE signed HTTPS request against validated `baidubce.com` endpoints | BCE AK/SK or IAM/STS temporary AK/SK/session token |

@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	googleauth "cloud.google.com/go/auth"
 )
 
 func TestAzureStatusDiscoveryAndFailures(t *testing.T) {
 	runner := &fakeProcessRunner{stdout: []byte(`{"azure-cli":"test"}`)}
-	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner})
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, Env: []string{}})
 	status, err := adapter.Status(t.Context())
 	if err != nil || !status.Available || !strings.Contains(status.Version, "azure-cli") {
 		t.Fatalf("status=%#v err=%v", status, err)
@@ -32,9 +34,35 @@ func TestAzureStatusDiscoveryAndFailures(t *testing.T) {
 	}
 }
 
+func TestAzureIdentityActivationRequiresOfficialCredentialHints(t *testing.T) {
+	tests := []struct {
+		environment []string
+		want        bool
+	}{
+		{[]string{"AZURE_TENANT_ID=t", "AZURE_CLIENT_ID=c", "AZURE_CLIENT_SECRET=s"}, true},
+		{[]string{"AZURE_TENANT_ID=t", "AZURE_CLIENT_ID=c", "AZURE_FEDERATED_TOKEN_FILE=/token"}, true},
+		{[]string{"IDENTITY_ENDPOINT=http://localhost"}, true},
+		{[]string{"CLOUD_SKILLS_AZURE_USE_DEFAULT_CREDENTIAL=1"}, true},
+		{[]string{"CLOUD_SKILLS_AZURE_USE_DEFAULT_CREDENTIAL=0"}, false},
+		{[]string{"AZURE_CLIENT_ID=c"}, false},
+		{nil, false},
+	}
+	for _, test := range tests {
+		if got := azureDefaultCredentialRequested(test.environment); got != test.want {
+			t.Errorf("environment=%v got=%v want=%v", test.environment, got, test.want)
+		}
+	}
+	t.Setenv("AZURE_TENANT_ID", "tenant")
+	t.Setenv("AZURE_CLIENT_ID", "client")
+	t.Setenv("AZURE_CLIENT_SECRET", "secret")
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{})
+	if adapter.config.Tokens == nil {
+		t.Fatal("service-principal environment did not activate DefaultAzureCredential")
+	}
+}
+
 func TestGCPStatusAndTokenFallback(t *testing.T) {
 	runner := &sequenceRunner{results: []runnerResult{
-		{stdout: []byte(`{"Google Cloud SDK":"test"}`)},
 		{stderr: []byte("ADC unavailable"), err: errors.New("exit")},
 		{stdout: []byte("access-token\n")},
 	}}
@@ -42,13 +70,51 @@ func TestGCPStatusAndTokenFallback(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 	})})
 	status, err := adapter.Status(t.Context())
-	if err != nil || !status.Available {
+	if err != nil || !status.Available || !strings.Contains(status.Adapter, "ADC") || runner.calls != 0 {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
-	provider := adapter.config.Tokens.(*gcloudTokenProvider)
+	chain := adapter.config.Tokens.(*tokenProviderChain)
+	provider := chain.providers[1].(*gcloudTokenProvider)
 	token, err := provider.Token(t.Context())
 	if err != nil || token != "access-token" {
 		t.Fatalf("token=%q err=%v", token, err)
+	}
+}
+
+type fakeGoogleAuthSource struct {
+	token string
+	err   error
+	calls int
+}
+
+func (source *fakeGoogleAuthSource) Token(context.Context) (*googleauth.Token, error) {
+	source.calls++
+	return &googleauth.Token{Value: source.token}, source.err
+}
+
+func TestGCPADCAndFallbackCredentialChain(t *testing.T) {
+	source := &fakeGoogleAuthSource{token: "adc-token"}
+	detectCalls := 0
+	adc := &gcpADCTokenProvider{detect: func(context.Context) (googleAuthTokenSource, error) {
+		detectCalls++
+		return source, nil
+	}}
+	for range 2 {
+		token, err := adc.Token(t.Context())
+		if err != nil || token != "adc-token" {
+			t.Fatalf("token=%q err=%v", token, err)
+		}
+	}
+	if detectCalls != 1 || source.calls != 2 {
+		t.Fatalf("detect=%d token_calls=%d", detectCalls, source.calls)
+	}
+	fallback := &staticTokenProvider{token: "fallback-token"}
+	chain := &tokenProviderChain{providers: []TokenProvider{
+		&staticTokenProvider{err: errors.New("ADC missing")}, fallback,
+	}}
+	token, err := chain.Token(t.Context())
+	if err != nil || token != "fallback-token" || fallback.calls != 1 {
+		t.Fatalf("token=%q fallback_calls=%d err=%v", token, fallback.calls, err)
 	}
 }
 
