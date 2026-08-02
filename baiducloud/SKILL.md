@@ -13,7 +13,7 @@ Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMA
 2. Call `baiducloud_api_discover(service="bcc")` or another product code to obtain the official API-center and product-doc links, then verify the exact endpoint/path.
 3. Use `baiducloud_api_read` for `GET`, `HEAD`, or `OPTIONS` only.
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the account, region, URL, method, body, and effect; then use `baiducloud_api_mutate(force=true)`.
-5. Credential, token, password, and secret operations require the separate sensitive gate.
+5. Secret-resource operations require the separate sensitive gate. STS session credentials, AccessKey creation, login tokens, and other credential issuance/export operations are never exposed by the gateway.
 6. Never provide `Authorization` or `x-bce-security-token`; the adapter creates them internally.
 
 ## MCP arguments

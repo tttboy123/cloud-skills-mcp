@@ -36,6 +36,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 - CLI 和 HTTP 响应均有大小上限；结果会做 credential-field redaction。
 - `CLOUD_SKILLS_AUDIT_LOG` 写入 mode `0600` JSONL。审计不记录请求 body、headers、response 或 URL query；写操作的预执行审计失败时 fail closed。
 - MCP server 不创建、不更新、不导出凭证。凭证只来自各云官方身份链或 operator 注入的 AKSK/IAM 环境。
+- STS AssumeRole/session token、登录 token、AccessKey/API key 创建、Service Account key、Graph `addPassword`、云资源 `listKeys` 等凭证签发或导出操作会被硬拒绝，不能用 mutation/sensitive 开关绕过；普通 IAM/RAM/CAM 角色、策略和成员资源管理仍可调用。
 
 `force=true` 和环境开关只是 server 技术门，不能替代 MCP 宿主的人类批准。
 
@@ -157,7 +158,7 @@ scripts/ci/                # 协议、安装与安全验证
 
 ## 官方文档
 
-每份 Skill 的 `references/official-docs.md` 保存对应云厂商的认证、CLI/REST、资源发现和 API reference 链接。通用访问层的完成定义、安全合同与真实验收门见 [docs/six-cloud-full-resource-contract.md](docs/six-cloud-full-resource-contract.md)。
+每份 Skill 的 `references/official-docs.md` 保存对应云厂商的认证、CLI/REST、资源发现和 API reference 链接。通用访问层的完成定义、安全合同与真实验收门见 [docs/six-cloud-full-resource-contract.md](docs/six-cloud-full-resource-contract.md)，逐项完成证据与仍未通过的 live gate 见 [docs/goal-completion-matrix.md](docs/goal-completion-matrix.md)。
 
 ## License
 

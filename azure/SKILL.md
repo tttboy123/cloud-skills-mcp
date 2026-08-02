@@ -13,7 +13,7 @@ Use the unified MCP server as a guarded Azure REST gateway. With Service Princip
 2. Verify the resource-provider API version in the official reference. `azure_api_discover` explains the adapter but cannot choose an API version for you.
 3. Use `azure_api_read` for `GET`, `HEAD`, or `OPTIONS` only.
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the tenant/subscription, target URL, method, body, and effect; then use `azure_api_mutate(force=true)`.
-5. Secret, credential, token, password, and access-key endpoints require the separate sensitive gate.
+5. Secret-resource operations require the separate sensitive gate. Credential issuance/export endpoints such as Graph `addPassword` and resource `listKeys` are never exposed by the gateway.
 6. Do not place bearer tokens, SAS signatures, client secrets, cookies, or API keys in URL/query/header arguments.
 
 ## MCP arguments

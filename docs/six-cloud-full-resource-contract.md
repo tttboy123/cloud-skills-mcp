@@ -51,6 +51,14 @@ credential creation, credential export and access-token printing are not cloud
 resource operations and are not exposed through invoke tools. Credentials are
 injected by the operator through the official provider chain.
 
+The invocation boundary hard-rejects credential issuance and export families,
+including STS role/session credentials, login or authorization tokens,
+AccessKey/API-key creation, service-account private keys, Graph password/key
+issuance, and provider `listKeys`/credential-export actions. Mutation and
+sensitive-operation switches cannot override this prohibition. Ordinary IAM,
+RAM and CAM role, policy, membership and authorization-resource operations
+remain available through the guarded resource gateway.
+
 ## Request and output boundaries
 
 - Commands use fixed executables and argument arrays; no shell is involved.

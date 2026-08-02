@@ -13,7 +13,7 @@ Use the unified MCP gateway for every TCCLI API 3.0 product and action. The exis
 2. Use `tencent_api_discover` with the product and action when parameters are uncertain.
 3. Use `tencent_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `tencent_api_mutate(force=true)`.
-5. Secret, credential, token, password, and access-key actions require the separate sensitive gate.
+5. Secret-resource operations require the separate sensitive gate. STS role/session credentials, SecretId creation, login tokens, and other credential issuance/export actions are never exposed by the gateway.
 6. Do not pass endpoints, proxies, TLS-disable flags, SecretId, SecretKey, session tokens, or authorization data as arguments.
 
 ## MCP arguments

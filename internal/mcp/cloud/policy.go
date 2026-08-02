@@ -24,6 +24,7 @@ const (
 var sensitiveTerms = []string{
 	"secret", "password", "credential", "accesskey", "access-key", "privatekey", "private-key",
 	"sessiontoken", "session-token", "gettoken", "get-token", "print-access-token",
+	"decrypt", "unseal", "unwrap",
 }
 
 var forbiddenFlags = map[string]struct{}{
@@ -35,6 +36,7 @@ var forbiddenFlags = map[string]struct{}{
 	"--url": {}, "--method": {}, "--body": {}, "--headers": {}, "--subscription": {},
 	"--resource": {}, "--resource-type": {}, "--skip-authorization-header": {}, "--cli-input-json": {},
 	"--profile": {}, "--config-file": {}, "--credentials-file": {}, "--debug": {}, "--verbose": {}, "--trace": {},
+	"--role-arn": {}, "--role-session-name": {}, "--use-cvm-role": {}, "--log-level": {}, "--warning": {},
 }
 
 func classifyRead(provider Provider, request Invocation) bool {
@@ -92,6 +94,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
 		}
+	}
+	if isCredentialIssuanceInvocation(request) {
+		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
 	}
 	for name, value := range map[string]string{
 		"region": request.Region, "project": request.Project, "subscription": request.Subscription,
@@ -190,6 +195,73 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 	}
 	return nil
+}
+
+func isCredentialIssuanceInvocation(request Invocation) bool {
+	operation := normalizedOperation(request.Operation)
+	for _, blocked := range []string{
+		"assumerole", "assumerolewithsaml", "assumerolewithwebidentity",
+		"getfederationtoken", "getsessiontoken", "getauthorizationtoken", "getloginpassword",
+		"generatedbauthtoken", "createaccesskey", "createapikey", "createsecretid",
+		"createcredential", "generatecredential", "createservicespecificcredential",
+		"resetservicespecificcredential", "presign", "createpresignedurl", "generatepresignedurl",
+		"createloginprofile", "updateloginprofile", "changepassword", "createvirtualmfadevice",
+		"createtoken", "refreshtoken", "exchangetoken", "initiateauth", "admininitiateauth",
+		"respondtoauthchallenge", "adminrespondtoauthchallenge",
+	} {
+		if operation == blocked || strings.HasPrefix(operation, blocked) {
+			return true
+		}
+	}
+
+	parsed, err := url.Parse(request.URL)
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.ToLower(parsed.Path)
+	actionPath := normalizedOperation(path)
+	if request.Provider == ProviderGCP {
+		switch host {
+		case "iamcredentials.googleapis.com", "sts.googleapis.com", "securetoken.googleapis.com", "oauth2.googleapis.com":
+			return true
+		}
+		if host == "iam.googleapis.com" && strings.EqualFold(request.Method, "POST") && strings.HasSuffix(strings.TrimRight(path, "/"), "/keys") {
+			return true
+		}
+		if host == "apikeys.googleapis.com" && (strings.Contains(actionPath, "getkeystring") || strings.Contains(actionPath, "lookupkey")) {
+			return true
+		}
+	}
+	if request.Provider == ProviderAzure && host == "graph.microsoft.com" {
+		for _, action := range []string{"addpassword", "addkey", "resetpassword"} {
+			if strings.Contains(actionPath, action) {
+				return true
+			}
+		}
+	}
+	if request.Provider == ProviderBaidu && (host == "sts.baidubce.com" || strings.HasPrefix(host, "sts.")) {
+		return true
+	}
+	if strings.EqualFold(request.Method, "POST") && strings.Contains(actionPath, "accesskey") {
+		return true
+	}
+	for _, action := range []string{"listkeys", "listcredentials", "regeneratekey", "regeneratekeys", "getkeystring", "generatetoken"} {
+		if strings.Contains(actionPath, action) {
+			return true
+		}
+	}
+	for _, action := range []string{"signin", "signup", "refreshtoken", "exchangetoken"} {
+		if strings.Contains(actionPath, action) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedOperation(value string) string {
+	value = strings.ToLower(value)
+	return strings.NewReplacer("-", "", "_", "", "/", "", ":", "").Replace(value)
 }
 
 func validateEmbeddedFileReferences(value any, allowedFileRoots []string) error {

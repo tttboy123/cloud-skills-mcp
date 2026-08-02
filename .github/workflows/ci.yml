@@ -2,7 +2,6 @@ name: ci
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -10,10 +9,14 @@ permissions:
 
 jobs:
   verify:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -30,11 +33,40 @@ jobs:
           coverage=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')
           echo "total coverage: ${coverage}%"
           awk -v coverage="${coverage}" 'BEGIN { exit !(coverage + 0 >= 80) }'
-      - name: Build Tencent Cloud MCP
-        run: go build -trimpath -o /tmp/tencent-cloud-mcp ./cmd/tencent-cloud-mcp
+      - name: Build MCP binaries
+        run: |
+          go build -trimpath -o /tmp/cloud-skills-mcp ./cmd/cloud-skills-mcp
+          go build -trimpath -o /tmp/tencent-cloud-mcp ./cmd/tencent-cloud-mcp
+      - name: Protocol smoke tests
+        run: |
+          ./scripts/ci/protocol-smoke.sh /tmp/cloud-skills-mcp
+          ./scripts/ci/protocol-smoke.sh /tmp/tencent-cloud-mcp
+      - name: Installer smoke test
+        run: ./scripts/ci/install-smoke.sh
       - name: Check shell syntax
         shell: bash
         run: |
           while IFS= read -r -d '' file; do
             bash -n "$file"
           done < <(find . -type f -name '*.sh' -print0)
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: Check shell scripts
+        run: find . -type f -name '*.sh' -print0 | xargs -0 shellcheck -x
+      - name: Check GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Build release archives
+        run: ./scripts/build-release.sh "$(mktemp -d)"

@@ -13,7 +13,7 @@ Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway
 2. Use `gcp_api_discover(service=<discovery-name>, operation=<version>)` to read the public Google Discovery document when available; otherwise use the linked official API reference.
 3. Use `gcp_api_read` for `GET`, `HEAD`, or `OPTIONS` only.
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the project, URL, method, body, resources, and effect; then use `gcp_api_mutate(force=true)`.
-5. Secret, credential, token, password, service-account-key, and access-key endpoints require the separate sensitive gate.
+5. Secret-resource operations require the separate sensitive gate. IAM Credentials, STS/token exchange, service-account private-key creation, API-key export, and sign-in token endpoints are never exposed by the gateway.
 6. Never pass OAuth tokens, API keys, signed URL parameters, cookies, or authorization headers.
 
 ## MCP arguments

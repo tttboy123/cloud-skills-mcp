@@ -13,7 +13,7 @@ Use the unified MCP server for every operation exposed by Alibaba Cloud CLI/Open
 2. Use `alicloud_api_discover` with the product code and action when parameters are uncertain.
 3. Use `alicloud_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `alicloud_api_mutate(force=true)`.
-5. Secret, credential, token, password, and access-key actions require the separate sensitive gate.
+5. Secret-resource operations require the separate sensitive gate. STS role/session credentials, login profiles, AccessKey creation, and other credential issuance/export actions are never exposed by the gateway.
 6. Do not pass endpoints, proxies, TLS-disable flags, AccessKeys, security tokens, or authorization data as arguments.
 
 ## MCP arguments
@@ -21,7 +21,7 @@ Use the unified MCP server for every operation exposed by Alibaba Cloud CLI/Open
 - `service`: Alibaba Cloud product code, such as `ecs`, `rds`, `vpc`, or `ram`.
 - `operation`: exact OpenAPI action, such as `DescribeInstances`.
 - `region`: optional region.
-- `parameters`: structured action parameters converted to deterministic `--Name value` arguments.
+- `parameters`: structured action parameters converted to deterministic single-argument `--Name=value` flags. Use the exact legacy OpenAPI name or current plugin business-parameter name shown by official CLI help.
 - `arguments`: optional safe Alibaba Cloud CLI flags.
 
 Example read: `alicloud_api_read(service="ecs", operation="DescribeInstances", region="cn-hangzhou", parameters={"PageSize":20})`.

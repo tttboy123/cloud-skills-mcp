@@ -13,7 +13,7 @@ Use the unified MCP server for every documented AWS CLI service and operation. T
 2. If the operation or parameters are uncertain, call `aws_api_discover` with the AWS CLI service and operation.
 3. Use `aws_api_read` only for operations classified as read-only (`describe*`, `list*`, `get*`, `head*`, `search*`, and similar).
 4. For any other operation, obtain explicit human approval for the exact account, region, resources, operation, and expected effect. Then call `aws_api_mutate` with `force=true`.
-5. Treat secrets, passwords, credentials, access keys, and token operations as sensitive. They additionally require the operator-controlled sensitive gate.
+5. Secret-resource operations require the operator-controlled sensitive gate. Credential issuance or export operations such as STS AssumeRole, login tokens, presigned credentials, and AccessKey creation are never exposed by the gateway.
 6. Return the provider RequestId when present. Never return, print, store, or ask the MCP server to reveal credentials.
 
 ## MCP arguments

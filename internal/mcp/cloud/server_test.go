@@ -213,12 +213,15 @@ func TestReadClassifierCannotBeDowngradedByCaller(t *testing.T) {
 		{ProviderAWS, Invocation{Service: "ec2", Operation: "describe-instances"}, true, false},
 		{ProviderAWS, Invocation{Service: "ec2", Operation: "run-instances"}, false, false},
 		{ProviderAWS, Invocation{Service: "secretsmanager", Operation: "get-secret-value"}, false, true},
+		{ProviderAWS, Invocation{Service: "kms", Operation: "decrypt"}, false, true},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "DescribeInstances"}, true, false},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "StartInstances"}, false, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://management.azure.com/subscriptions/sub/resources?api-version=2021-04-01"}, true, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://registry.azurecr.io/v2/repositories"}, true, false},
 		{ProviderAzure, Invocation{Method: "PUT", URL: "https://management.azure.com/subscriptions/sub/resourceGroups/rg?api-version=2021-04-01"}, false, false},
+		{ProviderAzure, Invocation{Method: "POST", URL: "https://vault.vault.azure.net/keys/key/decrypt?api-version=7.4"}, false, true},
 		{ProviderGCP, Invocation{Method: "GET", URL: "https://compute.googleapis.com/compute/v1/projects/p/zones"}, true, false},
+		{ProviderGCP, Invocation{Method: "POST", URL: "https://cloudkms.googleapis.com/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k:decrypt"}, false, true},
 		{ProviderBaidu, Invocation{Method: "GET", URL: "https://bcc.bj.baidubce.com/v2/instance"}, true, false},
 	}
 	for _, test := range tests {
@@ -285,6 +288,9 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--endpoint-url", "https://evil.example"}},
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--profile", "higher-privilege"}},
 		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--debug"}},
+		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--role-arn=qcs::cam::uin/1:role/admin"}},
+		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--use-cvm-role"}},
+		{Provider: ProviderAlicloud, Service: "ecs", Operation: "describe-instances", Arguments: []string{"--log-level=DEBUG"}},
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Region: "--endpoint-url"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Subscription: "--resource"},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Project: "project\nInjected: value"},
@@ -311,6 +317,47 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 	} {
 		if err := validateInvocation(request, nil); err == nil {
 			t.Errorf("accepted unsafe request: %#v", request)
+		}
+	}
+}
+
+func TestInvocationBoundaryNeverIssuesOrExportsCloudCredentials(t *testing.T) {
+	blocked := []Invocation{
+		{Provider: ProviderAWS, Service: "sts", Operation: "assume-role"},
+		{Provider: ProviderAWS, Service: "ecr", Operation: "get-login-password"},
+		{Provider: ProviderAWS, Service: "rds", Operation: "generate-db-auth-token"},
+		{Provider: ProviderAWS, Service: "iam", Operation: "create-login-profile"},
+		{Provider: ProviderAWS, Service: "sso-oidc", Operation: "create-token"},
+		{Provider: ProviderAlicloud, Service: "sts", Operation: "AssumeRole"},
+		{Provider: ProviderTencent, Service: "sts", Operation: "AssumeRole"},
+		{Provider: ProviderAzure, Method: "POST", URL: "https://graph.microsoft.com/v1.0/applications/id/addPassword"},
+		{Provider: ProviderAzure, Method: "POST", URL: "https://management.azure.com/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/account/listKeys?api-version=2025-06-01"},
+		{Provider: ProviderGCP, Method: "POST", URL: "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/agent@example.iam.gserviceaccount.com:generateAccessToken"},
+		{Provider: ProviderGCP, Method: "POST", URL: "https://iam.googleapis.com/v1/projects/project/serviceAccounts/agent@example.iam.gserviceaccount.com/keys"},
+		{Provider: ProviderGCP, Method: "GET", URL: "https://apikeys.googleapis.com/v2/projects/project/locations/global/keys/key:getKeyString"},
+		{Provider: ProviderGCP, Method: "POST", URL: "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"},
+		{Provider: ProviderBaidu, Method: "POST", URL: "https://sts.bj.baidubce.com/v1/sessionToken"},
+		{Provider: ProviderBaidu, Method: "POST", URL: "https://iam.bj.baidubce.com/v1/user/agent/accessKey"},
+	}
+	for _, request := range blocked {
+		if err := validateInvocation(request, nil); err == nil || !strings.Contains(err.Error(), "credential issuance") {
+			t.Errorf("credential issuance was not rejected: %#v: %v", request, err)
+		}
+	}
+}
+
+func TestInvocationBoundaryKeepsOrdinaryIAMResourceManagementAvailable(t *testing.T) {
+	allowed := []Invocation{
+		{Provider: ProviderAWS, Service: "iam", Operation: "list-roles"},
+		{Provider: ProviderAlicloud, Service: "ram", Operation: "ListRoles"},
+		{Provider: ProviderTencent, Service: "cam", Operation: "ListRoles"},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://graph.microsoft.com/v1.0/applications"},
+		{Provider: ProviderGCP, Method: "GET", URL: "https://iam.googleapis.com/v1/projects/project/serviceAccounts"},
+		{Provider: ProviderBaidu, Method: "GET", URL: "https://iam.bj.baidubce.com/v1/user"},
+	}
+	for _, request := range allowed {
+		if err := validateInvocation(request, nil); err != nil {
+			t.Errorf("ordinary IAM resource operation was rejected: %#v: %v", request, err)
 		}
 	}
 }
