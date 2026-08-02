@@ -403,6 +403,7 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "opensearch", Service: "opensearch", Operation: "Search", Method: "GET", URL: "https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/demo/search?query=config%3Dstart%3A0"},
 		{Provider: ProviderAlicloud, AuthScheme: "odps", Service: "maxcompute", Operation: "ListProjects", Method: "GET", URL: "https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects"},
 		{Provider: ProviderAlicloud, AuthScheme: "odps4", Service: "maxcompute", Operation: "ListProjects", Region: "cn-hangzhou", Method: "GET", URL: "https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api/projects"},
+		{Provider: ProviderAlicloud, AuthScheme: "fc", Service: "fc", Operation: "ListServices", Method: "GET", URL: "https://123.cn-hangzhou.fc.aliyuncs.com/2016-08-15/services"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -460,6 +461,11 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	odps4.Headers = map[string]string{"Authorization-Sts-Token": "caller"}
 	if err := validateInvocation(odps4, nil); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("ODPS4 caller token error=%v", err)
+	}
+	fc := requests[11]
+	fc.Headers = map[string]string{"X-Fc-Security-Token": "caller"}
+	if err := validateInvocation(fc, nil); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("FC caller token error=%v", err)
 	}
 }
 

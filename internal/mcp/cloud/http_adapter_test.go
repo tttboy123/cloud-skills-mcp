@@ -1180,6 +1180,72 @@ func TestAlibabaODPSV4AdapterSignsTunnelRequestAndInjectsSTS(t *testing.T) {
 	}
 }
 
+func TestAlibabaFCMatchesOfficialSDKSignatureVector(t *testing.T) {
+	headers := http.Header{
+		"x-fc-trace-id": {"trace-id"},
+		"content-type":  {"text/json"},
+		"content-md5":   {"ef5b43a0fe1d5b401b62c3ba33a7a3d6"},
+	}
+	resource := "/2016-08-15/proxy/service.LATEST/func/abc 123\n" +
+		"a=123 45\n" +
+		"x-fc-access-key-id=akID\n" +
+		"x-fc-expires=1583221068\n" +
+		"x-fc-security-token=stsToken\n" +
+		"x=456\n" +
+		"x=xyz"
+	got := alibabaFCSignature("S9MWOBG0AOWHSO9HPASP216QOPHT5YR4NLH3A", http.MethodGet, headers, "1583221068", resource)
+	if want := "QFdNhz0Dl+onUM/MvpX940WFH3H8OHayZHbby1c01aI="; got != want {
+		t.Fatalf("signature=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaFCCanonicalResourceDistinguishesAPIAndHTTPTrigger(t *testing.T) {
+	common, err := http.NewRequest(http.MethodGet, "https://123.cn-hangzhou.fc.aliyuncs.com/2016-08-15/services?limit=10&nextToken=opaque", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonicalAlibabaFCResource(common.URL), "/2016-08-15/services"; got != want {
+		t.Fatalf("common resource=%q want=%q", got, want)
+	}
+	trigger, err := http.NewRequest(http.MethodGet, "https://123.cn-hangzhou.fc.aliyuncs.com/2016-08-15/proxy/service.LATEST/function/path-with-%20-space?x=1&a=2&x=3&with%20space=foo%20bar", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/2016-08-15/proxy/service.LATEST/function/path-with- -space\na=2\nwith space=foo bar\nx=1\nx=3"
+	if got := canonicalAlibabaFCResource(trigger.URL); got != want {
+		t.Fatalf("trigger resource=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaFCAdapterSignsBodyAndSTS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		for name, want := range map[string]string{
+			"Content-MD5":         "28804cae9c94c693a03da301e61b7646",
+			"Date":                "Mon, 03 Aug 2026 01:02:03 GMT",
+			"X-Fc-Security-Token": "ram-token",
+			"Authorization":       "FC testid:JdketQUDIQWDp+2KBm5mm/I32W+YpkII3Vv1UnQwY24=",
+		} {
+			if got := request.Header.Get(name); got != want {
+				t.Fatalf("%s=%q want=%q headers=%v", name, got, want, request.Header)
+			}
+		}
+		return httpResponse(200, `{}`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "testid", AccessKeySecret: "testsecret", SecurityToken: "ram-token"}},
+		HTTP:        doer,
+		Now:         func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "fc", Service: "fc", Operation: "CreateService",
+		Method: http.MethodPost, URL: "https://123.cn-hangzhou.fc.aliyuncs.com/2016-08-15/services",
+		Headers: map[string]string{"X-Fc-Trace-Id": "trace-id"}, Body: map[string]any{"serviceName": "demo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {

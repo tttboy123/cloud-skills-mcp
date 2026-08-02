@@ -107,8 +107,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, oss4, sls, sls4, mns, ots, or ots4")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, oss4, sls, sls4, mns, ots, or ots4")
 		}
 		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2 || scheme == authSchemeAlibabaROAV2) && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
@@ -177,6 +177,13 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 		if scheme == authSchemeAlibabaODPSV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("Alibaba Cloud ODPS4 requires a valid region")
+		}
+		if scheme == authSchemeAlibabaFC {
+			for name := range request.Headers {
+				if isAlibabaFCControlledHeader(name) {
+					return fmt.Errorf("caller-supplied protected Alibaba Cloud Function Compute header %q is forbidden", name)
+				}
+			}
 		}
 		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
@@ -596,7 +603,7 @@ func isCredentialQueryParameter(name string) bool {
 		"x-amz-credential", "x-amz-signature", "x-amz-security-token",
 		"x-goog-signature", "x-bce-security-token", "sharedaccesssignature",
 		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token", "security-token", "x-ots-ststoken",
-		"authorization-sts-token", "x-odps-bearer-token":
+		"authorization-sts-token", "x-odps-bearer-token", "x-fc-access-key-id", "x-fc-access-key-secret", "x-fc-security-token", "x-fc-signature", "x-fc-expires":
 		return true
 	default:
 		return false
@@ -642,6 +649,15 @@ func isAlibabaOpenSearchControlledHeader(name string) bool {
 func isAlibabaODPSControlledHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "authorization", "authorization-sts-token", "application-authentication", "date", "x-odps-bearer-token", "x-pyodps-token-timestamp":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAlibabaFCControlledHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "content-md5", "date", "x-fc-access-key-id", "x-fc-access-key-secret", "x-fc-security-token", "x-fc-signature", "x-fc-expires":
 		return true
 	default:
 		return false
