@@ -1,11 +1,11 @@
 ---
 name: tencent-cloud
-description: Operate or inspect any Tencent Cloud resource through TC3, API 3.0 v1, legacy qcloud API 2017, COS signed HTTPS, or internally connected ASR/speech-translation/voice-conversion/MPS recognition and MPS TTS WSS in cloud-skills-mcp. Use for Tencent Cloud, CVM, Lighthouse, COS, CDB, VPC, CAM, TKE, CloudBase, ASR, translation, voice conversion, MPS, TTS, or any documented Tencent Cloud API.
+description: Operate or inspect any Tencent Cloud resource through TC3, API 3.0 v1, legacy qcloud API 2017, COS signed HTTPS, or internally connected ASR/virtual-number/speech-translation/voice-conversion/MPS recognition and MPS TTS WSS in cloud-skills-mcp. Use for Tencent Cloud, CVM, Lighthouse, COS, CDB, VPC, CAM, TKE, CloudBase, ASR, human detection, translation, voice conversion, MPS, TTS, or any documented Tencent Cloud API.
 ---
 
 # Tencent Cloud
 
-Use the unified MCP gateway for API 3.0 product actions, still-active qcloud API 2017 actions, COS REST operations, finite ASR/speech-translation/voice-conversion/MPS recognition streams, and MPS streaming TTS. It calculates all signatures in-process, opens WSS connections internally, and never executes TCCLI or returns signed connection URLs.
+Use the unified MCP gateway for API 3.0 product actions, still-active qcloud API 2017 actions, COS REST operations, finite ASR/virtual-number/speech-translation/voice-conversion/MPS recognition streams, and MPS streaming TTS. It calculates all signatures in-process, opens WSS connections internally, and never executes TCCLI or returns signed connection URLs.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP gateway for API 3.0 product actions, still-active qcloud API
 
 ## MCP arguments
 
-- `auth_scheme`: `tc3` (default and recommended) for API 3.0 JSON/multipart calls; `tc1|tc1-sha256` for the still-documented API 3.0 v1 GET/query or `application/x-www-form-urlencoded` protocol; `qcloud|qcloud-sha256` for still-running legacy product endpoints at `*.api.qcloud.com/v2/index.php`; `cos` for COS REST data plane; `asr-ws` for realtime ASR; `speech-translate-ws` for realtime speech translation with optional synthesized audio; `voice-convert-ws` for realtime PCM voice conversion; `mps-ws` for MPS private-audio recognition/translation; `mps-tts-ws` for MPS streaming speech synthesis.
+- `auth_scheme`: `tc3` (default and recommended) for API 3.0 JSON/multipart calls; `tc1|tc1-sha256` for the still-documented API 3.0 v1 GET/query or `application/x-www-form-urlencoded` protocol; `qcloud|qcloud-sha256` for still-running legacy product endpoints at `*.api.qcloud.com/v2/index.php`; `cos` for COS REST data plane; `asr-ws` for realtime ASR; `virtual-number-ws` for virtual-number human detection; `speech-translate-ws` for realtime speech translation with optional synthesized audio; `voice-convert-ws` for realtime PCM voice conversion; `mps-ws` for MPS private-audio recognition/translation; `mps-tts-ws` for MPS streaming speech synthesis.
 - `service`: TC3 signing/product code such as `cvm`, `lighthouse`, `cdb`, or `cam`; use `cos` for COS.
 - `operation`: exact action, such as `DescribeInstances`, used by TC3 headers and read/write classification.
 - `api_version`: required for TC3, such as `2017-03-12`.
@@ -36,6 +36,8 @@ Legacy Direct Connect read: `tencent_api_read(auth_scheme="qcloud", service="dc"
 
 ASR WebSocket read: `tencent_api_read(auth_scheme="asr-ws", service="asr", operation="RecognizeStream", method="GET", url="wss://asr.cloud.tencent.com/asr/v2/<appid>", parameters={"engine_model_type":"16k_zh","voice_format":1}, body_file="<approved-root>/audio.pcm", response_file="<approved-root>/asr.ndjson")`. The server generates a new voice ID and bounded positive nonce, injects timestamp/expiry/SecretId/signature, performs the HTTP Upgrade internally, streams binary frames at the documented default 200ms cadence, sends the final `{"type":"end"}` text frame, and records text responses as bounded NDJSON. It never exposes the signed URL. PCM defaults to 6400-byte 16k or 3200-byte 8k frames; use `stream_chunk_bytes` for compressed or complete-m4a fragments and `stream_interval_ms` only when the media timing requires it.
 
+Virtual-number human detection: `tencent_api_read(auth_scheme="virtual-number-ws", service="asr", operation="RecognizeHumanStream", method="GET", url="wss://asr.cloud.tencent.com/asr/virtual_number/v1/<appid>", parameters={"voice_format":1,"wait_time":30}, body_file="<approved-root>/call.pcm", response_file="<approved-root>/human.ndjson")`. For 8k PCM, the adapter defaults to 640-byte frames every 40ms, stops on the documented human-answer/final result, and keeps all HMAC-SHA1 query credentials and signatures internal.
+
 Realtime speech translation: `tencent_api_read(auth_scheme="speech-translate-ws", service="asr", operation="TranslateStream", method="GET", url="wss://asr.cloud.tencent.com/asr/speech_translate/<appid>", parameters={"source":"zh","target":"en","trans_model":"hunyuan-translation-lite","voice_format":1,"enable_tts":1,"codec":"mp3","sample_rate":16000}, body_file="<approved-root>/audio.pcm", response_file="<approved-root>/translated.mp3")`. The adapter signs and streams audio like the official protocol, sends the final `{"type":"end"}`, and waits for `final=1` when TTS is disabled or `final=2` when enabled. Without TTS, JSON responses are bounded NDJSON and `response_file` is optional. With TTS, `response_file` is required and contains only atomically published binary audio; MCP output contains the JSON messages plus audio metadata. Never disconnect at `final=1` when `enable_tts=1`.
 
 Realtime voice conversion: `tencent_api_read(auth_scheme="voice-convert-ws", service="vc", operation="ConvertVoice", method="GET", url="wss://tts.cloud.tencent.com/vc_stream/<appid>", parameters={"VoiceType":301005,"SampleRate":16000,"Codec":"pcm","Volume":0}, body_file="<approved-root>/source.pcm", response_file="<approved-root>/converted.pcm")`. Input must be 16kHz, 16-bit, mono PCM. The adapter generates `VoiceId`, injects the controlled SecretId/timestamps/expiry/End/signature query, defaults to 3200-byte frames every 100ms, and encodes each upload and download as the documented four-byte big-endian JSON length plus JSON plus PCM. It publishes converted audio only after matching `VoiceId`, `Code=0`, and `Final=1`.
@@ -46,6 +48,6 @@ MPS TTS read: `tencent_api_read(auth_scheme="mps-tts-ws", service="mps", operati
 
 ## Credentials
 
-Use `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Temporary CAM/STS credentials also use `TENCENTCLOUD_SESSION_TOKEN` or `TENCENTCLOUD_TOKEN` for the HTTP schemes that document Token. The ASR, speech translation, voice conversion, and MPS WebSocket documents specify AppID plus SecretId/SecretKey but no temporary Token field, so `asr-ws`, `speech-translate-ws`, `voice-convert-ws`, `mps-ws`, and `mps-tts-ws` fail closed when a CAM session token is configured. Never pass credentials in MCP inputs.
+Use `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Temporary CAM/STS credentials also use `TENCENTCLOUD_SESSION_TOKEN` or `TENCENTCLOUD_TOKEN` for the HTTP schemes that document Token. The ASR, virtual-number, speech translation, voice conversion, and MPS WebSocket documents specify AppID plus SecretId/SecretKey but no temporary Token field, so `asr-ws`, `virtual-number-ws`, `speech-translate-ws`, `voice-convert-ws`, `mps-ws`, and `mps-tts-ws` fail closed when a CAM session token is configured. Never pass credentials in MCP inputs.
 
 Read [references/official-docs.md](references/official-docs.md) for API 3.0 v1/v3, legacy qcloud API 2017, COS signing, ASR/speech-translation/voice-conversion/MPS WSS, and CAM credentials.

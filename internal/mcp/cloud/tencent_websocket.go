@@ -30,6 +30,7 @@ import (
 )
 
 var tencentASRWebSocketPath = regexp.MustCompile(`^/asr/v2/[0-9]{5,20}$`)
+var tencentVirtualNumberWebSocketPath = regexp.MustCompile(`^/asr/virtual_number/v1/[0-9]{5,20}$`)
 var tencentSpeechTranslateWebSocketPath = regexp.MustCompile(`^/asr/speech_translate/[0-9]{5,20}$`)
 var tencentMPSWebSocketPath = regexp.MustCompile(`^/wss/v1/[0-9]{5,20}$`)
 var tencentMPSTTSWebSocketPath = regexp.MustCompile(`^/tts/v1/[0-9]{5,20}$`)
@@ -53,6 +54,26 @@ func validateTencentASRWebSocketInvocation(invocation Invocation) error {
 		return fmt.Errorf("Tencent Cloud ASR WebSocket does not accept caller-supplied handshake headers")
 	}
 	return nil
+}
+
+func validateTencentVirtualNumberWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) {
+		return fmt.Errorf("Tencent Cloud virtual-number WebSocket requires method GET for the HTTP upgrade")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "asr.cloud.tencent.com") || target.Port() != "" || !tencentVirtualNumberWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return fmt.Errorf("Tencent Cloud virtual-number WebSocket requires wss://asr.cloud.tencent.com/asr/virtual_number/v1/<appid> without caller query parameters")
+	}
+	if invocation.BodyFile == "" || invocation.Body != nil {
+		return fmt.Errorf("Tencent Cloud virtual-number WebSocket requires body_file and does not accept inline body")
+	}
+	if len(invocation.Headers) != 0 {
+		return fmt.Errorf("Tencent Cloud virtual-number WebSocket does not accept caller-supplied handshake headers")
+	}
+	if invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Tencent Cloud virtual-number WebSocket does not accept MPS frame controls")
+	}
+	return validateTencentVirtualNumberParameters(invocation.Parameters)
 }
 
 func validateTencentSpeechTranslateWebSocketInvocation(invocation Invocation) error {
@@ -282,6 +303,82 @@ func signTencentASRWebSocketURL(rawURL string, credentials TencentCredentials, i
 	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
 	target.RawQuery = encodeTencentV1Parameters(parameters)
 	return target.String(), nil
+}
+
+func signTencentVirtualNumberWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, nonce, voiceID string) (string, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse Tencent Cloud virtual-number WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "asr.cloud.tencent.com") || target.Port() != "" || !tencentVirtualNumberWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return "", fmt.Errorf("Tencent Cloud virtual-number WebSocket requires wss://asr.cloud.tencent.com/asr/virtual_number/v1/<appid> without caller query parameters")
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return "", fmt.Errorf("Tencent Cloud virtual-number WebSocket requires complete SecretId/SecretKey credentials")
+	}
+	if credentials.Token != "" {
+		return "", fmt.Errorf("Tencent Cloud virtual-number WebSocket does not document CAM temporary-token authentication")
+	}
+	if !validTencentASRNonce(nonce) {
+		return "", fmt.Errorf("Tencent Cloud virtual-number WebSocket requires a positive nonce of at most 10 digits")
+	}
+	if !tencentVoiceIDPattern.MatchString(voiceID) {
+		return "", fmt.Errorf("Tencent Cloud virtual-number WebSocket requires a generated voice_id of at most 128 characters")
+	}
+	if err := validateTencentVirtualNumberParameters(input); err != nil {
+		return "", err
+	}
+	parameters := make(map[string]string, len(input)+6)
+	for name, value := range input {
+		parameter, _ := tencentScalarStringValue(value)
+		parameters[name] = parameter
+	}
+	timestamp := now.UTC().Unix()
+	parameters["secretid"] = credentials.SecretID
+	parameters["timestamp"] = strconv.FormatInt(timestamp, 10)
+	parameters["expired"] = strconv.FormatInt(timestamp+24*60*60, 10)
+	parameters["nonce"] = nonce
+	parameters["voice_id"] = voiceID
+	canonical := canonicalTencentV1Parameters(parameters)
+	source := "asr.cloud.tencent.com" + target.EscapedPath() + "?" + canonical
+	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
+	target.Scheme = "wss"
+	target.Host = "asr.cloud.tencent.com"
+	target.RawQuery = encodeTencentV1Parameters(parameters)
+	return target.String(), nil
+}
+
+func validateTencentVirtualNumberParameters(input map[string]any) error {
+	parameters := make(map[string]string, len(input))
+	for name, value := range input {
+		if isTencentASRControlledParameter(name) {
+			return fmt.Errorf("caller-supplied Tencent Cloud virtual-number WebSocket signing parameter %q is forbidden", name)
+		}
+		switch name {
+		case "voice_format", "wait_time":
+		default:
+			return fmt.Errorf("Tencent Cloud virtual-number WebSocket query parameter %q is not documented", name)
+		}
+		parameter, err := tencentScalarStringValue(value)
+		if err != nil {
+			return fmt.Errorf("Tencent Cloud virtual-number WebSocket query parameter %q must be scalar", name)
+		}
+		parameters[name] = parameter
+	}
+	if format, present := parameters["voice_format"]; present {
+		switch format {
+		case "1", "4", "6", "8", "10", "12", "14", "16":
+		default:
+			return fmt.Errorf("Tencent Cloud virtual-number WebSocket voice_format is unsupported")
+		}
+	}
+	if wait, present := parameters["wait_time"]; present {
+		parsed, err := strconv.Atoi(wait)
+		if err != nil || parsed < 1 || parsed > 60 {
+			return fmt.Errorf("Tencent Cloud virtual-number WebSocket wait_time must be between 1 and 60")
+		}
+	}
+	return nil
 }
 
 func signTencentSpeechTranslateWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, nonce, voiceID string) (string, error) {
@@ -866,6 +963,113 @@ func invokeTencentASRWebSocket(ctx context.Context, adapter *TencentRESTAdapter,
 		return InvocationResult{}, err
 	}
 	return InvocationResult{Output: output, RequestID: result.requestID}, nil
+}
+
+func invokeTencentVirtualNumberWebSocket(ctx context.Context, adapter *TencentRESTAdapter, credentials TencentCredentials, invocation Invocation) (InvocationResult, error) {
+	voiceID := adapter.config.VoiceID()
+	signedURL, err := signTencentVirtualNumberWebSocketURL(invocation.URL, credentials, invocation.Parameters, adapter.config.Now().UTC(), adapter.config.Nonce(), voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	dialContext, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
+	connection, err := adapter.config.WebSocketDial(dialContext, signedURL)
+	cancelDial()
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer connection.Close()
+	sink, err := newTencentWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer sink.abort()
+	handshakeContext, cancelHandshake := context.WithTimeout(ctx, adapter.config.Timeout)
+	messageType, handshake, err := connection.Read(handshakeContext)
+	cancelHandshake()
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("read Tencent Cloud virtual-number WebSocket handshake")
+	}
+	requestID, _, err := acceptTencentVirtualNumberText(messageType, handshake, sink, voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	streamInvocation := invocation
+	if streamInvocation.StreamChunkBytes == 0 {
+		streamInvocation.StreamChunkBytes = defaultTencentVirtualNumberChunkBytes(invocation.Parameters)
+	}
+	if streamInvocation.StreamIntervalMS == 0 {
+		streamInvocation.StreamIntervalMS = 40
+	}
+	streamContext, cancelStream := tencentASRStreamContext(ctx, streamInvocation)
+	defer cancelStream()
+	readResult := make(chan tencentASRReadResult, 1)
+	go readTencentVirtualNumberWebSocket(streamContext, cancelStream, connection, sink, requestID, readResult)
+	if err := streamTencentASRAudio(streamContext, connection, streamInvocation, adapter.config.StreamPause); err != nil {
+		cancelStream()
+		reader := <-readResult
+		if reader.err != nil {
+			return InvocationResult{}, reader.err
+		}
+		return InvocationResult{}, err
+	}
+	result := <-readResult
+	if result.err != nil {
+		return InvocationResult{}, result.err
+	}
+	output, err := sink.finish(result.requestID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return InvocationResult{Output: output, RequestID: result.requestID}, nil
+}
+
+func acceptTencentVirtualNumberText(messageType tencentWebSocketMessageType, data []byte, sink *tencentWebSocketOutputSink, expectedID string) (string, bool, error) {
+	if messageType != tencentWebSocketMessageText {
+		return expectedID, false, fmt.Errorf("Tencent Cloud virtual-number WebSocket returned a non-text response")
+	}
+	var message tencentASRWebSocketMessage
+	if err := json.Unmarshal(data, &message); err != nil {
+		return expectedID, false, fmt.Errorf("Tencent Cloud virtual-number WebSocket returned invalid JSON")
+	}
+	if message.Code != 0 {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud virtual-number WebSocket returned code %d", message.Code)
+	}
+	if strings.TrimSpace(message.VoiceID) == "" || (expectedID != "" && message.VoiceID != expectedID) {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud virtual-number WebSocket returned an invalid voice_id")
+	}
+	if err := sink.writeMessage(data); err != nil {
+		return message.VoiceID, false, err
+	}
+	return message.VoiceID, message.Final == 1, nil
+}
+
+func readTencentVirtualNumberWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, sink *tencentWebSocketOutputSink, requestID string, result chan<- tencentASRReadResult) {
+	for {
+		messageType, data, err := connection.Read(ctx)
+		if err != nil {
+			cancel()
+			result <- tencentASRReadResult{requestID: requestID, err: fmt.Errorf("read Tencent Cloud virtual-number WebSocket response")}
+			return
+		}
+		currentID, final, err := acceptTencentVirtualNumberText(messageType, data, sink, requestID)
+		if currentID != "" {
+			requestID = currentID
+		}
+		if err != nil || final {
+			if err != nil {
+				cancel()
+			}
+			result <- tencentASRReadResult{requestID: requestID, err: err}
+			return
+		}
+	}
+}
+
+func defaultTencentVirtualNumberChunkBytes(parameters map[string]any) int {
+	if values, err := stringValues(parameters["voice_format"]); err == nil && len(values) == 1 && values[0] == "1" {
+		return 640
+	}
+	return 4096
 }
 
 func tencentASRStreamContext(ctx context.Context, invocation Invocation) (context.Context, context.CancelFunc) {

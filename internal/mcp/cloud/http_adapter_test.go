@@ -1793,6 +1793,53 @@ func TestTencentSpeechTranslateWebSocketSignatureMatchesOfficialAlgorithm(t *tes
 	}
 }
 
+func TestTencentVirtualNumberWebSocketSignatureMatchesOfficialAlgorithm(t *testing.T) {
+	signedURL, err := signTencentVirtualNumberWebSocketURL(
+		"wss://asr.cloud.tencent.com/asr/virtual_number/v1/1259220000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"voice_format": 1, "wait_time": 30},
+		time.Unix(1673408372, 0).UTC(),
+		"1673408372",
+		"c64385ee-3e5c-4fc5-bbfd-7c71addb35b0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := parsed.Query().Get("signature"), "uRX2ieVJSbmPWgLxQZBvySNo2Do="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+}
+
+func TestTencentVirtualNumberWebSocketRejectsTemporaryTokenAndInvalidParameters(t *testing.T) {
+	baseURL := "wss://asr.cloud.tencent.com/asr/virtual_number/v1/1259220000"
+	if _, err := signTencentVirtualNumberWebSocketURL(baseURL, TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, nil, time.Unix(1673408372, 0), "1673408372", "voice"); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+	invalid := []map[string]any{
+		{"voice_format": 2},
+		{"wait_time": 0},
+		{"wait_time": 61},
+		{"signature": "caller"},
+		{"unknown": "value"},
+		{"voice_format": []string{"1"}},
+	}
+	for _, parameters := range invalid {
+		if err := validateTencentVirtualNumberParameters(parameters); err == nil {
+			t.Fatalf("invalid parameters accepted: %#v", parameters)
+		}
+	}
+	if got := defaultTencentVirtualNumberChunkBytes(map[string]any{"voice_format": 1}); got != 640 {
+		t.Fatalf("PCM chunk=%d", got)
+	}
+	if got := defaultTencentVirtualNumberChunkBytes(map[string]any{"voice_format": 10}); got != 4096 {
+		t.Fatalf("compressed chunk=%d", got)
+	}
+}
+
 func TestTencentSpeechTranslateWebSocketRejectsTemporaryTokenAndInvalidInputs(t *testing.T) {
 	baseURL := "wss://asr.cloud.tencent.com/asr/speech_translate/1259220000"
 	credentials := TencentCredentials{SecretID: "id", SecretKey: "key"}
@@ -2131,6 +2178,40 @@ func TestTencentASRWebSocketAdapterStreamsGuardedAudioInternally(t *testing.T) {
 		t.Fatalf("result=%#v", result)
 	}
 	if len(connection.writes) != 2 || connection.writes[0].messageType != tencentWebSocketMessageBinary || string(connection.writes[0].data) != "abcdefgh" || connection.writes[1].messageType != tencentWebSocketMessageText || string(connection.writes[1].data) != `{"type":"end"}` {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentVirtualNumberWebSocketStreamsEightKilohertzAudio(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "audio.pcm")
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{0x44}, 1000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","message_id":"message","result":1,"final":1}`),
+	}}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1673408372, 0).UTC() },
+		Nonce:       func() string { return "1673408372" },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "virtual-number-ws", Service: "asr", Operation: "RecognizeHumanStream", Method: http.MethodGet,
+		URL: "wss://asr.cloud.tencent.com/asr/virtual_number/v1/1259220000", Parameters: map[string]any{"voice_format": 1, "wait_time": 30}, BodyFile: audioFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestID != "voice" || !bytes.Contains(result.Output, []byte(`"result":1`)) {
+		t.Fatalf("result=%#v", result)
+	}
+	if len(connection.writes) != 3 || len(connection.writes[0].data) != 640 || len(connection.writes[1].data) != 360 || string(connection.writes[2].data) != `{"type":"end"}` {
 		t.Fatalf("writes=%#v", connection.writes)
 	}
 }

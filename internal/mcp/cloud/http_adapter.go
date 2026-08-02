@@ -54,6 +54,7 @@ const (
 	authSchemeTencentQCloud      = "qcloud"
 	authSchemeTencentQCloud256   = "qcloud-sha256"
 	authSchemeTencentASRWS       = "asr-ws"
+	authSchemeTencentVirtualWS   = "virtual-number-ws"
 	authSchemeTencentTranslateWS = "speech-translate-ws"
 	authSchemeTencentVoiceWS     = "voice-convert-ws"
 	authSchemeTencentMPSWS       = "mps-ws"
@@ -532,7 +533,7 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+speech-translate-ws+voice-convert-ws+mps-ws+mps-tts-ws+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+virtual-number-ws+speech-translate-ws+voice-convert-ws+mps-ws+mps-tts-ws+cos",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -545,6 +546,7 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"tc1_signature":              "https://cloud.tencent.com/document/api/583/17239",
 		"qcloud_signature":           "https://cloud.tencent.com/document/product/216/1714",
 		"asr_websocket":              "https://cloud.tencent.com/document/product/1093/48982",
+		"virtual_number_websocket":   "https://cloud.tencent.com/document/product/1093/94490",
 		"speech_translate_websocket": "https://cloud.tencent.com/document/api/1093/127565",
 		"voice_conversion_websocket": "https://cloud.tencent.com/document/product/1664/85973",
 		"mps_websocket":              "https://cloud.tencent.com/document/product/862/121186",
@@ -555,12 +557,16 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, or cos")
 	}
-	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentTranslateWS || scheme == authSchemeTencentVoiceWS || scheme == authSchemeTencentMPSWS || scheme == authSchemeTencentMPSTTSWS {
+	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentVirtualWS || scheme == authSchemeTencentTranslateWS || scheme == authSchemeTencentVoiceWS || scheme == authSchemeTencentMPSWS || scheme == authSchemeTencentMPSTTSWS {
 		if scheme == authSchemeTencentASRWS {
 			if err := validateTencentASRWebSocketInvocation(invocation); err != nil {
+				return InvocationResult{}, err
+			}
+		} else if scheme == authSchemeTencentVirtualWS {
+			if err := validateTencentVirtualNumberWebSocketInvocation(invocation); err != nil {
 				return InvocationResult{}, err
 			}
 		} else if scheme == authSchemeTencentTranslateWS {
@@ -589,6 +595,9 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 		if scheme == authSchemeTencentASRWS {
 			return invokeTencentASRWebSocket(ctx, adapter, credentials, invocation)
+		}
+		if scheme == authSchemeTencentVirtualWS {
+			return invokeTencentVirtualNumberWebSocket(ctx, adapter, credentials, invocation)
 		}
 		if scheme == authSchemeTencentTranslateWS {
 			return invokeTencentSpeechTranslateWebSocket(ctx, adapter, credentials, invocation)

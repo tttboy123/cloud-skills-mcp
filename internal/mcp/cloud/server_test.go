@@ -409,6 +409,32 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentASRWebSocket(t *testing.T) {
 	}
 }
 
+func TestInvocationBoundaryAllowsOnlyGuardedTencentVirtualNumberWebSocket(t *testing.T) {
+	root := t.TempDir()
+	audio := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audio, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "virtual-number-ws", Service: "asr", Operation: "RecognizeHumanStream", Method: http.MethodGet,
+		URL: "wss://asr.cloud.tencent.com/asr/virtual_number/v1/1259220000", Parameters: map[string]any{"voice_format": 1, "wait_time": 30},
+		BodyFile: audio, ResponseFile: filepath.Join(root, "result.ndjson"), StreamChunkBytes: 640, StreamIntervalMS: 40,
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded virtual-number stream rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request}
+	invalid[0].URL += "?signature=caller"
+	invalid[1].Parameters = map[string]any{"voice_format": 1, "signature": "caller"}
+	invalid[2].Parameters = map[string]any{"voice_format": 2}
+	invalid[3].Headers = map[string]string{"Authorization": "caller"}
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe virtual-number stream accepted: %#v", candidate)
+		}
+	}
+}
+
 func TestInvocationBoundaryAllowsGuardedTencentSpeechTranslateWebSocket(t *testing.T) {
 	root := t.TempDir()
 	audio := filepath.Join(root, "audio.pcm")
