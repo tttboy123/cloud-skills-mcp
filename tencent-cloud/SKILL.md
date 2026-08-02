@@ -1,11 +1,11 @@
 ---
 name: tencent-cloud
-description: Operate or inspect any Tencent Cloud resource through TC3 or COS signed HTTPS in cloud-skills-mcp. Use for Tencent Cloud, CVM, Lighthouse, COS, CDB, VPC, CAM, TKE, CloudBase, or any documented Tencent Cloud API.
+description: Operate or inspect any Tencent Cloud resource through TC3, API 3.0 v1, or COS signed HTTPS in cloud-skills-mcp. Use for Tencent Cloud, CVM, Lighthouse, COS, CDB, VPC, CAM, TKE, CloudBase, or any documented Tencent Cloud API.
 ---
 
 # Tencent Cloud
 
-Use the unified MCP gateway for API 3.0 product actions and COS REST operations. It calculates TC3-HMAC-SHA256 or COS signatures in-process and never executes TCCLI.
+Use the unified MCP gateway for API 3.0 product actions and COS REST operations. It calculates TC3-HMAC-SHA256, API 3.0 v1 HmacSHA1/HmacSHA256, or COS signatures in-process and never executes TCCLI.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP gateway for API 3.0 product actions and COS REST operations.
 
 ## MCP arguments
 
-- `auth_scheme`: `tc3` (default) for API 3.0; `cos` for COS REST data plane.
+- `auth_scheme`: `tc3` (default and recommended) for API 3.0 JSON/multipart calls; `tc1|tc1-sha256` for the still-documented v1 GET/query or `application/x-www-form-urlencoded` protocol; `cos` for COS REST data plane.
 - `service`: TC3 signing/product code such as `cvm`, `lighthouse`, `cdb`, or `cam`; use `cos` for COS.
 - `operation`: exact action, such as `DescribeInstances`, used by TC3 headers and read/write classification.
 - `api_version`: required for TC3, such as `2017-03-12`.
@@ -30,8 +30,10 @@ Use the unified MCP gateway for API 3.0 product actions and COS REST operations.
 
 Example read: `tencent_api_read(auth_scheme="tc3", service="cvm", operation="DescribeInstances", api_version="2017-03-12", region="ap-shanghai", method="POST", url="https://cvm.tencentcloudapi.com/", body={"Limit":20})`.
 
+V1 read: `tencent_api_read(auth_scheme="tc1", service="cvm", operation="DescribeInstances", api_version="2017-03-12", region="ap-shanghai", method="GET", url="https://cvm.tencentcloudapi.com/", parameters={"Limit":20})`. For a form POST, use `tc1` or `tc1-sha256`, set `Content-Type: application/x-www-form-urlencoded`, and pass the form string as `body`. The adapter signs raw decoded values in ASCII name order, RFC3986-encodes the transmitted values, and injects Action, Version, Timestamp, a cryptographically random positive Nonce, SecretId, optional CAM Token, SignatureMethod, and Signature. Those controlled parameters cannot be supplied by MCP callers.
+
 ## Credentials
 
 Use `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Temporary CAM/STS credentials also use `TENCENTCLOUD_SESSION_TOKEN` or `TENCENTCLOUD_TOKEN`. Never pass credentials in MCP inputs.
 
-Read [references/official-docs.md](references/official-docs.md) for API 3.0, TC3, COS signing, and CAM credentials.
+Read [references/official-docs.md](references/official-docs.md) for API 3.0 v1/v3, COS signing, and CAM credentials.

@@ -366,6 +366,7 @@ func TestInvocationBoundaryKeepsOrdinaryIAMResourceManagementAvailable(t *testin
 		{Provider: ProviderAWS, Service: "iam", Operation: "list-roles", Region: "us-east-1", Method: "POST", URL: "https://iam.amazonaws.com/"},
 		{Provider: ProviderAlicloud, Service: "ram", Operation: "ListRoles", APIVersion: "2015-05-01", Method: "POST", URL: "https://ram.aliyuncs.com/"},
 		{Provider: ProviderTencent, Service: "cam", Operation: "ListRoles", APIVersion: "2019-01-16", Method: "POST", URL: "https://cam.tencentcloudapi.com/"},
+		{Provider: ProviderTencent, AuthScheme: "tc1", Service: "cvm", Operation: "DescribeInstances", APIVersion: "2017-03-12", Region: "ap-guangzhou", Method: "GET", URL: "https://cvm.tencentcloudapi.com/"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://graph.microsoft.com/v1.0/applications"},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://iam.googleapis.com/v1/projects/project/serviceAccounts"},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://iam.bj.baidubce.com/v1/user"},

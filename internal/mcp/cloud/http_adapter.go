@@ -49,6 +49,8 @@ const (
 	authSchemeAlibabaOTS        = "ots"
 	authSchemeAlibabaOTSV4      = "ots4"
 	authSchemeTencentTC3        = "tc3"
+	authSchemeTencentV1         = "tc1"
+	authSchemeTencentV1SHA256   = "tc1-sha256"
 	authSchemeTencentCOS        = "cos"
 	defaultHTTPClientTimeout    = 60 * time.Second
 )
@@ -486,6 +488,7 @@ type TencentRESTConfig struct {
 	MaxBodyBytes int64
 	Timeout      time.Duration
 	Now          func() time.Time
+	Nonce        func() string
 	AllowedHosts []string
 }
 
@@ -498,12 +501,15 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 		config.Credentials = EnvTencentCredentialProvider{}
 	}
 	normalizeSignedHTTPConfig(&config.HTTP, &config.Timeout, &config.MaxBodyBytes, &config.Now)
+	if config.Nonce == nil {
+		config.Nonce = secureTencentNonce
+	}
 	return &TencentRESTAdapter{config: config}
 }
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS", Version: "tc3+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS", Version: "tc3+tc1+tc1-sha256+cos",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -513,14 +519,15 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 	return json.Marshal(map[string]string{
 		"api_reference": "https://cloud.tencent.com/document/api",
 		"tc3_signature": "https://intl.cloud.tencent.com/document/product/627/64494",
+		"tc1_signature": "https://cloud.tencent.com/document/api/583/17239",
 		"cos_signature": "https://intl.cloud.tencent.com/document/product/436/7778",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3 or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, or cos")
 	}
 	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
 	if err != nil {
@@ -540,6 +547,10 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 	switch scheme {
 	case authSchemeTencentTC3:
 		if err := signTencentTC3(request, payloadHash, credentials, invocation, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeTencentV1, authSchemeTencentV1SHA256:
+		if err := signTencentV1(request, credentials, invocation, adapter.config.Now().UTC(), adapter.config.Nonce(), scheme == authSchemeTencentV1SHA256); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeTencentCOS:
@@ -1366,6 +1377,99 @@ func signTencentTC3(request *http.Request, payloadHash string, credentials Tence
 	return nil
 }
 
+func signTencentV1(request *http.Request, credentials TencentCredentials, invocation Invocation, now time.Time, nonce string, useSHA256 bool) error {
+	if parsedNonce, err := strconv.ParseUint(nonce, 10, 63); err != nil || parsedNonce == 0 {
+		return fmt.Errorf("Tencent Cloud API v1 requires a positive numeric nonce")
+	}
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		return fmt.Errorf("Tencent Cloud API v1 requires method GET or POST")
+	}
+	if request.URL.EscapedPath() != "" && request.URL.EscapedPath() != "/" {
+		return fmt.Errorf("Tencent Cloud API v1 requires the root request path")
+	}
+	values := request.URL.Query()
+	if request.Method == http.MethodPost {
+		if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+			return fmt.Errorf("Tencent Cloud API v1 POST requires application/x-www-form-urlencoded")
+		}
+		if request.URL.RawQuery != "" {
+			return fmt.Errorf("Tencent Cloud API v1 POST does not allow query parameters outside the form body")
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			return fmt.Errorf("read Tencent Cloud API v1 form body: %w", err)
+		}
+		values, err = url.ParseQuery(string(body))
+		if err != nil {
+			return fmt.Errorf("parse Tencent Cloud API v1 form body: %w", err)
+		}
+	}
+	parameters := make(map[string]string)
+	for name, entries := range values {
+		if isTencentV1ControlledParameter(name) {
+			return fmt.Errorf("caller-supplied Tencent Cloud API v1 signing parameter %q is forbidden", name)
+		}
+		if len(entries) != 1 {
+			return fmt.Errorf("Tencent Cloud API v1 query parameter %q must have exactly one value", name)
+		}
+		parameters[name] = entries[0]
+	}
+	parameters["Action"] = invocation.Operation
+	parameters["Nonce"] = nonce
+	parameters["SecretId"] = credentials.SecretID
+	parameters["Timestamp"] = strconv.FormatInt(now.UTC().Unix(), 10)
+	parameters["Version"] = invocation.APIVersion
+	if invocation.Region != "" {
+		parameters["Region"] = invocation.Region
+	}
+	if credentials.Token != "" {
+		parameters["Token"] = credentials.Token
+	}
+	var algorithm func() hash.Hash = sha1.New
+	if useSHA256 {
+		parameters["SignatureMethod"] = "HmacSHA256"
+		algorithm = sha256.New
+	}
+	canonical := canonicalTencentV1Parameters(parameters)
+	stringToSign := request.Method + request.URL.Host + "/?" + canonical
+	parameters["Signature"] = base64.StdEncoding.EncodeToString(hmacBytes(algorithm, []byte(credentials.SecretKey), []byte(stringToSign)))
+	encoded := encodeTencentV1Parameters(parameters)
+	if request.Method == http.MethodGet {
+		request.URL.RawQuery = encoded
+	} else {
+		request.Body = io.NopCloser(strings.NewReader(encoded))
+		request.ContentLength = int64(len(encoded))
+		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(encoded)), nil }
+	}
+	return nil
+}
+
+func canonicalTencentV1Parameters(parameters map[string]string) string {
+	names := make([]string, 0, len(parameters))
+	for name := range parameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+parameters[name])
+	}
+	return strings.Join(parts, "&")
+}
+
+func encodeTencentV1Parameters(parameters map[string]string) string {
+	names := make([]string, 0, len(parameters))
+	for name := range parameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+uriEncode(parameters[name], true))
+	}
+	return strings.Join(parts, "&")
+}
+
 func signAlibabaOSSV4(request *http.Request, credentials AlibabaCredentials, region string, now time.Time) error {
 	if !identifierPattern.MatchString(region) {
 		return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
@@ -2073,6 +2177,18 @@ func secureNonce() string {
 		return strconv.FormatInt(time.Now().UnixNano(), 16)
 	}
 	return hex.EncodeToString(value)
+}
+
+func secureTencentNonce() string {
+	value := make([]byte, 8)
+	if _, err := rand.Read(value); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano()&0x7fffffffffffffff, 10)
+	}
+	number, err := strconv.ParseUint(hex.EncodeToString(value)[:15], 16, 64)
+	if err != nil || number == 0 {
+		return "1"
+	}
+	return strconv.FormatUint(number, 10)
 }
 
 func pointerString(value *string) string {

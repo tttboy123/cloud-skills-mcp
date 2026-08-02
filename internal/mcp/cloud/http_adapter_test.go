@@ -1612,6 +1612,71 @@ func TestTencentTC3CanonicalRequestMatchesOfficialFixedVector(t *testing.T) {
 	}
 }
 
+func TestTencentV1MatchesOfficialCanonicalExample(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://cvm.tencentcloudapi.com/?InstanceIds.0=ins-09dx96dg&Offset=0&Limit=20", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := Invocation{Service: "cvm", Operation: "DescribeInstances", APIVersion: "2017-03-12", Region: "ap-guangzhou"}
+	if err := signTencentV1(request, TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}, invocation, time.Unix(1465185768, 0).UTC(), "11886", false); err != nil {
+		t.Fatal(err)
+	}
+	query := request.URL.Query()
+	if got, want := query.Get("Signature"), "E/mORCKgkwA4wtfri8eb+yh6Kk4="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if query.Get("Action") != "DescribeInstances" || query.Get("SecretId") != "AKIDEXAMPLE" || query.Get("Nonce") != "11886" {
+		t.Fatalf("common parameters=%v", query)
+	}
+}
+
+func TestTencentV1SignsFormPOSTWithSHA256AndCAMToken(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "https://cvm.tencentcloudapi.com/", strings.NewReader("Offset=0&Limit=20"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	invocation := Invocation{Service: "cvm", Operation: "DescribeInstances", APIVersion: "2017-03-12", Region: "ap-guangzhou"}
+	if err := signTencentV1(request, TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret", Token: "cam-token"}, invocation, time.Unix(1465185768, 0).UTC(), "11886", true); err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := form.Get("Signature"), "3f/YqrWx8PZ/O/GxvUu+MPX0jp8kyMU9lbAJ40/lDDI="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if form.Get("Token") != "cam-token" || form.Get("SignatureMethod") != "HmacSHA256" {
+		t.Fatalf("form=%v", form)
+	}
+}
+
+func TestTencentV1AdapterInjectsCredentialsAndCallsHTTPS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		query := request.URL.Query()
+		if query.Get("SecretId") != "AKIDEXAMPLE" || query.Get("Token") != "cam-token" || query.Get("Signature") == "" {
+			t.Fatalf("query=%v", query)
+		}
+		return httpResponse(200, `{"Response":{"RequestId":"request-id"}}`), nil
+	})
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret", Token: "cam-token"}},
+		HTTP:        doer, Now: func() time.Time { return time.Unix(1465185768, 0).UTC() }, Nonce: func() string { return "11886" },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "tc1", Service: "cvm", Operation: "DescribeInstances", APIVersion: "2017-03-12", Region: "ap-guangzhou",
+		Method: http.MethodGet, URL: "https://cvm.tencentcloudapi.com/", Parameters: map[string]any{"Limit": 20},
+	})
+	if err != nil || result.RequestID != "request-id" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestAlibabaOSS4AndTencentCOSDataPlaneSchemes(t *testing.T) {
 	ossRequest, err := http.NewRequest(http.MethodGet, "https://bucket.oss-cn-hangzhou.aliyuncs.com/object?acl", nil)
 	if err != nil {
