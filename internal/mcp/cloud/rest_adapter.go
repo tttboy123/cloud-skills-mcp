@@ -241,6 +241,12 @@ func azureScopeForInvocationWithEndpointHosts(rawURL, explicitAudience string, a
 		return "https://management.microsoftazure.de/.default", nil
 	case host == "graph.microsoft.com":
 		return "https://graph.microsoft.com/.default", nil
+	case host == "atlas.microsoft.com" || strings.HasSuffix(host, ".atlas.microsoft.com"):
+		return "https://atlas.microsoft.com/.default", nil
+	case strings.HasSuffix(host, ".dicom.azurehealthcareapis.com"):
+		return "https://dicom.healthcareapis.azure.com/.default", nil
+	case host == "azurehealthcareapis.com" || strings.HasSuffix(host, ".azurehealthcareapis.com"):
+		return "https://" + host + "/.default", nil
 	case strings.HasSuffix(host, ".azconfig.io"):
 		return "https://appconfig.azure.com/.default", nil
 	case strings.HasSuffix(host, ".search.windows.net"):

@@ -471,8 +471,10 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 			host == "api.aws" || strings.HasSuffix(host, ".api.aws")
 	case ProviderAzure:
 		allowed = host == "management.azure.com" || host == "graph.microsoft.com" || host == "api.loganalytics.io" ||
+			host == "atlas.microsoft.com" || host == "azurehealthcareapis.com" ||
 			hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".azurecr.io", ".loganalytics.io", ".azureedge.net", ".trafficmanager.net",
 				".azconfig.io", ".azuredatabricks.net", ".azure-api.net", ".azuresynapse.net", ".azureml.ms", ".service.signalr.net",
+				".atlas.microsoft.com", ".azurehealthcareapis.com",
 				".chinacloudapi.cn", ".azure.cn", ".windowsazure.cn", ".usgovcloudapi.net", ".microsoftazure.us", ".azure.us", ".microsoftazure.de")
 	case ProviderGCP:
 		allowed = host == "googleapis.com" || strings.HasSuffix(host, ".googleapis.com")
@@ -543,8 +545,9 @@ func normalizeAzureAudience(raw string) (string, error) {
 		return "", fmt.Errorf("Azure audience port must be 443")
 	}
 	host := strings.ToLower(parsed.Hostname())
-	allowed := host == "graph.microsoft.com" ||
+	allowed := host == "graph.microsoft.com" || host == "atlas.microsoft.com" || host == "azurehealthcareapis.com" ||
 		hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".microsoft.com", ".loganalytics.io", ".azconfig.io", ".azureml.ms", ".azuredatabricks.net",
+			".azurehealthcareapis.com", ".healthcareapis.azure.com",
 			".chinacloudapi.cn", ".azure.cn", ".windowsazure.cn", ".usgovcloudapi.net", ".microsoftazure.us", ".azure.us", ".microsoftazure.de")
 	if !allowed {
 		return "", fmt.Errorf("Azure audience host %q is outside the Microsoft identity allowlist", host)

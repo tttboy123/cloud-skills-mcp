@@ -9,6 +9,11 @@
 - App Configuration data-plane REST and Entra audience: https://learn.microsoft.com/en-us/azure/azure-app-configuration/rest-api and https://learn.microsoft.com/en-us/azure/azure-app-configuration/concept-enable-rbac
 - Azure data-plane endpoint/audience model: https://learn.microsoft.com/en-us/azure/developer/terraform/concept-azapi-data-plane-framework
 - Azure Web PubSub data-plane authentication: https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-rest-api-data-plane
+- Azure Health Data Services authentication and FHIR/DICOM audiences: https://learn.microsoft.com/en-us/azure/healthcare-apis/authentication-authorization
+- Azure Health Data Services FHIR/DICOM access-token and endpoint examples: https://learn.microsoft.com/en-us/azure/healthcare-apis/fhir/using-curl
+- Azure API for FHIR legacy service endpoint: https://learn.microsoft.com/en-us/azure/healthcare-apis/azure-api-for-fhir/azure-api-fhir-resource-manager-template
+- Azure Maps Microsoft Entra authentication and public/geographic endpoints: https://learn.microsoft.com/en-us/azure/azure-maps/azure-maps-authentication
+- Azure Maps daemon scope (`https://atlas.microsoft.com/.default`): https://learn.microsoft.com/en-us/azure/azure-maps/how-to-secure-daemon-app
 - Azure environment endpoint metadata for public, China, US Government, and other clouds: https://learn.microsoft.com/en-us/powershell/module/Az.Accounts/get-azenvironment
 - Blob Get Blob, Entra authorization, and Range download: https://learn.microsoft.com/en-us/rest/api/storageservices/get-blob
 

@@ -97,11 +97,64 @@ func TestAzureRESTAdapterMapsOfficialDataPlaneScopes(t *testing.T) {
 		"https://workspace.azuredatabricks.net/api/2.0/clusters/list":               "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default",
 		"https://management.chinacloudapi.cn/subscriptions?api-version=2020-01-01":  "https://management.chinacloudapi.cn/.default",
 		"https://management.usgovcloudapi.net/subscriptions?api-version=2020-01-01": "https://management.usgovcloudapi.net/.default",
+		"https://workspace-fhir.fhir.azurehealthcareapis.com/Patient":               "https://workspace-fhir.fhir.azurehealthcareapis.com/.default",
+		"https://legacy-fhir.azurehealthcareapis.com/Patient":                       "https://legacy-fhir.azurehealthcareapis.com/.default",
+		"https://workspace-dicom.dicom.azurehealthcareapis.com/v1/studies":          "https://dicom.healthcareapis.azure.com/.default",
+		"https://atlas.microsoft.com/route/directions/json?api-version=1.0":         "https://atlas.microsoft.com/.default",
+		"https://us.atlas.microsoft.com/map/tile?api-version=2024-04-01":            "https://atlas.microsoft.com/.default",
+		"https://eu.atlas.microsoft.com/map/tile?api-version=2024-04-01":            "https://atlas.microsoft.com/.default",
 	}
 	for rawURL, want := range tests {
 		got, err := azureScopeForURL(rawURL)
 		if err != nil || got != want {
 			t.Errorf("url=%s scope=%q want=%q err=%v", rawURL, got, want, err)
+		}
+	}
+}
+
+func TestAzureHealthcareAndMapsEndpointBoundariesRejectSiblingDomains(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://workspace-fhir.fhir.azurehealthcareapis.com/Patient",
+		"https://legacy-fhir.azurehealthcareapis.com/Patient",
+		"https://workspace-dicom.dicom.azurehealthcareapis.com/v1/studies",
+		"https://atlas.microsoft.com/map/tile?api-version=2024-04-01",
+		"https://us.atlas.microsoft.com/map/tile?api-version=2024-04-01",
+	} {
+		if err := validateRESTTarget(ProviderAzure, http.MethodGet, rawURL); err != nil {
+			t.Errorf("official endpoint %q rejected: %v", rawURL, err)
+		}
+	}
+	for _, rawURL := range []string{
+		"https://workspace-fhir.fhir.azurehealthcareapis.com.attacker.example/Patient",
+		"https://workspace-dicom.dicom.azurehealthcareapis.com.evil.example/v1/studies",
+		"https://atlas.microsoft.com.attacker.example/map/tile",
+		"https://notatlas.microsoft.com/map/tile",
+	} {
+		if err := validateRESTTarget(ProviderAzure, http.MethodGet, rawURL); err == nil {
+			t.Errorf("sibling endpoint %q accepted", rawURL)
+		}
+	}
+}
+
+func TestAzureHealthcareExplicitAudiencesAreValidated(t *testing.T) {
+	tests := map[string]string{
+		"https://workspace-fhir.fhir.azurehealthcareapis.com": "https://workspace-fhir.fhir.azurehealthcareapis.com",
+		"https://legacy-fhir.azurehealthcareapis.com":         "https://legacy-fhir.azurehealthcareapis.com",
+		"https://azurehealthcareapis.com":                     "https://azurehealthcareapis.com",
+		"https://dicom.healthcareapis.azure.com/":             "https://dicom.healthcareapis.azure.com",
+	}
+	for audience, want := range tests {
+		got, err := normalizeAzureAudience(audience)
+		if err != nil || got != want {
+			t.Errorf("audience=%q normalized=%q want=%q err=%v", audience, got, want, err)
+		}
+	}
+	for _, audience := range []string{
+		"https://workspace-fhir.fhir.azurehealthcareapis.com.attacker.example",
+		"https://dicom.healthcareapis.azure.com.evil.example",
+	} {
+		if _, err := normalizeAzureAudience(audience); err == nil {
+			t.Errorf("sibling audience %q accepted", audience)
 		}
 	}
 }

@@ -107,6 +107,11 @@ remain available through the guarded resource gateway.
 - Azure uncommon data-plane endpoints can use a first-class, validated
   `audience` identifier. The value is never a credential: the adapter derives
   the `.default` scope internally.
+- Azure Maps `atlas.microsoft.com` and geographic subdomains route to the
+  documented Maps Entra resource. Azure Health Data Services FHIR endpoints
+  use the service host audience by default, while DICOM endpoints route to the
+  documented shared `dicom.healthcareapis.azure.com` resource. Similar-looking
+  sibling domains are rejected.
 - Baidu endpoint validation includes both the general `*.baidubce.com` service
   plane and the official BOS `*.bcebos.com` object-storage plane.
 - Baidu calls use `bce-auth-v1` by default and can select guarded

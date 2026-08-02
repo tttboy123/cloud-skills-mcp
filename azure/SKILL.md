@@ -28,7 +28,7 @@ Use the unified MCP server as a guarded Azure REST gateway. It obtains tokens on
 
 Example read: `azure_api_read(method="GET", url="https://management.azure.com/subscriptions/<id>/resources?api-version=2021-04-01", subscription="<id>")`.
 
-Common ARM, Graph, Storage, Key Vault, SQL, Service Bus, Monitor, App Configuration, Search, Databricks, Grafana, Web PubSub, SignalR, Digital Twins, Synapse, Log Analytics, and ACR endpoints have built-in audience routing. Use the endpoint's official documentation for an explicit `audience` value.
+Common ARM, Graph, Storage, Key Vault, SQL, Service Bus, Monitor, App Configuration, Search, Databricks, Grafana, Web PubSub, SignalR, Digital Twins, Synapse, Log Analytics, ACR, Azure Maps, FHIR, and DICOM endpoints have built-in audience routing. Azure Maps callers must include the documented non-secret `x-ms-client-id` header. FHIR uses its service URL as the default audience; DICOM uses `https://dicom.healthcareapis.azure.com`. Use an explicit documented `audience` when a FHIR deployment overrides its default authentication audience.
 
 Public Azure, Azure operated by 21Vianet, Azure US Government, and legacy Germany endpoint suffixes are validated. Configure the matching Azure authority in Azure Identity before calling a sovereign endpoint.
 
