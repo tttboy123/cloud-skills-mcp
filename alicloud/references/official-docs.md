@@ -5,6 +5,7 @@
 - Legacy ROA V2 header/resource/body HMAC-SHA1 signature mechanism: https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism
 - Current BaaS HMAC-SHA1 common parameters and NAS STS `SecurityToken` parameter: https://www.alibabacloud.com/help/en/blockchain-as-a-service/latest/common-parameters and https://www.alibabacloud.com/help/en/nas/common-parameters
 - PDS AccessKey ROA endpoint and STS `x-acs-security-token` canonical-header behavior: https://www.alibabacloud.com/help/en/pds/drive-and-photo-service-dev/user-guide/call-api-operations-by-using-an-accesskey-pair
+- DataHub resource operations, `DATAHUB` HMAC-SHA1 signature, and STS header: https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz
 - OSS V4 Authorization signature: https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4
 - Simple Log Service v1 request signature: https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures
 - Simple Log Service v1/v4 authentication selection and region requirement: https://www.alibabacloud.com/help/en/sls/developer-reference/initializing-the-sls-python-sdk

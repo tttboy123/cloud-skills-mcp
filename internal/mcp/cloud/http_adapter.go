@@ -34,6 +34,7 @@ const (
 	authSchemeAlibabaACS3    = "acs3"
 	authSchemeAlibabaRPCV2   = "rpc"
 	authSchemeAlibabaROAV2   = "roa"
+	authSchemeAlibabaDataHub = "datahub"
 	authSchemeAlibabaOSSV4   = "oss4"
 	authSchemeAlibabaSLS     = "sls"
 	authSchemeAlibabaSLSV4   = "sls4"
@@ -315,7 +316,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+oss4+sls+sls4+mns+ots+ots4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -327,6 +328,7 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"acs3_signature": "https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature",
 		"rpc_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/rpc-mechanism",
 		"roa_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism",
+		"datahub_api":    "https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
@@ -336,8 +338,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, oss4, sls, sls4, mns, ots, or ots4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -374,6 +376,10 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeAlibabaROAV2:
 		if err := signAlibabaROAV2(request, credentials, invocation.APIVersion, adapter.config.Now().UTC(), adapter.config.Nonce()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaDataHub:
+		if err := signAlibabaDataHub(request, credentials, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeAlibabaOSSV4:
@@ -880,6 +886,28 @@ func canonicalAlibabaROAResource(target *url.URL) string {
 		}
 	}
 	return resource + "?" + strings.Join(parts, "&")
+}
+
+func signAlibabaDataHub(request *http.Request, credentials AlibabaCredentials, apiVersion string, now time.Time) error {
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud DataHub requires complete AKSK material")
+	}
+	if apiVersion == "" {
+		apiVersion = "1.1"
+	}
+	if !apiVersionPattern.MatchString(apiVersion) {
+		return fmt.Errorf("Alibaba Cloud DataHub requires a valid api_version when provided")
+	}
+	request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	request.Header.Set("X-Datahub-Client-Version", apiVersion)
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Datahub-Security-Token", credentials.SecurityToken)
+	}
+	canonicalHeaders := canonicalPrefixedHeaders(request.Header, "x-datahub-")
+	stringToSign := request.Method + "\n" + request.Header.Get("Content-Type") + "\n" + request.Header.Get("Date") + "\n" + canonicalHeaders + "\n" + canonicalAlibabaROAResource(request.URL)
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("Authorization", "DATAHUB "+credentials.AccessKeyID+":"+signature)
+	return nil
 }
 
 func signTencentTC3(request *http.Request, payloadHash string, credentials TencentCredentials, invocation Invocation, now time.Time) error {

@@ -1,11 +1,11 @@
 ---
 name: alicloud
-description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
+description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
 ---
 
 # Alibaba Cloud
 
-Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI requests with ACS3-HMAC-SHA256, product APIs that still document legacy RPC V2 with query/form HMAC-SHA1, legacy ROA V2 resource requests with `acs` HMAC-SHA1 headers, OSS data-plane requests with OSS4-HMAC-SHA256, Simple Log Service requests with SLS v1 or v4, Simple Message Queue requests with MNS HMAC-SHA1, and Tablestore protobuf requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.
+Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI with ACS3, legacy RPC/ROA V2, DataHub resource APIs, OSS, SLS, MNS, and Tablestore protocols. It never executes Alibaba Cloud CLI.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 
 ## MCP arguments
 
-- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc` or `roa` only when the product metadata still requires the matching legacy V2 HMAC-SHA1 style; `oss4` for OSS; `sls` for SLS signature v1; `sls4` for SLS signature v4; `mns` for Simple Message Queue (formerly MNS); `ots` or `ots4` for Tablestore data management.
+- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc` or `roa` for matching legacy V2 APIs; `datahub` for DataHub; `oss4` for OSS; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
 - `service`: product/signing code, such as `ecs`, `rds`, `vpc`, `ram`, or `oss`.
 - `operation`: exact action name used by ACS3 headers and read/write classification.
 - `api_version`: required for ACS3, RPC, and ROA, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
@@ -32,6 +32,8 @@ Example read: `alicloud_api_read(auth_scheme="acs3", service="ecs", operation="D
 Legacy RPC example: `alicloud_api_read(auth_scheme="rpc", service="baas", operation="DescribeFabricOrganization", api_version="2018-12-21", method="GET", url="https://baas.aliyuncs.com/", parameters={"Format":"JSON","OrganizationId":"..."})`. The adapter adds `Action`, `Version`, timestamp, nonce, AK ID, optional RAM `SecurityToken`, and signature; optional `Format` remains caller-selected because documented defaults differ by product. For operations whose metadata puts parameters in `formData`, pass an `application/x-www-form-urlencoded` body; those fields are included in the signature without being copied into the URL. RPC accepts only the documented root path and GET or POST, and repeated parameter names are rejected.
 
 Legacy ROA example: `alicloud_api_read(auth_scheme="roa", service="pds", operation="ListDrives", api_version="v2", method="POST", url="https://<domain-id>.api.aliyunpds.com/v2/drive/list", body={"limit":20})`. The adapter signs the exact path/query and body, derives `Content-MD5`, and internally adds Date, nonce, version, optional RAM `x-acs-security-token`, and `Authorization`. Do not provide those controlled headers. ROA supports the documented GET, POST, PUT, and DELETE methods.
+
+DataHub example: `alicloud_api_read(auth_scheme="datahub", service="datahub", operation="ListProjects", method="GET", url="https://dh-cn-hangzhou.aliyuncs.com/projects")`. The adapter defaults `x-datahub-client-version` to `1.1` (override with `api_version`), signs the exact resource path/query, and internally adds Date, optional RAM `x-datahub-security-token`, and `DATAHUB` authorization. Project, topic, shard, connector, record, and subscription endpoints use the same scheme.
 
 SLS example: `alicloud_api_read(auth_scheme="sls4", service="sls", operation="ListLogstores", region="cn-hangzhou", method="GET", url="https://<project>.cn-hangzhou.log.aliyuncs.com/logstores")`. For protobuf log ingestion, pass the encoded body through `body_file` and its documented non-auth headers such as `Content-Type` and `x-log-bodyrawsize`; signing headers are server-controlled.
 

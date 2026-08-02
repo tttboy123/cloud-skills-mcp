@@ -994,6 +994,45 @@ func TestAlibabaROAV2AdapterInjectsSTSAndCallsPDS(t *testing.T) {
 	}
 }
 
+func TestAlibabaDataHubMatchesOfficialCanonicalFormula(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "https://dh-cn-hangzhou.aliyuncs.com/projects/test_project/topics/test_topic", strings.NewReader(`{"ShardCount":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if err := signAlibabaDataHub(request, AlibabaCredentials{
+		AccessKeyID: "testid", AccessKeySecret: "testsecret",
+	}, "1.1", time.Date(2019, 1, 10, 7, 28, 29, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "DATAHUB testid:DzXPmORqWCxnaQfRgh+06bvaJeU="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+	if request.Header.Get("X-Datahub-Client-Version") != "1.1" || request.Header.Get("Date") != "Thu, 10 Jan 2019 07:28:29 GMT" {
+		t.Fatalf("headers=%v", request.Header)
+	}
+}
+
+func TestAlibabaDataHubAdapterInjectsSTS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("X-Datahub-Security-Token") != "ram-token" || !strings.HasPrefix(request.Header.Get("Authorization"), "DATAHUB ak:") {
+			t.Fatalf("headers=%v", request.Header)
+		}
+		return httpResponse(200, `{"ProjectNames":[]}`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "secret", SecurityToken: "ram-token"}},
+		HTTP:        doer, Now: func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "datahub", Service: "datahub", Operation: "ListProjects",
+		Method: http.MethodGet, URL: "https://dh-cn-hangzhou.aliyuncs.com/projects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {

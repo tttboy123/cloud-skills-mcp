@@ -107,8 +107,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, oss4, sls, sls4, mns, ots, or ots4")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, oss4, sls, sls4, mns, ots, or ots4")
 		}
 		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2 || scheme == authSchemeAlibabaROAV2) && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
@@ -141,6 +141,18 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			for name := range request.Headers {
 				if isAlibabaROAV2ControlledHeader(name) {
 					return fmt.Errorf("caller-supplied protected Alibaba Cloud ROA V2 header %q is forbidden", name)
+				}
+			}
+		}
+		if scheme == authSchemeAlibabaDataHub {
+			switch strings.ToUpper(strings.TrimSpace(request.Method)) {
+			case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
+			default:
+				return fmt.Errorf("Alibaba Cloud DataHub requires method GET, POST, PUT, or DELETE")
+			}
+			for name := range request.Headers {
+				if isAlibabaDataHubControlledHeader(name) {
+					return fmt.Errorf("caller-supplied protected Alibaba Cloud DataHub header %q is forbidden", name)
 				}
 			}
 		}
@@ -578,6 +590,15 @@ func isAlibabaRPCV2ControlledParameter(name string) bool {
 func isAlibabaROAV2ControlledHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "authorization", "content-md5", "date", "x-acs-security-token", "x-acs-signature-method", "x-acs-signature-nonce", "x-acs-signature-version", "x-acs-version":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAlibabaDataHubControlledHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "date", "x-datahub-client-version", "x-datahub-security-token":
 		return true
 	default:
 		return false
