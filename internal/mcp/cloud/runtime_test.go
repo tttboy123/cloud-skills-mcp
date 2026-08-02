@@ -14,7 +14,10 @@ func TestDefaultRuntimeLoadsOnlySafetyConfiguration(t *testing.T) {
 	t.Setenv("CLOUD_SKILLS_ALLOW_SENSITIVE", "1")
 	t.Setenv("CLOUD_SKILLS_MAX_OUTPUT_BYTES", "4096")
 	t.Setenv("CLOUD_SKILLS_ALLOWED_FILE_ROOTS", strings.Join([]string{"/tmp/one", "/tmp/two"}, string(os.PathListSeparator)))
+	t.Setenv("CLOUD_SKILLS_AWS_ALLOWED_ENDPOINT_HOSTS", "new-api.example.aws")
 	t.Setenv("CLOUD_SKILLS_AZURE_ALLOWED_ENDPOINT_HOSTS", "new-api.example.microsoft,*.evil.example,127.0.0.1,new-api.example.microsoft")
+	t.Setenv("CLOUD_SKILLS_ALIBABA_ALLOWED_ENDPOINT_HOSTS", "new-api.example.alibaba")
+	t.Setenv("CLOUD_SKILLS_TENCENT_ALLOWED_ENDPOINT_HOSTS", "new-api.example.tencent")
 	t.Setenv("CLOUD_SKILLS_AUDIT_LOG", filepath.Join(t.TempDir(), "audit", "events.jsonl"))
 	runtime := DefaultRuntime()
 	if !runtime.AllowMutations || !runtime.AllowSensitive || runtime.MaxOutputBytes != 4096 {
@@ -25,6 +28,14 @@ func TestDefaultRuntimeLoadsOnlySafetyConfiguration(t *testing.T) {
 	}
 	if got := runtime.AllowedEndpointHosts[ProviderAzure]; len(got) != 1 || got[0] != "new-api.example.microsoft" {
 		t.Fatalf("allowed Azure endpoint hosts=%v", got)
+	}
+	for provider, want := range map[Provider]string{
+		ProviderAWS: "new-api.example.aws", ProviderAlicloud: "new-api.example.alibaba", ProviderTencent: "new-api.example.tencent",
+	} {
+		got := runtime.AllowedEndpointHosts[provider]
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("allowed %s endpoint hosts=%v", provider, got)
+		}
 	}
 	if len(runtime.Adapters) != len(AllProviders()) {
 		t.Fatalf("adapters=%d", len(runtime.Adapters))

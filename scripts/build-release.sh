@@ -26,8 +26,6 @@ for target in "${TARGETS[@]}"; do
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
       go build -trimpath -o "${PACKAGE_DIR}/cloud-skills-mcp" ./cmd/cloud-skills-mcp
-    CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
-      go build -trimpath -o "${PACKAGE_DIR}/tencent-cloud-mcp" ./cmd/tencent-cloud-mcp
   )
   cp "${ROOT_DIR}/README.md" "${ROOT_DIR}/LICENSE" "${PACKAGE_DIR}/"
   for skill in aws azure google-cloud alicloud tencent-cloud baiducloud; do

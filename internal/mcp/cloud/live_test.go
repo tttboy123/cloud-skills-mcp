@@ -31,7 +31,13 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 		arguments func(*testing.T) map[string]any
 	}{
 		{ProviderAWS, "aws_api_read", func(*testing.T) map[string]any {
-			return map[string]any{"service": "sts", "operation": "get-caller-identity", "region": envDefault("CLOUD_SKILLS_LIVE_AWS_REGION", "us-east-1")}
+			region := envDefault("CLOUD_SKILLS_LIVE_AWS_REGION", "us-east-1")
+			return map[string]any{
+				"auth_scheme": "sigv4", "service": "sts", "operation": "get-caller-identity", "region": region,
+				"method": "POST", "url": "https://sts." + region + ".amazonaws.com/",
+				"headers": map[string]any{"Content-Type": "application/x-www-form-urlencoded"},
+				"body":    "Action=GetCallerIdentity&Version=2011-06-15",
+			}
 		}},
 		{ProviderAzure, "azure_api_read", func(*testing.T) map[string]any {
 			arguments := map[string]any{"method": "GET", "url": "https://management.azure.com/subscriptions?api-version=2020-01-01"}
@@ -51,10 +57,18 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 			}
 		}},
 		{ProviderAlicloud, "alicloud_api_read", func(*testing.T) map[string]any {
-			return map[string]any{"service": "sts", "operation": "GetCallerIdentity"}
+			region := envDefault("CLOUD_SKILLS_LIVE_ALIBABA_REGION", "cn-hangzhou")
+			return map[string]any{
+				"auth_scheme": "acs3", "service": "sts", "operation": "GetCallerIdentity", "api_version": "2015-04-01", "region": region,
+				"method": "POST", "url": "https://sts." + region + ".aliyuncs.com/",
+			}
 		}},
 		{ProviderTencent, "tencent_api_read", func(*testing.T) map[string]any {
-			return map[string]any{"service": "sts", "operation": "GetCallerIdentity", "region": envDefault("CLOUD_SKILLS_LIVE_TENCENT_REGION", "ap-guangzhou")}
+			return map[string]any{
+				"auth_scheme": "tc3", "service": "sts", "operation": "GetCallerIdentity", "api_version": "2018-08-13",
+				"region": envDefault("CLOUD_SKILLS_LIVE_TENCENT_REGION", "ap-guangzhou"), "method": "POST",
+				"url": "https://sts.tencentcloudapi.com/", "body": map[string]any{},
+			}
 		}},
 		{ProviderBaidu, "baiducloud_api_read", func(*testing.T) map[string]any {
 			return map[string]any{"method": "GET", "url": envDefault("CLOUD_SKILLS_LIVE_BAIDU_URL", "https://bcc.bj.baidubce.com/v2/instance")}

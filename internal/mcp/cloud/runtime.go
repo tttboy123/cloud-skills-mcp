@@ -13,9 +13,12 @@ import (
 
 func DefaultRuntime() Runtime {
 	allowedEndpointHosts := map[Provider][]string{
-		ProviderAzure: parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_AZURE_ALLOWED_ENDPOINT_HOSTS")),
-		ProviderGCP:   parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_GCP_ALLOWED_ENDPOINT_HOSTS")),
-		ProviderBaidu: parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_BAIDU_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderAWS:      parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_AWS_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderAzure:    parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_AZURE_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderGCP:      parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_GCP_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderAlicloud: parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_ALIBABA_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderTencent:  parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_TENCENT_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderBaidu:    parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_BAIDU_ALLOWED_ENDPOINT_HOSTS")),
 	}
 	runtime := Runtime{
 		Adapters:             DefaultAdaptersWithEndpointHosts(allowedEndpointHosts),
@@ -108,11 +111,13 @@ Credentials are loaded only through each provider's official environment,
 profile, IAM, ADC, service-principal or STS chain; credentials are never returned
 in MCP results or written to audit logs.
 
-AWS:       AWS profile/SSO/web identity/AKSK through AWS CLI
-Azure:     DefaultAzureCredential (service principal/workload/managed identity) or az login
-GCP:       Google Auth Application Default Credentials or gcloud identity fallback
-Alibaba:   Alibaba Cloud CLI profile/RAM/ALIBABA_CLOUD_* AKSK or STS
-Tencent:   TCCLI profile/CAM/AKSK
+AWS:       AWS SDK profile/SSO/web identity/IAM role/AKSK or STS
+Azure:     non-CLI EnvironmentCredential/workload identity/managed identity
+GCP:       Google Auth Application Default Credentials only
+Alibaba:   credentials-go RAM/OIDC/ECS role/ALIBABA_CLOUD_* AKSK or STS
+Tencent:   TENCENTCLOUD_* AKSK or CAM temporary credentials
 Baidu:     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY, optional BCE_SESSION_TOKEN
+
+The unified server sends direct HTTPS requests and never executes a cloud CLI.
 `
 }

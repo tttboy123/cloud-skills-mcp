@@ -7,7 +7,7 @@ Status: active goal contract
 
 The product supports AWS, Microsoft Azure, Google Cloud, Alibaba Cloud,
 Tencent Cloud and Baidu AI Cloud. "All resources" means every operation that
-the provider exposes through its official OpenAPI, REST API or universal CLI
+the provider exposes through its official OpenAPI or REST API
 can be addressed through a provider gateway without adding a new Go tool for
 each product or resource type.
 
@@ -20,18 +20,20 @@ surface.
 
 The unified `cloud-skills-mcp` stdio server exposes:
 
-- `cloud_provider_status`: report local adapter/CLI readiness, non-secret auth
+- `cloud_provider_status`: report local HTTP adapter readiness, non-secret auth
   source type and a credential status. `available` is not proof of cloud
   authentication; `credential_status=unverified` means the official identity
   chain is resolved lazily by the first API call. Direct BCE signing can report
   local credential-material presence, but only a live read proves validity.
-- `<provider>_api_discover`: read official CLI help or API discovery metadata.
+- `<provider>_api_discover`: read official HTTP API/authentication discovery metadata.
 - `<provider>_api_read`: invoke an operation classified as read-only.
 - `<provider>_api_mutate`: invoke any supported operation after mutation and
   human-approval gates.
 
 Provider prefixes are `aws`, `azure`, `gcp`, `alicloud`, `tencent` and
-`baiducloud`. Existing Tencent fine-grained tools remain backward compatible.
+`baiducloud`. The former TCCLI-backed Tencent compatibility server is not built,
+installed, or included in release archives; Tencent now uses the same signed
+HTTP gateway as the other providers.
 
 Read tools reject operations that cannot be conservatively classified as
 read-only. Such operations remain reachable through the mutation tool with
@@ -42,11 +44,11 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
-| AWS | AWS CLI service + operation, structured JSON input | Official AWS credential provider chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
-| Azure | Official Azure Identity direct REST for known audiences, with `az rest` fallback for other validated Azure endpoints | DefaultAzureCredential, Azure CLI identity, managed identity, workload identity, or Service Principal |
-| Google Cloud | Google Auth ADC authenticated REST against validated `googleapis.com` endpoints, with gcloud identity fallback | ADC, service account, workload identity federation, impersonation, or active gcloud identity |
-| Alibaba Cloud | Alibaba Cloud CLI product + OpenAPI action / REST-style plugin operation | OAuth, RAM role, STS, OIDC, profile, or AK/SK env through the official CLI chain |
-| Tencent Cloud | TCCLI product + API action with JSON input | CAM role/OIDC/profile or SecretId/SecretKey/STS env through TCCLI |
+| AWS | Direct HTTPS with AWS SigV4 | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
+| Azure | Direct HTTPS with Entra Bearer Token and validated audience | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
+| Google Cloud | Google Auth ADC authenticated HTTPS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
+| Alibaba Cloud | Direct ACS3 OpenAPI HTTPS plus OSS4 object data-plane HTTPS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env |
+| Tencent Cloud | Direct API 3.0 TC3 HTTPS plus COS data-plane signed HTTPS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment |
 | Baidu AI Cloud | BCE signed HTTPS request against validated `baidubce.com` endpoints | BCE AK/SK or IAM/STS temporary AK/SK/session token |
 
 The MCP server never returns, logs or writes credential material. Login,
@@ -64,11 +66,12 @@ remain available through the guarded resource gateway.
 
 ## Request and output boundaries
 
-- Commands use fixed executables and argument arrays; no shell is involved.
-- Provider service/action names, HTTP methods, URLs, headers, argument count,
-  argument length, body size and response size are bounded.
-- Endpoint overrides, proxy flags, TLS-disable flags, authorization headers and
-  credential-management commands are rejected.
+- The unified server executes no cloud CLI or shell command; signing and token
+  acquisition happen in-process before direct HTTPS requests.
+- Provider auth scheme, service/action names, API versions, HTTP methods, URLs,
+  headers, query values, body size and response size are bounded.
+- Endpoint overrides from MCP input, authorization headers and credential
+  management operations are rejected.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an
@@ -78,18 +81,16 @@ remain available through the guarded resource gateway.
   provider multipart or resumable APIs cover larger objects.
 - Azure uncommon data-plane endpoints can use a first-class, validated
   `audience` identifier. The value is never a credential: the adapter derives
-  the `.default` scope internally or passes it only to `az rest --resource`.
+  the `.default` scope internally.
 - Baidu endpoint validation includes both the general `*.baidubce.com` service
   plane and the official BOS `*.bcebos.com` object-storage plane.
 - Baidu calls use `bce-auth-v1` by default and can select guarded
   `auth_version=v2` with required service/region fields for APIs that mandate
   the region- and service-scoped v2 signature.
-- New official Azure, GCP, or Baidu endpoint exceptions are operator policy,
+- New official endpoint exceptions for any provider are operator policy,
   never model input. `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` accepts
   comma-separated exact DNS hostnames only; schemes, ports, paths, IPs, and
   wildcard/subdomain inheritance are not accepted.
-- CLI JSON request bodies use mode-0600 temporary files and are removed after
-  the call.
 - Responses are capped and credential-shaped fields are redacted before they
   enter MCP output.
 
@@ -126,7 +127,7 @@ Examples are navigation aids, not a support allowlist.
 ## Verification gates
 
 - Contract tests cover all provider tools, schemas and annotations.
-- Hermetic fake-adapter tests prove exact executable/HTTP construction,
+- Hermetic fake-adapter tests prove exact HTTP construction and signing vectors,
   credential redaction, endpoint and file-root rejection, mutation/sensitive
   gates, output caps, timeout handling and audit behavior.
 - CI runs formatting, vet, race tests, coverage, ShellCheck, actionlint,

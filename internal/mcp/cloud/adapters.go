@@ -9,11 +9,11 @@ func DefaultAdapters() map[Provider]Adapter {
 
 func DefaultAdaptersWithEndpointHosts(allowed map[Provider][]string) map[Provider]Adapter {
 	return map[Provider]Adapter{
-		ProviderAWS:      NewCLIAdapter(CLIAdapterConfig{Provider: ProviderAWS}),
+		ProviderAWS:      NewAWSRESTAdapter(AWSRESTConfig{AllowedHosts: allowed[ProviderAWS]}),
 		ProviderAzure:    NewAzureRESTAdapter(AzureRESTConfig{AllowedHosts: allowed[ProviderAzure]}),
-		ProviderGCP:      NewGCPRESTAdapter(GCPRESTConfig{}),
-		ProviderAlicloud: NewCLIAdapter(CLIAdapterConfig{Provider: ProviderAlicloud}),
-		ProviderTencent:  NewCLIAdapter(CLIAdapterConfig{Provider: ProviderTencent}),
-		ProviderBaidu:    NewBaiduRESTAdapter(BaiduRESTConfig{}),
+		ProviderGCP:      NewGCPRESTAdapter(GCPRESTConfig{AllowedHosts: allowed[ProviderGCP]}),
+		ProviderAlicloud: NewAlibabaRESTAdapter(AlibabaRESTConfig{AllowedHosts: allowed[ProviderAlicloud]}),
+		ProviderTencent:  NewTencentRESTAdapter(TencentRESTConfig{AllowedHosts: allowed[ProviderTencent]}),
+		ProviderBaidu:    NewBaiduRESTAdapter(BaiduRESTConfig{AllowedHosts: allowed[ProviderBaidu]}),
 	}
 }

@@ -54,6 +54,7 @@ type BaiduRESTConfig struct {
 	MaxBodyBytes int64
 	Timeout      time.Duration
 	Now          func() time.Time
+	AllowedHosts []string
 }
 
 type BaiduRESTAdapter struct {
@@ -110,8 +111,7 @@ func (adapter *BaiduRESTAdapter) Discover(_ context.Context, request DiscoveryRe
 }
 
 func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
-	credentials, err := adapter.config.Credentials.Credentials(ctx)
-	if err != nil {
+	if err := validateRESTTargetWithEndpointHosts(ProviderBaidu, invocation.Method, invocation.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
 	}
 	body, contentLength, cleanup, err := prepareRESTBody(invocation)
@@ -123,6 +123,9 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Baidu BCE request: %w", err)
 	}
+	if err := addQueryParameters(request.URL, invocation.Parameters); err != nil {
+		return InvocationResult{}, fmt.Errorf("build Baidu BCE query: %w", err)
+	}
 	for name, value := range invocation.Headers {
 		request.Header.Set(name, value)
 	}
@@ -131,6 +134,10 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	}
 	if (invocation.Body != nil || invocation.BodyFile != "") && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", invocationContentType(invocation))
+	}
+	credentials, err := adapter.config.Credentials.Credentials(ctx)
+	if err != nil {
+		return InvocationResult{}, err
 	}
 	if credentials.SessionToken != "" {
 		request.Header.Set("x-bce-security-token", credentials.SessionToken)

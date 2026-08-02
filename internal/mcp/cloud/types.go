@@ -64,11 +64,12 @@ type Invocation struct {
 	Project      string
 	Subscription string
 	Audience     string
+	AuthScheme   string
 	AuthVersion  string
+	APIVersion   string
 	Method       string
 	URL          string
 	Parameters   map[string]any
-	Arguments    []string
 	Headers      map[string]string
 	Body         any
 	BodyFile     string
@@ -97,6 +98,8 @@ type AuditEvent struct {
 	Project      string         `json:"project,omitempty"`
 	Subscription string         `json:"subscription,omitempty"`
 	AuthVersion  string         `json:"auth_version,omitempty"`
+	AuthScheme   string         `json:"auth_scheme,omitempty"`
+	APIVersion   string         `json:"api_version,omitempty"`
 	Sensitive    bool           `json:"sensitive"`
 	Outcome      string         `json:"outcome"`
 	RequestID    string         `json:"request_id,omitempty"`

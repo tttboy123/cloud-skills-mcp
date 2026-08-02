@@ -33,14 +33,10 @@ jobs:
           coverage=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')
           echo "total coverage: ${coverage}%"
           awk -v coverage="${coverage}" 'BEGIN { exit !(coverage + 0 >= 80) }'
-      - name: Build MCP binaries
-        run: |
-          go build -trimpath -o /tmp/cloud-skills-mcp ./cmd/cloud-skills-mcp
-          go build -trimpath -o /tmp/tencent-cloud-mcp ./cmd/tencent-cloud-mcp
+      - name: Build MCP binary
+        run: go build -trimpath -o /tmp/cloud-skills-mcp ./cmd/cloud-skills-mcp
       - name: Protocol smoke tests
-        run: |
-          ./scripts/ci/protocol-smoke.sh /tmp/cloud-skills-mcp
-          ./scripts/ci/protocol-smoke.sh /tmp/tencent-cloud-mcp
+        run: ./scripts/ci/protocol-smoke.sh /tmp/cloud-skills-mcp
       - name: Installer smoke test
         run: ./scripts/ci/install-smoke.sh
       - name: Check shell syntax

@@ -1,32 +1,37 @@
 package sdk
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func TestWrapAndCLIError(t *testing.T) {
+func TestWrapError(t *testing.T) {
 	if result := WrapError("test", nil); !result.IsError || !strings.Contains(result.Content[0].(mcp.TextContent).Text, "nil error") {
 		t.Fatalf("unexpected nil error result: %#v", result)
 	}
-	err := &CLIError{
-		CLI:    "tccli",
-		Args:   []string{"cvm", "DescribeInstances"},
-		Stderr: `SecretKey="secret-value" RequestId=req-123`,
-		Code:   7,
-	}
-	message := err.Error()
-	if strings.Contains(message, "secret-value") || !strings.Contains(message, "***REDACTED***") || !strings.Contains(message, "req-123") {
-		t.Fatalf("unexpected CLI error: %s", message)
-	}
+	err := fmt.Errorf(`provider failure: SecretKey="secret-value" RequestId=req-123`)
 	result := WrapError("call", err)
-	if !result.IsError {
-		t.Fatalf("expected soft MCP error: %#v", result)
+	message := result.Content[0].(mcp.TextContent).Text
+	if !result.IsError || strings.Contains(message, "secret-value") || !strings.Contains(message, "***REDACTED***") || !strings.Contains(message, "req-123") {
+		t.Fatalf("expected redacted soft MCP error: %#v", result)
 	}
-	empty := (&CLIError{CLI: "tccli", Code: 2}).Error()
-	if !strings.Contains(empty, "no stderr") {
-		t.Fatalf("unexpected empty CLI error: %s", empty)
+}
+
+func TestMutationApprovalRequiresOperatorGateAndPerCallForce(t *testing.T) {
+	result, err := RequireMutationApproval(false, true)
+	if result == nil || !result.IsError || err == nil || !errors.Is(err, ErrMutationsDisabled) {
+		t.Fatalf("disabled result=%#v err=%v", result, err)
+	}
+	result, err = RequireMutationApproval(true, false)
+	if result == nil || !result.IsError || err == nil || !errors.Is(err, ErrForceRequired) {
+		t.Fatalf("force result=%#v err=%v", result, err)
+	}
+	result, err = RequireMutationApproval(true, true)
+	if result != nil || err != nil {
+		t.Fatalf("approved result=%#v err=%v", result, err)
 	}
 }

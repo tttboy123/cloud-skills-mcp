@@ -114,14 +114,13 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
 		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
-			if _, ok := tool.InputSchema.Properties["body_file"]; !ok {
-				t.Errorf("%s must expose guarded REST body_file", tool.Name)
+			for _, field := range []string{"method", "url", "auth_scheme", "api_version", "body_file", "audience", "auth_version"} {
+				if _, ok := tool.InputSchema.Properties[field]; !ok {
+					t.Errorf("%s must expose HTTP field %s", tool.Name, field)
+				}
 			}
-			if _, ok := tool.InputSchema.Properties["audience"]; !ok {
-				t.Errorf("%s must expose guarded Azure data-plane audience", tool.Name)
-			}
-			if _, ok := tool.InputSchema.Properties["auth_version"]; !ok {
-				t.Errorf("%s must expose guarded Baidu signing version", tool.Name)
+			if _, ok := tool.InputSchema.Properties["arguments"]; ok {
+				t.Errorf("%s must not expose CLI arguments", tool.Name)
 			}
 		}
 		if tool.Annotations.ReadOnlyHint == nil || *tool.Annotations.ReadOnlyHint == mutating {
@@ -179,16 +178,16 @@ func TestInvocationParsingAndAdapterErrorsAreSoft(t *testing.T) {
 	adapters[ProviderAWS] = fake
 	c := newTestClient(t, Runtime{Adapters: adapters})
 	for _, arguments := range []map[string]any{
-		{"service": "ec2", "operation": "describe-instances", "parameters": "bad"},
-		{"service": "ec2", "operation": "describe-instances", "headers": "bad"},
-		{"service": "ec2", "operation": "describe-instances", "headers": map[string]any{"X-Test": 2}},
+		{"service": "ec2", "operation": "describe-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/", "parameters": "bad"},
+		{"service": "ec2", "operation": "describe-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/", "headers": "bad"},
+		{"service": "ec2", "operation": "describe-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/", "headers": map[string]any{"X-Test": 2}},
 	} {
 		result := callCloudTool(t, c, "aws_api_read", arguments)
 		if !result.IsError {
 			t.Fatalf("invalid arguments accepted: %#v", arguments)
 		}
 	}
-	result := callCloudTool(t, c, "aws_api_read", map[string]any{"service": "ec2", "operation": "describe-instances"})
+	result := callCloudTool(t, c, "aws_api_read", awsHTTPArguments("describe-instances"))
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "provider unavailable") {
 		t.Fatalf("adapter error=%#v", result)
 	}
@@ -201,6 +200,20 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestHTTPBoundaryHelperRejectsInvalidHeaderNamesAndTargets(t *testing.T) {
+	for _, name := range []string{"", " leading", "line\nbreak", strings.Repeat("x", 129)} {
+		if validHeaderName(name) {
+			t.Errorf("accepted invalid header name %q", name)
+		}
+	}
+	if !validHeaderName("X-Cloud-Request_1") {
+		t.Fatal("rejected valid header name")
+	}
+	if err := validateRESTTarget(ProviderAWS, "GET", "https://sts.amazonaws.com/"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReadClassifierCannotBeDowngradedByCaller(t *testing.T) {
@@ -241,21 +254,21 @@ func TestReadAndMutationGatesRunBeforeAdapter(t *testing.T) {
 	c := newTestClient(t, Runtime{Adapters: adapters})
 
 	result := callCloudTool(t, c, "aws_api_read", map[string]any{
-		"service": "ec2", "operation": "run-instances",
+		"service": "ec2", "operation": "run-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/",
 	})
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "not classified as read-only") {
 		t.Fatalf("write passed read tool: %#v", result)
 	}
 
 	result = callCloudTool(t, c, "aws_api_mutate", map[string]any{
-		"service": "ec2", "operation": "run-instances", "force": true,
+		"service": "ec2", "operation": "run-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/", "force": true,
 	})
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "CLOUD_SKILLS_ALLOW_MUTATIONS") {
 		t.Fatalf("mutation gate missing: %#v", result)
 	}
 
 	result = callCloudTool(t, c, "aws_api_mutate", map[string]any{
-		"service": "secretsmanager", "operation": "get-secret-value", "force": true,
+		"service": "secretsmanager", "operation": "get-secret-value", "region": "us-east-1", "method": "POST", "url": "https://secretsmanager.us-east-1.amazonaws.com/", "force": true,
 	})
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "CLOUD_SKILLS_ALLOW_SENSITIVE") {
 		t.Fatalf("sensitive gate missing: %#v", result)
@@ -272,6 +285,7 @@ func TestAllowedInvocationReachesProviderAdapter(t *testing.T) {
 	c := newTestClient(t, Runtime{Adapters: adapters, AllowMutations: true, AllowSensitive: true})
 	result := callCloudTool(t, c, "aws_api_read", map[string]any{
 		"service": "ec2", "operation": "describe-instances", "region": "us-east-1",
+		"method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/",
 		"parameters": map[string]any{"MaxResults": 5},
 	})
 	if result.IsError || cloudToolText(t, result) != `{"instances":[]}` {
@@ -285,27 +299,21 @@ func TestAllowedInvocationReachesProviderAdapter(t *testing.T) {
 func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *testing.T) {
 	for _, request := range []Invocation{
 		{Provider: ProviderAWS, Service: "ec2;curl", Operation: "describe-instances"},
-		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--endpoint-url", "https://evil.example"}},
-		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--profile", "higher-privilege"}},
-		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--debug"}},
-		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--role-arn=qcs::cam::uin/1:role/admin"}},
-		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--use-cvm-role"}},
-		{Provider: ProviderAlicloud, Service: "ecs", Operation: "describe-instances", Arguments: []string{"--log-level=DEBUG"}},
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Region: "--endpoint-url"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Subscription: "--resource"},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Project: "project\nInjected: value"},
-		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"file:///etc/passwd"}},
-		{Provider: ProviderAWS, Service: "lambda", Operation: "update-function-code", Arguments: []string{"--zip-file=fileb:///etc/passwd"}},
-		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--cli-input-json", `{}`}},
 		{Provider: ProviderAzure, Method: "GET", URL: "http://management.azure.com/subscriptions/x"},
-		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions/x", Arguments: []string{"--url", "https://evil.example"}},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions/x?sig=credential"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://untrusted.microsoft.com/subscriptions/x"},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://evil.example/v1/projects"},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects?access_token=credential"},
+		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Parameters: map[string]any{"access_token": "credential"}},
+		{Provider: ProviderAWS, Service: "s3", Operation: "get-object", Region: "us-east-1", Method: "GET", URL: "https://bucket.s3.amazonaws.com/object", Parameters: map[string]any{"X-Amz-Signature": "credential"}},
 		{Provider: ProviderGCP, Method: "POST", URL: "https://compute.googleapis.com/v1/projects", Body: map[string]any{"data": strings.Repeat("x", maxRequestPayloadBytes)}},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://bcc.bj.baidubce.com.evil.example/v2/instance"},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://bcc.bj.baidubce.com/v2/instance", Headers: map[string]string{"X-API-Key": "credential"}},
+		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", APIVersion: "2017-03-12", Method: "POST", URL: "https://cvm.tencentcloudapi.com/", Headers: map[string]string{"X-TC-Action": "RunInstances"}},
+		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Region: "us-east-1", Method: "POST", URL: "https://ec2.us-east-1.amazonaws.com/", Headers: map[string]string{"Host": "attacker.example"}},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Headers: map[string]string{"X-HTTP-Method-Override": "DELETE"}},
 		{Provider: ProviderGCP, Method: "POST", URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", Body: map[string]any{"x": 1}, BodyFile: "/tmp/payload"},
 		{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file:///etc/passwd"}},
@@ -348,9 +356,9 @@ func TestInvocationBoundaryNeverIssuesOrExportsCloudCredentials(t *testing.T) {
 
 func TestInvocationBoundaryKeepsOrdinaryIAMResourceManagementAvailable(t *testing.T) {
 	allowed := []Invocation{
-		{Provider: ProviderAWS, Service: "iam", Operation: "list-roles"},
-		{Provider: ProviderAlicloud, Service: "ram", Operation: "ListRoles"},
-		{Provider: ProviderTencent, Service: "cam", Operation: "ListRoles"},
+		{Provider: ProviderAWS, Service: "iam", Operation: "list-roles", Region: "us-east-1", Method: "POST", URL: "https://iam.amazonaws.com/"},
+		{Provider: ProviderAlicloud, Service: "ram", Operation: "ListRoles", APIVersion: "2015-05-01", Method: "POST", URL: "https://ram.aliyuncs.com/"},
+		{Provider: ProviderTencent, Service: "cam", Operation: "ListRoles", APIVersion: "2019-01-16", Method: "POST", URL: "https://cam.tencentcloudapi.com/"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://graph.microsoft.com/v1.0/applications"},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://iam.googleapis.com/v1/projects/project/serviceAccounts"},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://iam.bj.baidubce.com/v1/user"},
@@ -400,7 +408,7 @@ func TestOutputIsBoundedAndCredentialFieldsAreRedacted(t *testing.T) {
 	adapters[ProviderAWS] = fake
 	c := newTestClient(t, Runtime{Adapters: adapters, MaxOutputBytes: 64})
 	result := callCloudTool(t, c, "aws_api_read", map[string]any{
-		"service": "ec2", "operation": "describe-instances",
+		"service": "ec2", "operation": "describe-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/",
 	})
 	text := cloudToolText(t, result)
 	if strings.Contains(text, "do-not-leak") || !strings.Contains(text, "REDACTED") {
@@ -409,7 +417,7 @@ func TestOutputIsBoundedAndCredentialFieldsAreRedacted(t *testing.T) {
 
 	fake.invokeOut = []byte(strings.Repeat("x", 65))
 	result = callCloudTool(t, c, "aws_api_read", map[string]any{
-		"service": "ec2", "operation": "describe-instances",
+		"service": "ec2", "operation": "describe-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/",
 	})
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "response exceeds") {
 		t.Fatalf("large output was not rejected: %#v", result)
@@ -426,7 +434,7 @@ func TestBodyFilePolicyAllowsOnlyBoundedRegularFilesUnderOperatorRoots(t *testin
 	if err := validateInvocation(request, []string{root}); err != nil {
 		t.Fatalf("guarded body_file rejected: %v", err)
 	}
-	aliRequest := Invocation{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file://" + path}}
+	aliRequest := Invocation{Provider: ProviderAlicloud, AuthScheme: "oss4", Service: "oss", Operation: "PutObject", Region: "cn-hangzhou", Method: "PUT", URL: "https://bucket.oss-cn-hangzhou.aliyuncs.com/object", BodyFile: path}
 	if err := validateInvocation(aliRequest, []string{root}); err != nil {
 		t.Fatalf("guarded Alibaba file reference rejected: %v", err)
 	}
@@ -464,13 +472,20 @@ func TestMutationAuditIsFailClosed(t *testing.T) {
 		},
 	})
 	result := callCloudTool(t, c, "aws_api_mutate", map[string]any{
-		"service": "ec2", "operation": "run-instances", "force": true,
+		"service": "ec2", "operation": "run-instances", "region": "us-east-1", "method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/", "force": true,
 	})
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "audit") {
 		t.Fatalf("audit failure not surfaced: %#v", result)
 	}
 	if len(fake.invocations) != 0 {
 		t.Fatal("mutation ran after audit failure")
+	}
+}
+
+func awsHTTPArguments(operation string) map[string]any {
+	return map[string]any{
+		"service": "ec2", "operation": operation, "region": "us-east-1",
+		"method": "POST", "url": "https://ec2.us-east-1.amazonaws.com/",
 	}
 }
 

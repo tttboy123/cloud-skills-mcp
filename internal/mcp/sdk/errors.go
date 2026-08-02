@@ -1,4 +1,4 @@
-// errors.go — translate cloud SDK / CLI failures into MCP-friendly errors.
+// errors.go — translate cloud HTTP/SDK failures into MCP-friendly errors.
 //
 // MCP doesn't have a rich error code spec; tools return either
 //   - mcp.NewToolResultError(text)  — soft error, client sees "isError: true"
@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -83,25 +82,4 @@ func WrapError(prefix string, err error) *mcp.CallToolResult {
 	}
 	msg := err.Error()
 	return mcp.NewToolResultError(RedactSecret(prefix + ": " + msg))
-}
-
-// CLIError is the structured form of a tccli / aws / gcloud subprocess failure.
-// The handler that wraps subprocess.Run builds one of these, then calls WrapError.
-type CLIError struct {
-	CLI    string // e.g. "tccli"
-	Args   []string
-	Stderr string
-	Stdout string
-	Code   int
-}
-
-func (e *CLIError) Error() string {
-	stderr := strings.TrimSpace(RedactSecret(e.Stderr))
-	if stderr == "" {
-		stderr = strings.TrimSpace(RedactSecret(e.Stdout))
-	}
-	if stderr == "" {
-		return fmt.Sprintf("%s %v: exit %d (no stderr)", e.CLI, e.Args, e.Code)
-	}
-	return fmt.Sprintf("%s %v: exit %d: %s", e.CLI, e.Args, e.Code, stderr)
 }

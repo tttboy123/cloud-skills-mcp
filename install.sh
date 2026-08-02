@@ -11,7 +11,7 @@ usage() {
   cat <<'USAGE'
 Usage: ./install.sh [options]
 
-Build and install the universal six-cloud MCP binary and Tencent compatibility binary.
+Build and install the universal HTTP-only six-cloud MCP binary.
 
 Options:
   --bin-dir PATH      Binary destination (default: ~/.local/bin)
@@ -68,13 +68,10 @@ trap 'rm -rf "${BUILD_DIR}"' EXIT
 (
   cd "${ROOT_DIR}"
   go build -trimpath -o "${BUILD_DIR}/cloud-skills-mcp" ./cmd/cloud-skills-mcp
-  go build -trimpath -o "${BUILD_DIR}/tencent-cloud-mcp" ./cmd/tencent-cloud-mcp
 )
 mkdir -p "${BIN_DIR}"
 install -m 0755 "${BUILD_DIR}/cloud-skills-mcp" "${BIN_DIR}/cloud-skills-mcp"
-install -m 0755 "${BUILD_DIR}/tencent-cloud-mcp" "${BIN_DIR}/tencent-cloud-mcp"
 echo "Installed binary: ${BIN_DIR}/cloud-skills-mcp"
-echo "Installed binary: ${BIN_DIR}/tencent-cloud-mcp"
 
 if [[ -n "${SKILLS_DIR}" ]]; then
   mkdir -p "${SKILLS_DIR}"

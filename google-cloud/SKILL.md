@@ -5,7 +5,7 @@ description: Operate or inspect any Google Cloud resource through cloud-skills-m
 
 # Google Cloud
 
-Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway accepts only `googleapis.com` HTTPS endpoints and gets access tokens directly from the official Google Auth ADC chain, with authenticated gcloud identity as a compatibility fallback.
+Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway accepts only `googleapis.com` HTTPS endpoints and gets access tokens from the official Google Auth ADC chain. It never executes gcloud and has no gcloud-token fallback.
 
 ## Workflow
 
@@ -28,6 +28,6 @@ Example read: `gcp_api_read(method="GET", url="https://compute.googleapis.com/co
 
 ## Credentials
 
-Use Application Default Credentials, workload identity, service-account impersonation, or an authenticated gcloud account. If a service-account JSON file is required, set `GOOGLE_APPLICATION_CREDENTIALS` only in the MCP server environment; never pass its contents through MCP.
+Use Application Default Credentials, workload identity, service-account impersonation, or an attached service account. If a credential file is required, set `GOOGLE_APPLICATION_CREDENTIALS` only in the MCP server environment; never pass its contents through MCP.
 
 Read [references/official-docs.md](references/official-docs.md) for ADC, REST authentication, discovery, and asset inventory.

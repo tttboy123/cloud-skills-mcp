@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,11 +25,7 @@ import (
 const defaultRESTBodyLimit = 2 * 1024 * 1024
 
 type AzureRESTConfig struct {
-	Binary       string
-	Runner       ProcessRunner
-	TempDir      string
 	Timeout      time.Duration
-	Env          []string
 	Tokens       AzureTokenProvider
 	HTTP         HTTPDoer
 	MaxBodyBytes int64
@@ -43,20 +37,11 @@ type AzureRESTAdapter struct {
 }
 
 func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
-	if config.Binary == "" {
-		config.Binary = "az"
-	}
-	if config.Runner == nil {
-		config.Runner = execProcessRunner{}
-	}
 	if config.Timeout <= 0 {
 		config.Timeout = 60 * time.Second
 	}
-	if config.Env == nil {
-		config.Env = os.Environ()
-	}
-	if config.Tokens == nil && azureDefaultCredentialRequested(config.Env) {
-		config.Tokens = &azureDefaultTokenProvider{factory: newDefaultAzureCredential}
+	if config.Tokens == nil {
+		config.Tokens = &azureNonCLITokenProvider{factory: newNonCLIAzureCredential}
 	}
 	if config.HTTP == nil {
 		config.HTTP = &http.Client{
@@ -71,107 +56,34 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 }
 
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
-	if adapter.config.Tokens != nil {
-		return ProviderStatus{
-			Provider: ProviderAzure, Available: true, Adapter: "Azure REST + DefaultAzureCredential",
-			Version: "azidentity", CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
-			Message: "credentials are resolved lazily through the Azure Identity chain",
-		}, nil
-	}
-	stdout, stderr, err := adapter.run(ctx, []string{"version", "--output", "json"})
-	status := ProviderStatus{Provider: ProviderAzure, Adapter: adapter.config.Binary + " rest", CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified}
-	if err != nil {
-		status.Message = sdk.RedactSecret(err.Error())
-		return status, nil
-	}
-	status.Available = true
-	status.Version = strings.TrimSpace(string(stdout))
-	if status.Version == "" {
-		status.Version = strings.TrimSpace(string(stderr))
-	}
-	status.Message = "Azure CLI is available; credentials remain unverified until a provider API call succeeds"
-	return status, nil
+	_ = ctx
+	return ProviderStatus{
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS + non-CLI Azure Identity", Version: "azidentity",
+		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
+		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
+	}, nil
 }
 
 func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryRequest) ([]byte, error) {
-	if adapter.config.Tokens != nil {
-		return json.Marshal(map[string]string{
-			"rest_api_reference": "https://learn.microsoft.com/en-us/rest/api/azure/",
-			"authentication":     "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/authentication-overview",
-		})
-	}
-	stdout, stderr, err := adapter.run(ctx, []string{"rest", "--help"})
-	if err != nil {
-		return nil, err
-	}
-	if len(stdout) == 0 {
-		return stderr, nil
-	}
-	return stdout, nil
+	_ = ctx
+	return json.Marshal(map[string]string{
+		"rest_api_reference": "https://learn.microsoft.com/en-us/rest/api/azure/",
+		"authentication":     "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
+	})
 }
 
 func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
-	if adapter.config.Tokens != nil {
-		scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
-		if err != nil {
-			return InvocationResult{}, err
-		}
-		if scope != "" && len(request.Arguments) == 0 {
-			return adapter.invokeHTTP(ctx, request, scope)
-		}
-	}
-	return adapter.invokeCLI(ctx, request)
-}
-
-func (adapter *AzureRESTAdapter) invokeCLI(ctx context.Context, request Invocation) (InvocationResult, error) {
-	args := []string{"rest", "--method", strings.ToLower(request.Method), "--url", request.URL}
-	if request.Subscription != "" {
-		args = append(args, "--subscription", request.Subscription)
-	}
-	if request.Audience != "" {
-		audience, err := normalizeAzureAudience(request.Audience)
-		if err != nil {
-			return InvocationResult{}, err
-		}
-		args = append(args, "--resource", audience)
-	}
-	headerNames := make([]string, 0, len(request.Headers))
-	for name := range request.Headers {
-		headerNames = append(headerNames, name)
-	}
-	sort.Strings(headerNames)
-	for _, name := range headerNames {
-		args = append(args, "--headers", name+"="+request.Headers[name])
-	}
-	cleanup := func() {}
-	if request.BodyFile != "" {
-		args = append(args, "--body", "@"+request.BodyFile)
-	} else if request.Body != nil {
-		path, err := writeJSONPayload(adapter.config.TempDir, request.Body)
-		if err != nil {
-			return InvocationResult{}, err
-		}
-		cleanup = func() { _ = os.Remove(path) }
-		args = append(args, "--body", "@"+path)
-	}
-	defer cleanup()
-	args = append(args, request.Arguments...)
-	args = append(args, "--output", "json")
-	stdout, _, err := adapter.run(ctx, args)
+	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	return InvocationResult{Output: stdout, RequestID: requestIDFromGenericJSON(stdout)}, nil
+	if scope == "" {
+		return InvocationResult{}, fmt.Errorf("Azure HTTP audience cannot be inferred for this endpoint; provide the public audience field")
+	}
+	return adapter.invokeHTTP(ctx, request, scope)
 }
 
 func (adapter *AzureRESTAdapter) invokeHTTP(ctx context.Context, invocation Invocation, scope string) (InvocationResult, error) {
-	token, err := adapter.config.Tokens.Token(ctx, scope)
-	if err != nil {
-		return InvocationResult{}, fmt.Errorf("load Azure identity token: %w", err)
-	}
-	if strings.TrimSpace(token) == "" {
-		return InvocationResult{}, fmt.Errorf("Azure identity returned an empty access token")
-	}
 	body, contentLength, cleanup, err := prepareRESTBody(invocation)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("prepare Azure request body: %w", err)
@@ -181,6 +93,9 @@ func (adapter *AzureRESTAdapter) invokeHTTP(ctx context.Context, invocation Invo
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Azure request: %w", err)
 	}
+	if err := addQueryParameters(request.URL, invocation.Parameters); err != nil {
+		return InvocationResult{}, fmt.Errorf("build Azure query: %w", err)
+	}
 	for name, value := range invocation.Headers {
 		request.Header.Set(name, value)
 	}
@@ -189,6 +104,13 @@ func (adapter *AzureRESTAdapter) invokeHTTP(ctx context.Context, invocation Invo
 	}
 	if (invocation.Body != nil || invocation.BodyFile != "") && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", invocationContentType(invocation))
+	}
+	token, err := adapter.config.Tokens.Token(ctx, scope)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("load Azure identity token: %w", err)
+	}
+	if strings.TrimSpace(token) == "" {
+		return InvocationResult{}, fmt.Errorf("Azure identity returned an empty access token")
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := adapter.config.HTTP.Do(request)
@@ -210,45 +132,77 @@ type azureTokenCredential interface {
 	GetToken(context.Context, azurepolicy.TokenRequestOptions) (azcore.AccessToken, error)
 }
 
-type azureDefaultTokenProvider struct {
+type azureNonCLITokenProvider struct {
 	factory    func() (azureTokenCredential, error)
 	once       sync.Once
 	credential azureTokenCredential
 	err        error
 }
 
-func newDefaultAzureCredential() (azureTokenCredential, error) {
-	return azidentity.NewDefaultAzureCredential(nil)
+func newNonCLIAzureCredential() (azureTokenCredential, error) {
+	sources := make([]azcore.TokenCredential, 0, 3)
+	if hasAzureServicePrincipalEnvironment(os.Environ()) {
+		credential, err := azidentity.NewEnvironmentCredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, credential)
+	}
+	if hasAzureWorkloadIdentityEnvironment(os.Environ()) {
+		credential, err := azidentity.NewWorkloadIdentityCredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, credential)
+	}
+	credential, err := azidentity.NewManagedIdentityCredential(nil)
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources, credential)
+	if len(sources) == 1 {
+		return sources[0], nil
+	}
+	return azidentity.NewChainedTokenCredential(sources, nil)
 }
 
-func (provider *azureDefaultTokenProvider) Token(ctx context.Context, scope string) (string, error) {
+func (provider *azureNonCLITokenProvider) Token(ctx context.Context, scope string) (string, error) {
 	provider.once.Do(func() {
 		provider.credential, provider.err = provider.factory()
 	})
 	if provider.err != nil {
-		return "", fmt.Errorf("create Azure DefaultAzureCredential: %w", provider.err)
+		return "", fmt.Errorf("create non-CLI Azure Identity credential chain: %w", provider.err)
 	}
 	accessToken, err := provider.credential.GetToken(ctx, azurepolicy.TokenRequestOptions{Scopes: []string{scope}})
 	if err != nil {
-		return "", fmt.Errorf("Azure DefaultAzureCredential token: %w", err)
+		return "", fmt.Errorf("Azure Identity credential token: %w", err)
 	}
 	return accessToken.Token, nil
 }
 
-func azureDefaultCredentialRequested(environment []string) bool {
-	values := make(map[string]string)
+func hasAzureServicePrincipalEnvironment(environment []string) bool {
+	return azureEnvironmentMatches(environment, hasAzureServicePrincipalValues)
+}
+
+func hasAzureWorkloadIdentityEnvironment(environment []string) bool {
+	return azureEnvironmentMatches(environment, hasAzureWorkloadIdentityValues)
+}
+
+func azureEnvironmentMatches(environment []string, match func(func(string) bool) bool) bool {
+	values := make(map[string]bool)
 	for _, entry := range environment {
 		name, value, found := strings.Cut(entry, "=")
-		if found && strings.TrimSpace(value) != "" {
-			values[name] = strings.TrimSpace(value)
-		}
+		values[name] = found && strings.TrimSpace(value) != ""
 	}
-	has := func(name string) bool { return values[name] != "" }
-	servicePrincipal := has("AZURE_TENANT_ID") && has("AZURE_CLIENT_ID") &&
-		(has("AZURE_CLIENT_SECRET") || has("AZURE_CLIENT_CERTIFICATE_PATH"))
-	workloadIdentity := has("AZURE_TENANT_ID") && has("AZURE_CLIENT_ID") && has("AZURE_FEDERATED_TOKEN_FILE")
-	managedIdentity := has("IDENTITY_ENDPOINT") || has("MSI_ENDPOINT") || has("IMDS_ENDPOINT")
-	return servicePrincipal || workloadIdentity || managedIdentity || values["CLOUD_SKILLS_AZURE_USE_DEFAULT_CREDENTIAL"] == "1"
+	return match(func(name string) bool { return values[name] })
+}
+
+func hasAzureServicePrincipalValues(has func(string) bool) bool {
+	return has("AZURE_TENANT_ID") && has("AZURE_CLIENT_ID") && (has("AZURE_CLIENT_SECRET") || has("AZURE_CLIENT_CERTIFICATE_PATH"))
+}
+
+func hasAzureWorkloadIdentityValues(has func(string) bool) bool {
+	return has("AZURE_TENANT_ID") && has("AZURE_CLIENT_ID") && has("AZURE_FEDERATED_TOKEN_FILE")
 }
 
 func azureScopeForURL(rawURL string) (string, error) {
@@ -323,20 +277,6 @@ func azureScopeForInvocationWithEndpointHosts(rawURL, explicitAudience string, a
 	}
 }
 
-func (adapter *AzureRESTAdapter) run(ctx context.Context, args []string) ([]byte, []byte, error) {
-	runContext, cancel := context.WithTimeout(ctx, adapter.config.Timeout)
-	defer cancel()
-	stdout, stderr, err := adapter.config.Runner.Run(runContext, adapter.config.Binary, args, adapter.config.Env)
-	if err == nil {
-		return stdout, stderr, nil
-	}
-	var cliError *sdk.CLIError
-	if errors.As(err, &cliError) {
-		return stdout, stderr, err
-	}
-	return stdout, stderr, &sdk.CLIError{CLI: adapter.config.Binary, Args: args, Stdout: string(stdout), Stderr: string(stderr), Code: -1}
-}
-
 type TokenProvider interface {
 	Token(context.Context) (string, error)
 }
@@ -349,10 +289,8 @@ type GCPRESTConfig struct {
 	Tokens       TokenProvider
 	HTTP         HTTPDoer
 	MaxBodyBytes int64
-	Binary       string
-	Runner       ProcessRunner
 	Timeout      time.Duration
-	Env          []string
+	AllowedHosts []string
 }
 
 type GCPRESTAdapter struct {
@@ -360,23 +298,11 @@ type GCPRESTAdapter struct {
 }
 
 func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
-	if config.Binary == "" {
-		config.Binary = "gcloud"
-	}
-	if config.Runner == nil {
-		config.Runner = execProcessRunner{}
-	}
 	if config.Timeout <= 0 {
 		config.Timeout = 60 * time.Second
 	}
-	if config.Env == nil {
-		config.Env = os.Environ()
-	}
 	if config.Tokens == nil {
-		config.Tokens = &tokenProviderChain{providers: []TokenProvider{
-			&gcpADCTokenProvider{detect: detectDefaultGoogleCredentials},
-			&gcloudTokenProvider{binary: config.Binary, runner: config.Runner, timeout: config.Timeout, env: config.Env},
-		}}
+		config.Tokens = &gcpADCTokenProvider{detect: detectDefaultGoogleCredentials}
 	}
 	if config.HTTP == nil {
 		config.HTTP = &http.Client{
@@ -394,7 +320,7 @@ func (adapter *GCPRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
 		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST + ADC",
 		Version: "google-auth/v0.22", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
-		Message: "credentials are resolved lazily through ADC, then authenticated gcloud identity",
+		Message: "credentials are resolved lazily through ADC; no gcloud subprocess fallback exists",
 	}, nil
 }
 
@@ -419,12 +345,8 @@ func (adapter *GCPRESTAdapter) Discover(ctx context.Context, request DiscoveryRe
 }
 
 func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
-	token, err := adapter.config.Tokens.Token(ctx)
-	if err != nil {
-		return InvocationResult{}, fmt.Errorf("load Google Cloud application credential: %w", err)
-	}
-	if strings.TrimSpace(token) == "" {
-		return InvocationResult{}, fmt.Errorf("Google Cloud credential returned an empty access token")
+	if err := validateRESTTargetWithEndpointHosts(ProviderGCP, request.Method, request.URL, adapter.config.AllowedHosts); err != nil {
+		return InvocationResult{}, err
 	}
 	body, contentLength, cleanup, err := prepareRESTBody(request)
 	if err != nil {
@@ -435,6 +357,9 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Google Cloud request: %w", err)
 	}
+	if err := addQueryParameters(httpRequest.URL, request.Parameters); err != nil {
+		return InvocationResult{}, fmt.Errorf("build Google Cloud query: %w", err)
+	}
 	for name, value := range request.Headers {
 		httpRequest.Header.Set(name, value)
 	}
@@ -443,6 +368,13 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 	}
 	if (request.Body != nil || request.BodyFile != "") && httpRequest.Header.Get("Content-Type") == "" {
 		httpRequest.Header.Set("Content-Type", invocationContentType(request))
+	}
+	token, err := adapter.config.Tokens.Token(ctx)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("load Google Cloud application credential: %w", err)
+	}
+	if strings.TrimSpace(token) == "" {
+		return InvocationResult{}, fmt.Errorf("Google Cloud credential returned an empty access token")
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
 	if request.Project != "" {
@@ -457,13 +389,6 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 		return InvocationResult{}, err
 	}
 	return InvocationResult{Output: output, RequestID: responseRequestID(response.Header)}, nil
-}
-
-type gcloudTokenProvider struct {
-	binary  string
-	runner  ProcessRunner
-	timeout time.Duration
-	env     []string
 }
 
 type googleAuthTokenSource interface {
@@ -501,53 +426,6 @@ func (provider *gcpADCTokenProvider) Token(ctx context.Context) (string, error) 
 		return "", fmt.Errorf("Google Cloud ADC returned an empty access token")
 	}
 	return strings.TrimSpace(token.Value), nil
-}
-
-type tokenProviderChain struct {
-	providers []TokenProvider
-}
-
-func (chain *tokenProviderChain) Token(ctx context.Context) (string, error) {
-	errorsSeen := make([]error, 0, len(chain.providers))
-	for _, provider := range chain.providers {
-		if provider == nil {
-			continue
-		}
-		token, err := provider.Token(ctx)
-		if err == nil && strings.TrimSpace(token) != "" {
-			return strings.TrimSpace(token), nil
-		}
-		if err != nil {
-			errorsSeen = append(errorsSeen, err)
-		}
-	}
-	if len(errorsSeen) == 0 {
-		return "", fmt.Errorf("no Google Cloud credential provider is configured")
-	}
-	return "", fmt.Errorf("Google Cloud credential chain failed: %w", errors.Join(errorsSeen...))
-}
-
-func (provider *gcloudTokenProvider) Token(ctx context.Context) (string, error) {
-	commands := [][]string{
-		{"auth", "application-default", "print-access-token"},
-		{"auth", "print-access-token"},
-	}
-	var lastError error
-	for _, args := range commands {
-		runContext, cancel := context.WithTimeout(ctx, provider.timeout)
-		stdout, stderr, err := provider.runner.Run(runContext, provider.binary, args, provider.env)
-		cancel()
-		if err == nil && strings.TrimSpace(string(stdout)) != "" {
-			return strings.TrimSpace(string(stdout)), nil
-		}
-		if err != nil {
-			lastError = fmt.Errorf("%s", sdk.RedactSecret(string(stderr)))
-		}
-	}
-	if lastError == nil {
-		lastError = fmt.Errorf("no access token returned")
-	}
-	return "", lastError
 }
 
 func readRESTResponse(response *http.Response, maxBytes int64) ([]byte, error) {
@@ -602,7 +480,16 @@ func prepareRESTBody(invocation Invocation) (io.Reader, int64, func(), error) {
 		return file, info.Size(), func() { _ = file.Close() }, nil
 	}
 	if invocation.Body != nil {
-		data, err := json.Marshal(invocation.Body)
+		var data []byte
+		var err error
+		switch typed := invocation.Body.(type) {
+		case string:
+			data = []byte(typed)
+		case []byte:
+			data = typed
+		default:
+			data, err = json.Marshal(invocation.Body)
+		}
 		if err != nil {
 			return nil, -1, func() {}, fmt.Errorf("encode JSON body: %w", err)
 		}

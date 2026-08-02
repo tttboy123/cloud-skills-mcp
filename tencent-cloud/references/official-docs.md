@@ -1,8 +1,10 @@
 # Tencent Cloud official references
 
-- TCCLI overview and API 3.0 product coverage: https://cloud.tencent.com/document/product/440/6176
-- Generic parameters and JSON input: https://cloud.tencent.com/document/product/440/129328
-- TCCLI credentials and profiles: https://cloud.tencent.com/document/product/440/96291
+- Tencent Cloud API reference: https://cloud.tencent.com/document/api
+- API 3.0 common parameters: https://intl.cloud.tencent.com/document/product/1005/34677
+- TC3-HMAC-SHA256 signature: https://intl.cloud.tencent.com/document/product/627/64494
+- COS REST request signature: https://intl.cloud.tencent.com/document/product/436/7778
+- CAM resource role and temporary credentials: https://cloud.tencent.com/document/product/598/85616
 - Tencent Cloud API Explorer: https://console.cloud.tencent.com/api/explorer
 
-TCCLI exposes the API 3.0 action surface by product code. The universal adapter uses `--cli-input-json`, keeps the executable fixed, and delegates TC3 signing to TCCLI.
+The universal adapter signs API 3.0 requests with TC3 and COS data-plane requests with the COS REST signature. It never executes TCCLI.

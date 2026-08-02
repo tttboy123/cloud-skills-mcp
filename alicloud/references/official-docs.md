@@ -1,10 +1,9 @@
 # Alibaba Cloud official references
 
-- Alibaba Cloud CLI overview and product coverage: https://www.alibabacloud.com/help/en/cli/what-is-alibaba-cloud-cli
-- Configure credentials: https://www.alibabacloud.com/help/en/cli/configure-credentials/
-- Current CLI environment variables: https://www.alibabacloud.com/help/en/cli/environment-variables
-- Command-line parameters: https://www.alibabacloud.com/help/en/cli/understanding-command-line-parameters
+- V3 OpenAPI HTTP structure and ACS3 signature: https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature
+- OSS V4 Authorization signature: https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4
+- Official credentials-go provider chain: https://github.com/aliyun/credentials-go
 - OpenAPI Explorer: https://api.aliyun.com/
 - OpenAPI MCP Server guide: https://help.aliyun.com/en/openapi/user-guide/openapi-mcp-server-guide
 
-Alibaba Cloud CLI exposes OpenAPI actions across hundreds of services. The universal adapter keeps product/action coverage dynamic instead of hard-coding resource types.
+The universal adapter signs general OpenAPI requests with ACS3 and OSS data-plane requests with OSS4. It never executes Alibaba Cloud CLI.

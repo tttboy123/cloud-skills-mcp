@@ -27,18 +27,6 @@ var sensitiveTerms = []string{
 	"decrypt", "unseal", "unwrap",
 }
 
-var forbiddenFlags = map[string]struct{}{
-	"--endpoint": {}, "--endpoint-url": {}, "--https-proxy": {}, "--proxy": {},
-	"--no-verify-ssl": {}, "--ca-bundle": {}, "--secretid": {}, "--secretkey": {},
-	"--secret-id": {}, "--secret-key": {}, "--access-key-id": {}, "--access-key-secret": {},
-	"--aws-access-key-id": {}, "--aws-secret-access-key": {}, "--token": {},
-	"--security-token": {}, "--authorization": {}, "--password": {}, "--client-secret": {},
-	"--url": {}, "--method": {}, "--body": {}, "--headers": {}, "--subscription": {},
-	"--resource": {}, "--resource-type": {}, "--skip-authorization-header": {}, "--cli-input-json": {},
-	"--profile": {}, "--config-file": {}, "--credentials-file": {}, "--debug": {}, "--verbose": {}, "--trace": {},
-	"--role-arn": {}, "--role-session-name": {}, "--use-cvm-role": {}, "--log-level": {}, "--warning": {},
-}
-
 func classifyRead(provider Provider, request Invocation) bool {
 	if isSensitiveInvocation(request) {
 		return false
@@ -82,21 +70,51 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if !isProvider(request.Provider) {
 		return fmt.Errorf("unsupported provider %q", request.Provider)
 	}
+	if isCredentialIssuanceInvocation(request) {
+		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
+	}
+	if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
+		return err
+	}
 	switch request.Provider {
-	case ProviderAWS, ProviderAlicloud, ProviderTencent:
+	case ProviderAWS:
 		if !identifierPattern.MatchString(request.Service) {
 			return fmt.Errorf("invalid service %q", request.Service)
 		}
 		if !identifierPattern.MatchString(request.Operation) {
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
-	case ProviderAzure, ProviderGCP, ProviderBaidu:
-		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
-			return err
+		if !identifierPattern.MatchString(request.Region) {
+			return fmt.Errorf("AWS SigV4 requires a valid region")
 		}
-	}
-	if isCredentialIssuanceInvocation(request) {
-		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
+		if scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4); scheme != authSchemeAWSSigV4 {
+			return fmt.Errorf("AWS auth_scheme must be sigv4")
+		}
+	case ProviderAlicloud:
+		if !identifierPattern.MatchString(request.Service) || !identifierPattern.MatchString(request.Operation) {
+			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
+		}
+		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3 or oss4")
+		}
+		if scheme == authSchemeAlibabaACS3 && !identifierPattern.MatchString(request.APIVersion) {
+			return fmt.Errorf("Alibaba Cloud ACS3 requires a valid api_version")
+		}
+		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
+			return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
+		}
+	case ProviderTencent:
+		if !identifierPattern.MatchString(request.Service) || !identifierPattern.MatchString(request.Operation) {
+			return fmt.Errorf("Tencent Cloud requires valid service and operation")
+		}
+		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
+		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentCOS {
+			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3 or cos")
+		}
+		if scheme == authSchemeTencentTC3 && !identifierPattern.MatchString(request.APIVersion) {
+			return fmt.Errorf("Tencent Cloud TC3 requires a valid api_version")
+		}
 	}
 	for name, value := range map[string]string{
 		"region": request.Region, "project": request.Project, "subscription": request.Subscription,
@@ -121,6 +139,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Baidu auth_version must be v1 or v2")
 		}
 	}
+	if request.Provider != ProviderBaidu && request.AuthVersion != "" {
+		return fmt.Errorf("auth_version is supported only by Baidu AI Cloud")
+	}
 	if request.Provider == ProviderBaidu && request.AuthVersion == "v2" {
 		if !identifierPattern.MatchString(request.Service) {
 			return fmt.Errorf("Baidu BCE v2 requires a valid service")
@@ -129,26 +150,15 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Baidu BCE v2 requires a valid region")
 		}
 	}
-	if len(request.Arguments) > 128 {
-		return fmt.Errorf("too many CLI arguments: %d", len(request.Arguments))
-	}
-	for _, argument := range request.Arguments {
-		if err := validateArgument(argument, allowedFileRoots); err != nil {
-			return err
-		}
-	}
-	if request.Provider == ProviderAlicloud {
-		if err := validateEmbeddedFileReferences(request.Parameters, allowedFileRoots); err != nil {
-			return err
+	for name := range request.Parameters {
+		if isCredentialQueryParameter(name) {
+			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
 	if request.Body != nil && request.BodyFile != "" {
 		return fmt.Errorf("body and body_file are mutually exclusive")
 	}
 	if request.BodyFile != "" {
-		if request.Provider != ProviderAzure && request.Provider != ProviderGCP && request.Provider != ProviderBaidu {
-			return fmt.Errorf("body_file is supported only by REST providers")
-		}
 		if !pathAllowed(request.BodyFile, allowedFileRoots) {
 			return fmt.Errorf("body_file is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
 		}
@@ -168,9 +178,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	for name := range request.Headers {
 		lower := strings.ToLower(strings.TrimSpace(name))
-		if lower == "authorization" || lower == "proxy-authorization" || lower == "x-bce-security-token" ||
-			lower == "x-api-key" || lower == "api-key" || lower == "cookie" || lower == "set-cookie" ||
-			lower == "x-http-method-override" || lower == "x-method-override" {
+		if isProtectedHeader(lower) {
 			return fmt.Errorf("caller-supplied protected header %q is forbidden", name)
 		}
 		if !validHeaderName(name) {
@@ -195,6 +203,21 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 	}
 	return nil
+}
+
+func isProtectedHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "proxy-authorization", "host",
+		"x-api-key", "api-key", "cookie", "set-cookie", "x-http-method-override", "x-method-override",
+		"x-amz-date", "x-amz-security-token",
+		"x-acs-action", "x-acs-version", "x-acs-date", "x-acs-signature-nonce", "x-acs-content-sha256", "x-acs-security-token",
+		"x-oss-date", "x-oss-content-sha256", "x-oss-security-token",
+		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",
+		"x-cos-security-token", "x-bce-date", "x-bce-security-token", "x-goog-user-project":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCredentialIssuanceInvocation(request Invocation) bool {
@@ -264,58 +287,6 @@ func normalizedOperation(value string) string {
 	return strings.NewReplacer("-", "", "_", "", "/", "", ":", "").Replace(value)
 }
 
-func validateEmbeddedFileReferences(value any, allowedFileRoots []string) error {
-	switch typed := value.(type) {
-	case map[string]any:
-		for _, child := range typed {
-			if err := validateEmbeddedFileReferences(child, allowedFileRoots); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if err := validateEmbeddedFileReferences(child, allowedFileRoots); err != nil {
-				return err
-			}
-		}
-	case string:
-		for _, prefix := range []string{"file://", "fileb://", "@"} {
-			if strings.HasPrefix(typed, prefix) && !pathAllowed(strings.TrimPrefix(typed, prefix), allowedFileRoots) {
-				return fmt.Errorf("embedded local file reference is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
-			}
-		}
-	}
-	return nil
-}
-
-func validateArgument(argument string, allowedFileRoots []string) error {
-	if len(argument) == 0 || len(argument) > 8192 {
-		return fmt.Errorf("CLI argument length must be between 1 and 8192 bytes")
-	}
-	for _, char := range argument {
-		if char == 0 || unicode.IsControl(char) {
-			return fmt.Errorf("CLI argument contains a control character")
-		}
-	}
-	flag := strings.ToLower(argument)
-	if index := strings.IndexByte(flag, '='); index >= 0 {
-		flag = flag[:index]
-	}
-	if _, forbidden := forbiddenFlags[flag]; forbidden {
-		return fmt.Errorf("CLI flag %q is forbidden", flag)
-	}
-	fileValue := argument
-	if index := strings.IndexByte(argument, '='); index >= 0 {
-		fileValue = argument[index+1:]
-	}
-	for _, prefix := range []string{"file://", "fileb://", "@"} {
-		if strings.HasPrefix(fileValue, prefix) && !pathAllowed(strings.TrimPrefix(fileValue, prefix), allowedFileRoots) {
-			return fmt.Errorf("local file reference is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
-		}
-	}
-	return nil
-}
-
 func validateContextValue(name, value string) error {
 	if value == "" {
 		return nil
@@ -379,15 +350,16 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 	}
 	host := strings.ToLower(parsed.Hostname())
 	for name := range parsed.Query() {
-		switch strings.ToLower(name) {
-		case "access_token", "oauth_token", "authorization", "sig", "signature",
-			"x-amz-credential", "x-amz-signature", "x-amz-security-token",
-			"x-goog-signature", "x-bce-security-token", "sharedaccesssignature":
+		if isCredentialQueryParameter(name) {
 			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
 	allowed := false
 	switch provider {
+	case ProviderAWS:
+		allowed = host == "amazonaws.com" || strings.HasSuffix(host, ".amazonaws.com") ||
+			host == "amazonaws.com.cn" || strings.HasSuffix(host, ".amazonaws.com.cn") ||
+			host == "api.aws" || strings.HasSuffix(host, ".api.aws")
 	case ProviderAzure:
 		allowed = host == "management.azure.com" || host == "graph.microsoft.com" || host == "api.loganalytics.io" ||
 			hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".azurecr.io", ".loganalytics.io", ".azureedge.net", ".trafficmanager.net",
@@ -395,6 +367,15 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 				".chinacloudapi.cn", ".azure.cn", ".windowsazure.cn", ".usgovcloudapi.net", ".microsoftazure.us", ".azure.us", ".microsoftazure.de")
 	case ProviderGCP:
 		allowed = host == "googleapis.com" || strings.HasSuffix(host, ".googleapis.com")
+	case ProviderAlicloud:
+		allowed = host == "aliyuncs.com" || strings.HasSuffix(host, ".aliyuncs.com") ||
+			host == "aliyuncs.com.cn" || strings.HasSuffix(host, ".aliyuncs.com.cn") ||
+			host == "alibabacloud.com" || strings.HasSuffix(host, ".alibabacloud.com")
+	case ProviderTencent:
+		allowed = host == "tencentcloudapi.com" || strings.HasSuffix(host, ".tencentcloudapi.com") ||
+			host == "myqcloud.com" || strings.HasSuffix(host, ".myqcloud.com") ||
+			host == "tencentcloud.com" || strings.HasSuffix(host, ".tencentcloud.com") ||
+			host == "qcloud.com" || strings.HasSuffix(host, ".qcloud.com")
 	case ProviderBaidu:
 		allowed = host == "baidubce.com" || strings.HasSuffix(host, ".baidubce.com") ||
 			host == "bcebos.com" || strings.HasSuffix(host, ".bcebos.com")
@@ -411,6 +392,18 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 		return fmt.Errorf("URL host %q is outside the provider endpoint allowlist", host)
 	}
 	return nil
+}
+
+func isCredentialQueryParameter(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "access_token", "oauth_token", "authorization", "sig", "signature",
+		"x-amz-credential", "x-amz-signature", "x-amz-security-token",
+		"x-goog-signature", "x-bce-security-token", "sharedaccesssignature",
+		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token":
+		return true
+	default:
+		return false
+	}
 }
 
 func validAdditionalEndpointHost(host string) bool {

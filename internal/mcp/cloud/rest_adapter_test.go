@@ -10,61 +10,6 @@ import (
 	"testing"
 )
 
-func TestAzureRESTAdapterUsesAzRestWithoutExposingCredentials(t *testing.T) {
-	runner := &fakeProcessRunner{stdout: []byte(`{"value":[]}`)}
-	runner.check = func(call processCall) error {
-		for _, argument := range call.args {
-			if strings.HasPrefix(argument, "@") {
-				data, err := io.ReadAll(mustOpen(t, strings.TrimPrefix(argument, "@")))
-				if err != nil {
-					return err
-				}
-				if string(data) != `{"name":"demo"}` {
-					t.Fatalf("body=%s", data)
-				}
-			}
-		}
-		return nil
-	}
-	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, TempDir: t.TempDir(), Env: []string{}})
-	result, err := adapter.Invoke(t.Context(), Invocation{
-		Provider: ProviderAzure, Method: "PUT",
-		URL:          "https://management.azure.com/subscriptions/sub/resourceGroups/rg?api-version=2021-04-01",
-		Subscription: "sub", Headers: map[string]string{"If-Match": "etag"}, Body: map[string]any{"name": "demo"},
-	})
-	if err != nil || string(result.Output) != `{"value":[]}` {
-		t.Fatalf("result=%#v err=%v", result, err)
-	}
-	want := []string{
-		"rest", "--method", "put", "--url", "https://management.azure.com/subscriptions/sub/resourceGroups/rg?api-version=2021-04-01",
-		"--subscription", "sub", "--headers", "If-Match=etag", "--body", "@", "--output", "json",
-	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("calls=%d", len(runner.calls))
-	}
-	got := append([]string(nil), runner.calls[0].args...)
-	for index, argument := range got {
-		if strings.HasPrefix(argument, "@") {
-			got[index] = "@"
-		}
-		if strings.Contains(strings.ToLower(argument), "client-secret") {
-			t.Fatal("credential leaked into argv")
-		}
-	}
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("args:\nwant %#v\n got %#v", want, got)
-	}
-}
-
-func mustOpen(t *testing.T, path string) io.ReadCloser {
-	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return file
-}
-
 type staticTokenProvider struct {
 	token string
 	err   error
@@ -128,6 +73,17 @@ func TestAzureRESTAdapterUsesDefaultCredentialTokenWithoutCLIExposure(t *testing
 	}
 }
 
+func TestAzureNonCLICredentialSourceDetection(t *testing.T) {
+	servicePrincipal := []string{"AZURE_TENANT_ID=tenant", "AZURE_CLIENT_ID=client", "AZURE_CLIENT_SECRET=secret"}
+	if !hasAzureServicePrincipalEnvironment(servicePrincipal) || hasAzureWorkloadIdentityEnvironment(servicePrincipal) {
+		t.Fatalf("service principal environment not classified correctly")
+	}
+	workload := []string{"AZURE_TENANT_ID=tenant", "AZURE_CLIENT_ID=client", "AZURE_FEDERATED_TOKEN_FILE=/token"}
+	if !hasAzureWorkloadIdentityEnvironment(workload) || hasAzureServicePrincipalEnvironment(workload) {
+		t.Fatalf("workload identity environment not classified correctly")
+	}
+}
+
 func TestAzureRESTAdapterMapsOfficialDataPlaneScopes(t *testing.T) {
 	tests := map[string]string{
 		"https://graph.microsoft.com/v1.0/users":                                    "https://graph.microsoft.com/.default",
@@ -151,8 +107,11 @@ func TestAzureRESTAdapterMapsOfficialDataPlaneScopes(t *testing.T) {
 }
 
 func TestAzureRESTAdapterPassesExplicitAudienceOnlyAsInternalAuthConfiguration(t *testing.T) {
-	runner := &fakeProcessRunner{stdout: []byte(`{"value":[]}`)}
-	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, Env: []string{}})
+	tokens := &staticAzureTokenProvider{token: "azure-private-token"}
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"value":[]}`))}, nil
+	})
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{Tokens: tokens, HTTP: doer})
 	_, err := adapter.Invoke(t.Context(), Invocation{
 		Provider: ProviderAzure,
 		Method:   "GET",
@@ -162,12 +121,8 @@ func TestAzureRESTAdapterPassesExplicitAudienceOnlyAsInternalAuthConfiguration(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"rest", "--method", "get", "--url", "https://workspace.azuredatabricks.net/api/2.0/clusters/list",
-		"--resource", "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d", "--output", "json",
-	}
-	if len(runner.calls) != 1 || strings.Join(runner.calls[0].args, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("calls=%#v", runner.calls)
+	if tokens.scope != "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default" {
+		t.Fatalf("scope=%q", tokens.scope)
 	}
 }
 
@@ -197,6 +152,9 @@ func TestGCPRESTAdapterUsesTokenInternallyAndReturnsOnlyProviderResponse(t *test
 		if got := request.Header.Get("X-Goog-User-Project"); got != "billing-project" {
 			t.Fatalf("quota project=%q", got)
 		}
+		if got := request.URL.Query().Get("pageToken"); got != "next" {
+			t.Fatalf("query pageToken=%q", got)
+		}
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -214,13 +172,43 @@ func TestGCPRESTAdapterUsesTokenInternallyAndReturnsOnlyProviderResponse(t *test
 	result, err := adapter.Invoke(t.Context(), Invocation{
 		Provider: ProviderGCP, Method: "POST",
 		URL:     "https://compute.googleapis.com/compute/v1/projects/p/zones/z/instances",
-		Project: "billing-project", Body: map[string]any{"name": "demo"},
+		Project: "billing-project", Parameters: map[string]any{"pageToken": "next"}, Body: map[string]any{"name": "demo"},
 	})
 	if err != nil || string(result.Output) != `{"operation":"done"}` || result.RequestID != "gcp-request" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	if strings.Contains(string(result.Output), tokenProvider.token) || tokenProvider.calls != 1 {
 		t.Fatalf("token exposed or not used exactly once: %#v", result)
+	}
+}
+
+func TestGCPRESTAdapterRejectsUntrustedEndpointBeforeLoadingToken(t *testing.T) {
+	tokenProvider := &staticTokenProvider{token: "must-not-leak"}
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{
+		Tokens: tokenProvider,
+		HTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("HTTP transport must not run for an untrusted endpoint")
+			return nil, nil
+		}),
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{Provider: ProviderGCP, Method: "GET", URL: "https://attacker.example/collect"})
+	if err == nil || !strings.Contains(err.Error(), "endpoint allowlist") {
+		t.Fatalf("error=%v", err)
+	}
+	if tokenProvider.calls != 0 {
+		t.Fatalf("token provider called %d times", tokenProvider.calls)
+	}
+}
+
+func TestGCPRESTAdapterRejectsInvalidQueryBeforeLoadingToken(t *testing.T) {
+	tokenProvider := &staticTokenProvider{token: "must-not-be-used"}
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{Tokens: tokenProvider})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/compute/v1/projects",
+		Parameters: map[string]any{"filter": map[string]any{"nested": true}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "query parameter") || tokenProvider.calls != 0 {
+		t.Fatalf("error=%v token_calls=%d", err, tokenProvider.calls)
 	}
 }
 

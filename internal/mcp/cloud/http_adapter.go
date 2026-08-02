@@ -1,0 +1,767 @@
+package cloud
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"hash"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	alibabacredentials "github.com/aliyun/credentials-go/credentials"
+	aws "github.com/aws/aws-sdk-go-v2/aws"
+	awsv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+)
+
+const (
+	authSchemeAWSSigV4       = "sigv4"
+	authSchemeAlibabaACS3    = "acs3"
+	authSchemeAlibabaOSSV4   = "oss4"
+	authSchemeTencentTC3     = "tc3"
+	authSchemeTencentCOS     = "cos"
+	defaultHTTPClientTimeout = 60 * time.Second
+)
+
+type AWSCredentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+type AWSCredentialProvider interface {
+	Credentials(context.Context) (AWSCredentials, error)
+}
+
+type awsDefaultCredentialProvider struct {
+	once     sync.Once
+	provider aws.CredentialsProvider
+	err      error
+}
+
+func (provider *awsDefaultCredentialProvider) Credentials(ctx context.Context) (AWSCredentials, error) {
+	provider.once.Do(func() {
+		configuration, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			provider.err = err
+			return
+		}
+		provider.provider = configuration.Credentials
+	})
+	if provider.err != nil {
+		return AWSCredentials{}, fmt.Errorf("load AWS credential chain: %w", provider.err)
+	}
+	if provider.provider == nil {
+		return AWSCredentials{}, fmt.Errorf("AWS credential chain returned no provider")
+	}
+	credentials, err := provider.provider.Retrieve(ctx)
+	if err != nil {
+		return AWSCredentials{}, fmt.Errorf("retrieve AWS credentials: %w", err)
+	}
+	return AWSCredentials{
+		AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken,
+	}, nil
+}
+
+type AWSRESTConfig struct {
+	Credentials  AWSCredentialProvider
+	HTTP         HTTPDoer
+	MaxBodyBytes int64
+	Timeout      time.Duration
+	Now          func() time.Time
+	AllowedHosts []string
+}
+
+type AWSRESTAdapter struct {
+	config AWSRESTConfig
+}
+
+func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
+	if config.Credentials == nil {
+		config.Credentials = &awsDefaultCredentialProvider{}
+	}
+	normalizeSignedHTTPConfig(&config.HTTP, &config.Timeout, &config.MaxBodyBytes, &config.Now)
+	return &AWSRESTAdapter{config: config}
+}
+
+func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
+	return ProviderStatus{
+		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4 HTTPS", Version: "sigv4",
+		CredentialSource: credentialSource(ProviderAWS), CredentialStatus: CredentialStatusUnverified,
+		Message: "credentials are resolved lazily through the AWS SDK credential chain; no cloud CLI is executed",
+	}, nil
+}
+
+func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"api_reference":  "https://docs.aws.amazon.com/index.html#lang/en_us",
+		"authentication": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
+	})
+}
+
+func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
+	if scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4); scheme != authSchemeAWSSigV4 {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be %q", authSchemeAWSSigV4)
+	}
+	if !identifierPattern.MatchString(invocation.Service) || !identifierPattern.MatchString(invocation.Region) {
+		return InvocationResult{}, fmt.Errorf("AWS SigV4 requires valid service and region")
+	}
+	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("build AWS request: %w", err)
+	}
+	defer cleanup()
+	if err := validateRESTTargetWithEndpointHosts(ProviderAWS, request.Method, request.URL.String(), adapter.config.AllowedHosts); err != nil {
+		return InvocationResult{}, err
+	}
+	credentials, err := adapter.config.Credentials.Credentials(ctx)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
+		return InvocationResult{}, fmt.Errorf("AWS credential provider returned incomplete AKSK material")
+	}
+	awsCredentials := aws.Credentials{
+		AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken,
+	}
+	if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, payloadHash, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now().UTC()); err != nil {
+		return InvocationResult{}, fmt.Errorf("sign AWS SigV4 request: %w", err)
+	}
+	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, "AWS API")
+}
+
+type AlibabaCredentials struct {
+	AccessKeyID     string
+	AccessKeySecret string
+	SecurityToken   string
+}
+
+type AlibabaCredentialProvider interface {
+	Credentials(context.Context) (AlibabaCredentials, error)
+}
+
+type alibabaDefaultCredentialProvider struct {
+	once       sync.Once
+	credential alibabacredentials.Credential
+	err        error
+}
+
+func (provider *alibabaDefaultCredentialProvider) Credentials(context.Context) (AlibabaCredentials, error) {
+	provider.once.Do(func() {
+		provider.credential, provider.err = alibabacredentials.NewCredential(nil)
+	})
+	if provider.err != nil {
+		return AlibabaCredentials{}, fmt.Errorf("load Alibaba Cloud credential chain: %w", provider.err)
+	}
+	model, err := provider.credential.GetCredential()
+	if err != nil {
+		return AlibabaCredentials{}, fmt.Errorf("retrieve Alibaba Cloud credentials: %w", err)
+	}
+	if model == nil {
+		return AlibabaCredentials{}, fmt.Errorf("Alibaba Cloud credential chain returned no credentials")
+	}
+	return AlibabaCredentials{
+		AccessKeyID: pointerString(model.AccessKeyId), AccessKeySecret: pointerString(model.AccessKeySecret), SecurityToken: pointerString(model.SecurityToken),
+	}, nil
+}
+
+type AlibabaRESTConfig struct {
+	Credentials  AlibabaCredentialProvider
+	HTTP         HTTPDoer
+	MaxBodyBytes int64
+	Timeout      time.Duration
+	Now          func() time.Time
+	Nonce        func() string
+	AllowedHosts []string
+}
+
+type AlibabaRESTAdapter struct {
+	config AlibabaRESTConfig
+}
+
+func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
+	if config.Credentials == nil {
+		config.Credentials = &alibabaDefaultCredentialProvider{}
+	}
+	normalizeSignedHTTPConfig(&config.HTTP, &config.Timeout, &config.MaxBodyBytes, &config.Now)
+	if config.Nonce == nil {
+		config.Nonce = secureNonce
+	}
+	return &AlibabaRESTAdapter{config: config}
+}
+
+func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
+	return ProviderStatus{
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+oss4",
+		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
+		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
+	}, nil
+}
+
+func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"api_reference":  "https://api.aliyun.com/",
+		"acs3_signature": "https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature",
+		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
+	})
+}
+
+func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
+	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3 or oss4")
+	}
+	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("build Alibaba Cloud request: %w", err)
+	}
+	defer cleanup()
+	if err := validateRESTTargetWithEndpointHosts(ProviderAlicloud, request.Method, request.URL.String(), adapter.config.AllowedHosts); err != nil {
+		return InvocationResult{}, err
+	}
+	credentials, err := adapter.config.Credentials.Credentials(ctx)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud credential provider returned incomplete AKSK material")
+	}
+	switch scheme {
+	case authSchemeAlibabaACS3:
+		if err := signAlibabaACS3(request, payloadHash, credentials, invocation, adapter.config.Now().UTC(), adapter.config.Nonce()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaOSSV4:
+		if err := signAlibabaOSSV4(request, credentials, invocation.Region, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	}
+	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, "Alibaba Cloud API")
+}
+
+type TencentCredentials struct {
+	SecretID  string
+	SecretKey string
+	Token     string
+}
+
+type TencentCredentialProvider interface {
+	Credentials(context.Context) (TencentCredentials, error)
+}
+
+type EnvTencentCredentialProvider struct{}
+
+func (EnvTencentCredentialProvider) Credentials(context.Context) (TencentCredentials, error) {
+	credentials := TencentCredentials{
+		SecretID: strings.TrimSpace(os.Getenv("TENCENTCLOUD_SECRET_ID")), SecretKey: strings.TrimSpace(os.Getenv("TENCENTCLOUD_SECRET_KEY")),
+		Token: strings.TrimSpace(os.Getenv("TENCENTCLOUD_SESSION_TOKEN")),
+	}
+	if credentials.Token == "" {
+		credentials.Token = strings.TrimSpace(os.Getenv("TENCENTCLOUD_TOKEN"))
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return TencentCredentials{}, fmt.Errorf("Tencent Cloud credential unavailable: set TENCENTCLOUD_SECRET_ID and TENCENTCLOUD_SECRET_KEY, plus TENCENTCLOUD_SESSION_TOKEN for CAM temporary credentials")
+	}
+	return credentials, nil
+}
+
+type TencentRESTConfig struct {
+	Credentials  TencentCredentialProvider
+	HTTP         HTTPDoer
+	MaxBodyBytes int64
+	Timeout      time.Duration
+	Now          func() time.Time
+	AllowedHosts []string
+}
+
+type TencentRESTAdapter struct {
+	config TencentRESTConfig
+}
+
+func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
+	if config.Credentials == nil {
+		config.Credentials = EnvTencentCredentialProvider{}
+	}
+	normalizeSignedHTTPConfig(&config.HTTP, &config.Timeout, &config.MaxBodyBytes, &config.Now)
+	return &TencentRESTAdapter{config: config}
+}
+
+func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
+	return ProviderStatus{
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS", Version: "tc3+cos",
+		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
+		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
+	}, nil
+}
+
+func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"api_reference": "https://cloud.tencent.com/document/api",
+		"tc3_signature": "https://intl.cloud.tencent.com/document/product/627/64494",
+		"cos_signature": "https://intl.cloud.tencent.com/document/product/436/7778",
+	})
+}
+
+func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
+	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3 or cos")
+	}
+	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("build Tencent Cloud request: %w", err)
+	}
+	defer cleanup()
+	if err := validateRESTTargetWithEndpointHosts(ProviderTencent, request.Method, request.URL.String(), adapter.config.AllowedHosts); err != nil {
+		return InvocationResult{}, err
+	}
+	credentials, err := adapter.config.Credentials.Credentials(ctx)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud credential provider returned incomplete AKSK material")
+	}
+	switch scheme {
+	case authSchemeTencentTC3:
+		if err := signTencentTC3(request, payloadHash, credentials, invocation, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeTencentCOS:
+		if err := signTencentCOS(request, credentials, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	}
+	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, "Tencent Cloud API")
+}
+
+func normalizeSignedHTTPConfig(client *HTTPDoer, timeout *time.Duration, maxBodyBytes *int64, now *func() time.Time) {
+	if *timeout <= 0 {
+		*timeout = defaultHTTPClientTimeout
+	}
+	if *client == nil {
+		*client = &http.Client{
+			Timeout: *timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		}
+	}
+	if *maxBodyBytes <= 0 {
+		*maxBodyBytes = defaultRESTBodyLimit
+	}
+	if *now == nil {
+		*now = time.Now
+	}
+}
+
+func buildSignedHTTPRequest(ctx context.Context, invocation Invocation) (*http.Request, string, func(), error) {
+	body, contentLength, cleanup, err := prepareRESTBody(invocation)
+	if err != nil {
+		return nil, "", func() {}, err
+	}
+	method := strings.ToUpper(strings.TrimSpace(invocation.Method))
+	request, err := http.NewRequestWithContext(ctx, method, invocation.URL, body)
+	if err != nil {
+		cleanup()
+		return nil, "", func() {}, err
+	}
+	for name, value := range invocation.Headers {
+		request.Header.Set(name, value)
+	}
+	if contentLength >= 0 {
+		request.ContentLength = contentLength
+	}
+	if request.GetBody == nil && invocation.BodyFile != "" {
+		path := invocation.BodyFile
+		request.GetBody = func() (io.ReadCloser, error) { return os.Open(path) }
+	}
+	if (invocation.Body != nil || invocation.BodyFile != "") && request.Header.Get("Content-Type") == "" {
+		request.Header.Set("Content-Type", invocationContentType(invocation))
+	}
+	if err := addQueryParameters(request.URL, invocation.Parameters); err != nil {
+		cleanup()
+		return nil, "", func() {}, err
+	}
+	payloadHash, err := hashRequestBody(request)
+	if err != nil {
+		cleanup()
+		return nil, "", func() {}, err
+	}
+	return request, payloadHash, cleanup, nil
+}
+
+func hashRequestBody(request *http.Request) (string, error) {
+	hash := sha256.New()
+	if request.Body != nil {
+		if _, err := io.Copy(hash, request.Body); err != nil {
+			return "", fmt.Errorf("hash request body: %w", err)
+		}
+		if request.GetBody == nil {
+			return "", fmt.Errorf("signed HTTP body is not replayable")
+		}
+		body, err := request.GetBody()
+		if err != nil {
+			return "", fmt.Errorf("rewind request body: %w", err)
+		}
+		request.Body = body
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func addQueryParameters(target *url.URL, parameters map[string]any) error {
+	if len(parameters) == 0 {
+		return nil
+	}
+	query := target.Query()
+	for name, value := range parameters {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("query parameter name is empty")
+		}
+		values, err := stringValues(value)
+		if err != nil {
+			return fmt.Errorf("query parameter %q: %w", name, err)
+		}
+		for _, item := range values {
+			query.Add(name, item)
+		}
+	}
+	target.RawQuery = query.Encode()
+	return nil
+}
+
+func stringValues(value any) ([]string, error) {
+	switch typed := value.(type) {
+	case string:
+		return []string{typed}, nil
+	case bool:
+		return []string{strconv.FormatBool(typed)}, nil
+	case float64:
+		return []string{strconv.FormatFloat(typed, 'f', -1, 64)}, nil
+	case int:
+		return []string{strconv.Itoa(typed)}, nil
+	case []string:
+		return typed, nil
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			switch item.(type) {
+			case []any, []string:
+				return nil, fmt.Errorf("array values must be scalar")
+			}
+			items, err := stringValues(item)
+			if err != nil || len(items) != 1 {
+				return nil, fmt.Errorf("array values must be scalar")
+			}
+			values = append(values, items[0])
+		}
+		return values, nil
+	case nil:
+		return []string{""}, nil
+	default:
+		return nil, fmt.Errorf("must be a string, number, boolean, null, or scalar array")
+	}
+}
+
+func invokeSignedHTTP(client HTTPDoer, maxBodyBytes int64, request *http.Request, providerName string) (InvocationResult, error) {
+	response, err := client.Do(request)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("%s HTTP request: %w", providerName, err)
+	}
+	output, err := readRESTResponse(response, maxBodyBytes)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	requestID := responseRequestID(response.Header)
+	if requestID == "" {
+		requestID = requestIDFromGenericJSON(output)
+	}
+	return InvocationResult{Output: output, RequestID: requestID}, nil
+}
+
+func signAlibabaACS3(request *http.Request, payloadHash string, credentials AlibabaCredentials, invocation Invocation, now time.Time, nonce string) error {
+	if !identifierPattern.MatchString(invocation.Operation) || !identifierPattern.MatchString(invocation.APIVersion) {
+		return fmt.Errorf("Alibaba Cloud ACS3 requires valid operation and api_version")
+	}
+	request.Header.Set("X-Acs-Action", invocation.Operation)
+	request.Header.Set("X-Acs-Version", invocation.APIVersion)
+	request.Header.Set("X-Acs-Date", now.UTC().Format("2006-01-02T15:04:05Z"))
+	request.Header.Set("X-Acs-Signature-Nonce", nonce)
+	request.Header.Set("X-Acs-Content-Sha256", payloadHash)
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Acs-Security-Token", credentials.SecurityToken)
+	}
+	canonicalHeaders, signedHeaders := canonicalHeaders(request, func(name string) bool {
+		return name == "host" || strings.HasPrefix(name, "x-acs-")
+	})
+	canonicalRequest := strings.Join([]string{
+		request.Method, canonicalURI(request.URL), canonicalQuery(request.URL.Query()), canonicalHeaders, signedHeaders, payloadHash,
+	}, "\n")
+	hashedCanonical := sha256Hex([]byte(canonicalRequest))
+	signature := hmacHex(sha256.New, []byte(credentials.AccessKeySecret), []byte("ACS3-HMAC-SHA256\n"+hashedCanonical))
+	request.Header.Set("Authorization", "ACS3-HMAC-SHA256 Credential="+credentials.AccessKeyID+",SignedHeaders="+signedHeaders+",Signature="+signature)
+	return nil
+}
+
+func signTencentTC3(request *http.Request, payloadHash string, credentials TencentCredentials, invocation Invocation, now time.Time) error {
+	if !identifierPattern.MatchString(invocation.Service) || !identifierPattern.MatchString(invocation.Operation) || !identifierPattern.MatchString(invocation.APIVersion) {
+		return fmt.Errorf("Tencent Cloud TC3 requires valid service, operation, and api_version")
+	}
+	if request.Header.Get("Content-Type") == "" {
+		request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	}
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	request.Header.Set("X-TC-Action", invocation.Operation)
+	request.Header.Set("X-TC-Version", invocation.APIVersion)
+	request.Header.Set("X-TC-Timestamp", timestamp)
+	if invocation.Region != "" {
+		request.Header.Set("X-TC-Region", invocation.Region)
+	}
+	if credentials.Token != "" {
+		request.Header.Set("X-TC-Token", credentials.Token)
+	}
+	canonicalHeaders, signedHeaders := canonicalHeaders(request, func(name string) bool {
+		return name == "content-type" || name == "host"
+	})
+	canonicalHeaders = strings.ToLower(canonicalHeaders)
+	canonicalRequest := strings.Join([]string{
+		request.Method, canonicalURI(request.URL), canonicalQuery(request.URL.Query()), canonicalHeaders, signedHeaders, payloadHash,
+	}, "\n")
+	date := now.UTC().Format("2006-01-02")
+	service := strings.ToLower(invocation.Service)
+	credentialScope := date + "/" + service + "/tc3_request"
+	stringToSign := "TC3-HMAC-SHA256\n" + timestamp + "\n" + credentialScope + "\n" + sha256Hex([]byte(canonicalRequest))
+	secretDate := hmacBytes(sha256.New, []byte("TC3"+credentials.SecretKey), []byte(date))
+	secretService := hmacBytes(sha256.New, secretDate, []byte(service))
+	secretSigning := hmacBytes(sha256.New, secretService, []byte("tc3_request"))
+	signature := hmacHex(sha256.New, secretSigning, []byte(stringToSign))
+	request.Header.Set("Authorization", "TC3-HMAC-SHA256 Credential="+credentials.SecretID+"/"+credentialScope+", SignedHeaders="+signedHeaders+", Signature="+signature)
+	return nil
+}
+
+func signAlibabaOSSV4(request *http.Request, credentials AlibabaCredentials, region string, now time.Time) error {
+	if !identifierPattern.MatchString(region) {
+		return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
+	}
+	request.Header.Set("X-Oss-Date", now.UTC().Format("20060102T150405Z"))
+	request.Header.Set("X-Oss-Content-Sha256", "UNSIGNED-PAYLOAD")
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Oss-Security-Token", credentials.SecurityToken)
+	}
+	canonicalHeadersValue, _ := canonicalHeaders(request, func(name string) bool {
+		return name == "content-type" || name == "content-md5" || strings.HasPrefix(name, "x-oss-")
+	})
+	additionalHeaders := ""
+	canonicalRequest := strings.Join([]string{
+		request.Method, canonicalURI(request.URL), canonicalOSSQuery(request.URL), canonicalHeadersValue, additionalHeaders, "UNSIGNED-PAYLOAD",
+	}, "\n")
+	date := now.UTC().Format("20060102")
+	scope := date + "/" + strings.ToLower(region) + "/oss/aliyun_v4_request"
+	stringToSign := "OSS4-HMAC-SHA256\n" + now.UTC().Format("20060102T150405Z") + "\n" + scope + "\n" + sha256Hex([]byte(canonicalRequest))
+	dateKey := hmacBytes(sha256.New, []byte("aliyun_v4"+credentials.AccessKeySecret), []byte(date))
+	regionKey := hmacBytes(sha256.New, dateKey, []byte(strings.ToLower(region)))
+	serviceKey := hmacBytes(sha256.New, regionKey, []byte("oss"))
+	signingKey := hmacBytes(sha256.New, serviceKey, []byte("aliyun_v4_request"))
+	signature := hmacHex(sha256.New, signingKey, []byte(stringToSign))
+	authorization := "OSS4-HMAC-SHA256 Credential=" + credentials.AccessKeyID + "/" + scope
+	if additionalHeaders != "" {
+		authorization += ",AdditionalHeaders=" + additionalHeaders
+	}
+	authorization += ",Signature=" + signature
+	request.Header.Set("Authorization", authorization)
+	return nil
+}
+
+func signTencentCOS(request *http.Request, credentials TencentCredentials, now time.Time) error {
+	start := now.UTC().Unix()
+	end := start + 900
+	keyTime := fmt.Sprintf("%d;%d", start, end)
+	request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	if credentials.Token != "" {
+		request.Header.Set("X-Cos-Security-Token", credentials.Token)
+	}
+	canonicalHeaderValue, headerList := canonicalCOSHeaders(request)
+	queryValue, queryList := canonicalCOSQuery(request.URL.Query())
+	path := request.URL.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	httpString := strings.ToLower(request.Method) + "\n" + path + "\n" + queryValue + "\n" + canonicalHeaderValue + "\n"
+	stringToSign := "sha1\n" + keyTime + "\n" + sha1Hex([]byte(httpString)) + "\n"
+	signKey := hmacHex(sha1.New, []byte(credentials.SecretKey), []byte(keyTime))
+	signature := hmacHex(sha1.New, []byte(signKey), []byte(stringToSign))
+	request.Header.Set("Authorization", "q-sign-algorithm=sha1&q-ak="+uriEncode(credentials.SecretID, true)+"&q-sign-time="+keyTime+"&q-key-time="+keyTime+"&q-header-list="+headerList+"&q-url-param-list="+queryList+"&q-signature="+signature)
+	return nil
+}
+
+func canonicalHeaders(request *http.Request, include func(string) bool) (string, string) {
+	values := make(map[string]string)
+	for name, entries := range request.Header {
+		lower := strings.ToLower(strings.TrimSpace(name))
+		if include(lower) {
+			values[lower] = strings.Join(entries, ",")
+		}
+	}
+	if include("host") {
+		values["host"] = request.URL.Host
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var canonical strings.Builder
+	for _, name := range names {
+		canonical.WriteString(name)
+		canonical.WriteByte(':')
+		canonical.WriteString(strings.Join(strings.Fields(values[name]), " "))
+		canonical.WriteByte('\n')
+	}
+	return canonical.String(), strings.Join(names, ";")
+}
+
+func canonicalURI(target *url.URL) string {
+	path := target.EscapedPath()
+	if path == "" {
+		return "/"
+	}
+	return path
+}
+
+func canonicalQuery(values url.Values) string {
+	items := make([]string, 0)
+	for name, entries := range values {
+		if len(entries) == 0 {
+			entries = []string{""}
+		}
+		for _, value := range entries {
+			items = append(items, uriEncode(name, true)+"="+uriEncode(value, true))
+		}
+	}
+	sort.Strings(items)
+	return strings.Join(items, "&")
+}
+
+func canonicalOSSQuery(target *url.URL) string {
+	if target == nil || target.RawQuery == "" {
+		return ""
+	}
+	items := make([]string, 0)
+	for _, pair := range strings.Split(target.RawQuery, "&") {
+		name, value, hasValue := strings.Cut(pair, "=")
+		decodedName, err := url.QueryUnescape(name)
+		if err != nil {
+			decodedName = name
+		}
+		encodedName := uriEncode(decodedName, true)
+		if !hasValue {
+			items = append(items, encodedName)
+			continue
+		}
+		decodedValue, err := url.QueryUnescape(value)
+		if err != nil {
+			decodedValue = value
+		}
+		items = append(items, encodedName+"="+uriEncode(decodedValue, true))
+	}
+	sort.Strings(items)
+	return strings.Join(items, "&")
+}
+
+func canonicalCOSHeaders(request *http.Request) (string, string) {
+	values := make(map[string]string)
+	for name, entries := range request.Header {
+		lower := strings.ToLower(name)
+		if lower == "authorization" {
+			continue
+		}
+		values[lower] = strings.Join(entries, ",")
+	}
+	values["host"] = request.URL.Host
+	return canonicalCOSValues(values)
+}
+
+func canonicalCOSQuery(query url.Values) (string, string) {
+	values := make(map[string]string)
+	for name, entries := range query {
+		values[strings.ToLower(name)] = strings.Join(entries, ",")
+	}
+	return canonicalCOSValues(values)
+}
+
+func canonicalCOSValues(values map[string]string) (string, string) {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, strings.ToLower(name))
+	}
+	sort.Strings(names)
+	items := make([]string, 0, len(names))
+	for _, name := range names {
+		items = append(items, uriEncode(name, true)+"="+uriEncode(strings.TrimSpace(values[name]), true))
+	}
+	return strings.Join(items, "&"), strings.Join(names, ";")
+}
+
+func uriEncode(value string, encodeSlash bool) string {
+	var builder strings.Builder
+	for _, character := range []byte(value) {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') || strings.ContainsRune("-_.~", rune(character)) || (character == '/' && !encodeSlash) {
+			builder.WriteByte(character)
+			continue
+		}
+		fmt.Fprintf(&builder, "%%%02X", character)
+	}
+	return builder.String()
+}
+
+func hmacBytes(hash func() hash.Hash, key, value []byte) []byte {
+	mac := hmac.New(hash, key)
+	_, _ = mac.Write(value)
+	return mac.Sum(nil)
+}
+
+func hmacHex(hash func() hash.Hash, key, value []byte) string {
+	return hex.EncodeToString(hmacBytes(hash, key, value))
+}
+
+func sha256Hex(value []byte) string {
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
+}
+
+func sha1Hex(value []byte) string {
+	digest := sha1.Sum(value)
+	return hex.EncodeToString(digest[:])
+}
+
+func normalizedAuthScheme(scheme, fallback string) string {
+	if strings.TrimSpace(scheme) == "" {
+		return fallback
+	}
+	return strings.ToLower(strings.TrimSpace(scheme))
+}
+
+func secureNonce() string {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(value)
+}
+
+func pointerString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}

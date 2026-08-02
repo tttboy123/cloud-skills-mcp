@@ -31,7 +31,7 @@ func registerTools(srv *server.MCPServer, runtime Runtime) {
 		providers = append(providers, string(provider))
 	}
 	srv.AddTool(mcp.NewTool("cloud_provider_status",
-		mcp.WithDescription("Report one provider adapter, CLI and non-secret credential-source readiness."),
+		mcp.WithDescription("Report one provider HTTP adapter and non-secret credential-source readiness."),
 		mcp.WithString("provider", mcp.Description("Cloud provider."), mcp.Enum(providers...), mcp.Required()),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -42,7 +42,7 @@ func registerTools(srv *server.MCPServer, runtime Runtime) {
 	for _, provider := range AllProviders() {
 		prefix := string(provider)
 		srv.AddTool(mcp.NewTool(prefix+"_api_discover",
-			mcp.WithDescription("Discover official CLI/API help without invoking a cloud resource operation."),
+			mcp.WithDescription("Discover official HTTP API and authentication documentation without invoking a cloud resource operation."),
 			mcp.WithString("service", mcp.Description("Optional provider service or product code.")),
 			mcp.WithString("operation", mcp.Description("Optional operation/action name.")),
 			mcp.WithReadOnlyHintAnnotation(true),
@@ -59,17 +59,18 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 	description := "Invoke any provider API operation through the official universal adapter."
 	options := []mcp.ToolOption{
 		mcp.WithDescription(description),
-		mcp.WithString("service", mcp.Description("CLI service/product code for AWS, Alibaba Cloud or Tencent Cloud.")),
-		mcp.WithString("operation", mcp.Description("CLI API operation/action for AWS, Alibaba Cloud or Tencent Cloud.")),
+		mcp.WithString("service", mcp.Description("Provider service/product code used by request signing.")),
+		mcp.WithString("operation", mcp.Description("Provider API operation/action used for signing and safety classification.")),
 		mcp.WithString("region", mcp.Description("Optional provider region/location.")),
 		mcp.WithString("project", mcp.Description("Optional Google Cloud project.")),
 		mcp.WithString("subscription", mcp.Description("Optional Azure subscription.")),
 		mcp.WithString("audience", mcp.Description("Optional Azure Entra resource audience for an uncommon official data-plane endpoint. This is an application/resource identifier, never a token.")),
+		mcp.WithString("auth_scheme", mcp.Description("Optional provider HTTP authentication scheme: sigv4, acs3, oss4, tc3, cos, or the provider default.")),
 		mcp.WithString("auth_version", mcp.Description("Optional Baidu BCE signing version: v1 (default) or v2. BCE v2 also requires service and region.")),
-		mcp.WithString("method", mcp.Description("HTTP method for Azure, Google Cloud or Baidu AI Cloud REST calls.")),
-		mcp.WithString("url", mcp.Description("Official HTTPS API URL for Azure, Google Cloud or Baidu AI Cloud.")),
-		mcp.WithObject("parameters", mcp.Description("Structured provider API parameters."), mcp.AdditionalProperties(true)),
-		mcp.WithArray("arguments", mcp.Description("Additional fixed-executable CLI arguments."), mcp.WithStringItems(), mcp.MaxItems(128)),
+		mcp.WithString("api_version", mcp.Description("Provider API version used by Alibaba ACS3 and Tencent TC3 common headers.")),
+		mcp.WithString("method", mcp.Description("HTTP method for the official provider API request.")),
+		mcp.WithString("url", mcp.Description("Exact official HTTPS provider API URL.")),
+		mcp.WithObject("parameters", mcp.Description("Optional scalar HTTP query parameters."), mcp.AdditionalProperties(true)),
 		mcp.WithObject("headers", mcp.Description("Non-credential HTTP headers."), mcp.AdditionalProperties(map[string]any{"type": "string"})),
 		mcp.WithAny("body", mcp.Description("Optional JSON-compatible REST request body.")),
 		mcp.WithString("body_file", mcp.Description("Optional local REST request body file. The resolved regular file must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and cannot be combined with body.")),
@@ -174,8 +175,8 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 		Provider: provider, Mode: mode,
 		Service: request.GetString("service", ""), Operation: request.GetString("operation", ""),
 		Region: request.GetString("region", ""), Project: request.GetString("project", ""),
-		Subscription: request.GetString("subscription", ""), Audience: request.GetString("audience", ""), AuthVersion: request.GetString("auth_version", ""), Method: request.GetString("method", ""),
-		URL: request.GetString("url", ""), Arguments: request.GetStringSlice("arguments", nil),
+		Subscription: request.GetString("subscription", ""), Audience: request.GetString("audience", ""), AuthScheme: request.GetString("auth_scheme", ""), AuthVersion: request.GetString("auth_version", ""), APIVersion: request.GetString("api_version", ""), Method: request.GetString("method", ""),
+		URL:      request.GetString("url", ""),
 		BodyFile: request.GetString("body_file", ""),
 	}
 	if value, ok := arguments["parameters"]; ok {
@@ -228,7 +229,7 @@ func auditEvent(runtime Runtime, invocation Invocation, sensitive bool, outcome,
 		Time: runtime.Now().UTC(), Provider: invocation.Provider, Mode: invocation.Mode,
 		Service: invocation.Service, Operation: invocation.Operation, Method: strings.ToUpper(invocation.Method),
 		URL: auditURL(invocation.URL), Region: invocation.Region, Project: invocation.Project,
-		Subscription: invocation.Subscription, AuthVersion: invocation.AuthVersion, Sensitive: sensitive, Outcome: outcome, RequestID: requestID,
+		Subscription: invocation.Subscription, AuthScheme: invocation.AuthScheme, AuthVersion: invocation.AuthVersion, APIVersion: invocation.APIVersion, Sensitive: sensitive, Outcome: outcome, RequestID: requestID,
 	}
 }
 
