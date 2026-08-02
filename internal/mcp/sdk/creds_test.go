@@ -101,9 +101,9 @@ func TestLoadFromCLIConfigRequiresSecretForKeyPairCloud(t *testing.T) {
 // TestRedactSecret exercises the most common leak vectors.
 // The fixture is a fake "tccli" error that contains a real-looking AKID/SK.
 func TestRedactSecret(t *testing.T) {
-	in := `tccli cvm DescribeInstances failed: {"secretId":"AKID1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ12","secretKey":"abcdef0123456789ABCDEF0123456789abcdef01"}`
+	in := `tccli failed: {"secretId":"AKID1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ12","secretKey":"abcdef0123456789ABCDEF0123456789abcdef01"} --Password plain-secret Bearer oauth.token AKIA1234567890ABCDEF`
 	out := RedactSecret(in)
-	for _, leak := range []string{"AKID1234567890", "abcdef0123456789"} {
+	for _, leak := range []string{"AKID1234567890", "abcdef0123456789", "plain-secret", "oauth.token", "AKIA1234567890ABCDEF"} {
 		if strings.Contains(out, leak) {
 			t.Errorf("RedactSecret leaked %q in: %s", leak, out)
 		}

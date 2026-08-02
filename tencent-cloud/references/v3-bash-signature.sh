@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source-path=SCRIPTDIR
 # 腾讯云 API 签名 v3 裸 bash + openssl + curl 实现
 # 原始版本: https://cloud.tencent.com/document/product/213/30654
 # 修复:
@@ -111,5 +112,3 @@ unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
 echo "📡 请求: POST https://${host}  Action=${action}"
 echo ""
 curl -sS -XPOST "https://${host}" -d "$payload" -H "@${headers_file}"
-echo ""
-echo "curl exit: $?"

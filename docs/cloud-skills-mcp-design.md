@@ -6,7 +6,8 @@
 
 > **Current-state note (2026-08-02):** This is an aspirational design record.
 > The implemented product boundary is documented in `README.md` and
-> `docs/cloud-mcp-phase1.5.md`: Tencent CVM over stdio only. Six-cloud and SSE
+> `docs/cloud-mcp-phase1.6-p1.md`: 15 Tencent tools for CVM, Lighthouse, CDB,
+> CloudBase and CLI diagnostics over stdio. COS, six-cloud native MCP and SSE
 > sections below are roadmap material, not shipped capability.
 
 ## 1. 目标

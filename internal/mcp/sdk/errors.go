@@ -30,7 +30,10 @@ var (
 var (
 	sensitiveQuotedValue = regexp.MustCompile(`(?i)(["']?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)["']?\s*[:=]\s*["'])([^"']*)(["'])`)
 	sensitiveBareValue   = regexp.MustCompile(`(?i)(["']?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)["']?\s*[:=]\s*)([A-Za-z0-9+/=_-]+)`)
+	sensitiveSpaceValue  = regexp.MustCompile(`(?i)((?:--)?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)\s+)([^\s\]]+)`)
+	bearerValue          = regexp.MustCompile(`(?i)(Bearer\s+)([A-Za-z0-9._~+/=-]+)`)
 	rawTencentAKID       = regexp.MustCompile(`AKID[A-Za-z0-9]{8,}`)
+	rawAWSAccessKey      = regexp.MustCompile(`(?:AKIA|ASIA)[A-Z0-9]{16}`)
 )
 
 // RedactSecret removes values assigned to security-sensitive field names and
@@ -39,7 +42,10 @@ var (
 func RedactSecret(s string) string {
 	out := sensitiveQuotedValue.ReplaceAllString(s, `${1}***REDACTED***${3}`)
 	out = sensitiveBareValue.ReplaceAllString(out, `${1}***REDACTED***`)
+	out = sensitiveSpaceValue.ReplaceAllString(out, `${1}***REDACTED***`)
+	out = bearerValue.ReplaceAllString(out, `${1}***REDACTED***`)
 	out = rawTencentAKID.ReplaceAllString(out, "***REDACTED***")
+	out = rawAWSAccessKey.ReplaceAllString(out, "***REDACTED***")
 	return out
 }
 

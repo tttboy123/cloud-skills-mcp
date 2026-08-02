@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source-path=SCRIPTDIR
 # 腾讯云 Lighthouse API 签名 v3 (macOS 兼容版)
 # 原始版本: 用户给 (跟 cvm 一样的 v3 文档代码)
 # 修复:
@@ -107,5 +108,3 @@ echo ""
 echo "📡 请求: POST https://${host}  Action=${action}  Region=${region}"
 echo ""
 curl -sS -XPOST "https://${host}" -d "$payload" -H "@${headers_file}" | python3 -m json.tool
-echo ""
-echo "curl exit: $?"

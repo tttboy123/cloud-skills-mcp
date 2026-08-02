@@ -11,11 +11,11 @@ usage() {
   cat <<'USAGE'
 Usage: ./install.sh [options]
 
-Build and install the implemented Tencent Cloud MCP binary.
+Build and install the universal six-cloud MCP binary and Tencent compatibility binary.
 
 Options:
   --bin-dir PATH      Binary destination (default: ~/.local/bin)
-  --skills-dir PATH   Also copy the three implemented/meta skill directories
+  --skills-dir PATH   Also copy all six cloud skill directories
   --force             Replace existing skill directories under --skills-dir
   -h, --help          Show this help
 
@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "${SKILLS_DIR}" ]]; then
-  SKILLS=(tencent-cloud alicloud google-cloud)
+  SKILLS=(aws azure google-cloud alicloud tencent-cloud baiducloud)
   for skill in "${SKILLS[@]}"; do
     target="${SKILLS_DIR}/${skill}"
     if [[ -e "${target}" && ${FORCE} -ne 1 ]]; then
@@ -67,10 +67,13 @@ trap 'rm -rf "${BUILD_DIR}"' EXIT
 
 (
   cd "${ROOT_DIR}"
+  go build -trimpath -o "${BUILD_DIR}/cloud-skills-mcp" ./cmd/cloud-skills-mcp
   go build -trimpath -o "${BUILD_DIR}/tencent-cloud-mcp" ./cmd/tencent-cloud-mcp
 )
 mkdir -p "${BIN_DIR}"
+install -m 0755 "${BUILD_DIR}/cloud-skills-mcp" "${BIN_DIR}/cloud-skills-mcp"
 install -m 0755 "${BUILD_DIR}/tencent-cloud-mcp" "${BIN_DIR}/tencent-cloud-mcp"
+echo "Installed binary: ${BIN_DIR}/cloud-skills-mcp"
 echo "Installed binary: ${BIN_DIR}/tencent-cloud-mcp"
 
 if [[ -n "${SKILLS_DIR}" ]]; then

@@ -1,0 +1,11 @@
+interface:
+  display_name: "Google Cloud"
+  short_description: "Operate every Google Cloud API through guarded REST"
+  default_prompt: "Use $google-cloud to inspect or operate GCP resources safely."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "cloud-skills-mcp"
+      description: "Local universal six-cloud MCP server"
+policy:
+  allow_implicit_invocation: true

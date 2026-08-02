@@ -1,42 +1,5 @@
-# alicloud — Alibaba Cloud Manager
+# Alibaba Cloud Skill
 
-**本目录是 `cloud-skills-mcp` 仓库的 alicloud meta 入口**。
+本目录把阿里云资源意图路由到统一 `cloud-skills-mcp` server 的 `alicloud_api_discover`、`alicloud_api_read` 和 `alicloud_api_mutate`。底层使用固定 Alibaba Cloud CLI product/OpenAPI action，覆盖 CLI 暴露的完整 API surface。
 
-完整的 184 个细粒度 sub-skill 来自:
-- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (MIT) — ECS / OSS / RDS / VPC / KMS / FC / Model Studio ...
-
-## 安装
-
-### 方式 1: 单独使用本 meta skill
-
-```bash
-cp -r ~/code/cloud-skills-mcp/alicloud ~/.claude/skills/
-```
-
-### 方式 2: 一键装全部 184 sub-skill (推荐)
-
-```bash
-npx skills add cinience/alicloud-skills --all -y --force
-```
-
-## 凭证配置
-
-```bash
-# aliyun CLI
-aliyun configure
-
-# 或 macOS Keychain
-security add-generic-password -s alicloud -a accesskey-id -w <AK>
-security add-generic-password -s alicloud -a accesskey-secret -w <SK>
-security add-generic-password -s alicloud -a region -w cn-hangzhou
-```
-
-## 状态
-
-- ✅ Meta SKILL.md
-- ⏳ 自建核心 bash 脚本 (Phase 2)
-- ⏳ MCP server `alicloud-mcp` (Phase 2)
-
-## 致谢
-
-- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (MIT) — 184 sub-skill
+凭证仅使用官方 CLI profile、RAM role/STS 或 AKSK 环境链。具体规则见 [SKILL.md](SKILL.md)，官方来源见 [references/official-docs.md](references/official-docs.md)。

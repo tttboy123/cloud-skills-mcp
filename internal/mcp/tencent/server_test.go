@@ -54,7 +54,9 @@ func TestToolAnnotationsMatchBehavior(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tool := range listed.Tools {
-		readOnly := tool.Name == "tencent_cvm_list_instances" || tool.Name == "tencent_cvm_describe_instance"
+		readOnly := !strings.Contains(tool.Name, "_start_") &&
+			!strings.Contains(tool.Name, "_stop_") &&
+			!strings.Contains(tool.Name, "_reboot_")
 		if tool.Annotations.ReadOnlyHint == nil || *tool.Annotations.ReadOnlyHint != readOnly {
 			t.Errorf("%s readOnlyHint mismatch: want %v, got %v", tool.Name, readOnly, tool.Annotations.ReadOnlyHint)
 		}
@@ -91,8 +93,8 @@ func TestToolDiscoveryDoesNotLoadCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 4 {
-		t.Fatalf("expected four tools, got %d", len(listed.Tools))
+	if len(listed.Tools) != 15 {
+		t.Fatalf("expected fifteen tools, got %d", len(listed.Tools))
 	}
 	if loadCalls != 0 {
 		t.Fatalf("tool discovery loaded credentials %d times", loadCalls)
@@ -199,8 +201,8 @@ exit 7
 	if !errors.As(err, &cliErr) {
 		t.Fatalf("expected CLIError, got %T: %v", err, err)
 	}
-	if cliErr.Code != 7 || !strings.Contains(cliErr.Stderr, "stdout detail") || !strings.Contains(cliErr.Stderr, "stderr detail") {
-		t.Fatalf("combined output or exit code missing: %#v", cliErr)
+	if cliErr.Code != 7 || !strings.Contains(cliErr.Stdout, "stdout detail") || !strings.Contains(cliErr.Stderr, "stderr detail") {
+		t.Fatalf("captured output or exit code missing: %#v", cliErr)
 	}
 }
 
@@ -323,7 +325,7 @@ func TestHelpAndRuntimeDefaults(t *testing.T) {
 		t.Fatalf("unexpected default runtime: %#v", runtime)
 	}
 	help := HelpText()
-	if !strings.Contains(help, "v0.2.0") || !strings.Contains(help, "CLOUD_SKILLS_ALLOW_MUTATIONS=1") {
+	if !strings.Contains(help, "v0.3.0") || !strings.Contains(help, "CLOUD_SKILLS_ALLOW_MUTATIONS=1") {
 		t.Fatalf("help text is stale: %s", help)
 	}
 }

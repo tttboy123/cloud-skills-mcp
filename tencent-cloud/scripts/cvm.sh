@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # cvm.sh — 管理 CVM (云服务器) 实例
 # 用法: cvm.sh list|describe|start|stop|reboot|reset-pass [args]
 

@@ -1,6 +1,6 @@
 // Package tencent implements the Tencent Cloud MCP server.
 //
-// It exposes 4 CVM tools over stdio JSON-RPC, backed by the shared sdk.LoadCreds
+// It exposes Tencent Cloud tools over stdio JSON-RPC, backed by the shared sdk.LoadCreds
 // for credentials and tccli as the underlying CLI.  The server is a thin
 // orchestrator: every tool builds a tccli argv, runs it, and returns the JSON
 // response to the LLM unchanged.
@@ -18,11 +18,9 @@ package tencent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"time"
 
@@ -34,29 +32,42 @@ import (
 
 const (
 	serverName    = "tencent-cloud-mcp"
-	serverVersion = "0.2.0"
+	serverVersion = "0.3.0"
 	tccliPath     = "tccli" // resolved via PATH at run time
 	cliTimeout    = 30 * time.Second
 	defaultRegion = "ap-shanghai"
 )
 
 var (
-	instanceIDPattern = regexp.MustCompile(`^ins-[A-Za-z0-9]{8,64}$`)
-	regionPattern     = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
+	instanceIDPattern          = regexp.MustCompile(`^ins-[A-Za-z0-9]{8,64}$`)
+	lighthouseIDPattern        = regexp.MustCompile(`^lhins-[A-Za-z0-9]{8,64}$`)
+	cdbIDPattern               = regexp.MustCompile(`^cdb-[A-Za-z0-9]{8,64}$`)
+	cloudbaseEnvironmentIDExpr = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{1,63}$`)
+	regionPattern              = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 )
 
 // Runtime contains side-effecting dependencies used by tool handlers. Keeping
 // them injectable makes tests hermetic and lets clients discover tools before
 // cloud credentials are configured.
 type Runtime struct {
-	LoadCreds      func() (*sdk.Creds, error)
-	CLIPath        string
-	CLITimeout     time.Duration
-	TempDir        string
-	AllowMutations bool
+	LoadCreds       func() (*sdk.Creds, error)
+	CLIPath         string
+	CLITimeout      time.Duration
+	TempDir         string
+	AllowMutations  bool
+	Policy          Policy
+	ReadMaxAttempts int
+	RetryBaseDelay  time.Duration
+	Sleep           func(context.Context, time.Duration) error
+	Audit           AuditSink
+	Now             func() time.Time
 }
 
 func DefaultRuntime() Runtime {
+	var audit AuditSink
+	if path := os.Getenv("CLOUD_SKILLS_AUDIT_LOG"); path != "" {
+		audit = FileAuditSink(path)
+	}
 	return Runtime{
 		LoadCreds: func() (*sdk.Creds, error) {
 			return sdk.LoadCreds(sdk.CloudTencent)
@@ -64,6 +75,24 @@ func DefaultRuntime() Runtime {
 		CLIPath:        tccliPath,
 		CLITimeout:     cliTimeout,
 		AllowMutations: os.Getenv("CLOUD_SKILLS_ALLOW_MUTATIONS") == "1",
+		Policy: Policy{
+			AllowedRegions:   commaSet(os.Getenv("CLOUD_SKILLS_ALLOWED_REGIONS")),
+			AllowedResources: commaSet(os.Getenv("CLOUD_SKILLS_ALLOWED_RESOURCES")),
+		},
+		ReadMaxAttempts: readAttemptsFromEnv(os.Getenv("CLOUD_SKILLS_READ_MAX_ATTEMPTS")),
+		RetryBaseDelay:  200 * time.Millisecond,
+		Sleep: func(ctx context.Context, delay time.Duration) error {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+				return nil
+			}
+		},
+		Audit: audit,
+		Now:   time.Now,
 	}
 }
 
@@ -77,6 +106,24 @@ func (r Runtime) normalized() Runtime {
 	}
 	if r.CLITimeout <= 0 {
 		r.CLITimeout = defaults.CLITimeout
+	}
+	if r.Policy.AllowedRegions == nil && r.Policy.AllowedResources == nil {
+		r.Policy = defaults.Policy
+	}
+	if r.ReadMaxAttempts <= 0 {
+		r.ReadMaxAttempts = defaults.ReadMaxAttempts
+	}
+	if r.RetryBaseDelay <= 0 {
+		r.RetryBaseDelay = defaults.RetryBaseDelay
+	}
+	if r.Sleep == nil {
+		r.Sleep = defaults.Sleep
+	}
+	if r.Audit == nil {
+		r.Audit = defaults.Audit
+	}
+	if r.Now == nil {
+		r.Now = defaults.Now
 	}
 	return r
 }
@@ -96,10 +143,15 @@ func HelpText() string {
 
 Tools (registered via MCP tools/list):
 
+  tencent_cloud_cli_status         — report TCCLI version and local policy
   tencent_cvm_list_instances       — list CVM instances in a region
   tencent_cvm_describe_instance    — describe a single CVM by id
   tencent_cvm_start_instance       — START a CVM (requires --force=true)
   tencent_cvm_stop_instance        — STOP a CVM (requires --force=true)
+  tencent_cvm_reboot_instance      — REBOOT a CVM (requires --force=true)
+  tencent_lighthouse_*             — list/describe/start/stop/reboot Lighthouse
+  tencent_cdb_*                    — list/describe TencentDB for MySQL
+  tencent_cloudbase_*              — list/describe CloudBase environments
 
 Safety:
   Read-only tools are enabled by default. Mutating tools additionally require
@@ -131,8 +183,9 @@ Examples:
 `, serverName, serverVersion, serverName, serverName, serverName)
 }
 
-// registerTools wires the four CVM tools without loading credentials. Each
-// handler resolves credentials only after its arguments and policy gates pass.
+// registerTools wires the stable CVM tools and the additive Phase 1.6 surface
+// without loading credentials. Each handler resolves credentials only after
+// its arguments and policy gates pass.
 func registerTools(srv *server.MCPServer, runtime Runtime) {
 	// 1. list instances
 	srv.AddTool(
@@ -141,6 +194,10 @@ func registerTools(srv *server.MCPServer, runtime Runtime) {
 				"Wraps `tccli cvm DescribeInstances`. Returns the raw JSON response "+
 				"including TotalCount and InstanceSet array."),
 			sdk.RegionArg(""),
+			mcp.WithNumber("offset",
+				mcp.Description("Pagination offset (maps to tccli --Offset)."),
+				mcp.DefaultNumber(0),
+			),
 			mcp.WithNumber("limit",
 				mcp.Description("Max number of instances to return (maps to tccli --Limit). "+
 					"if omitted, the API default applies (typically 20)."),
@@ -218,193 +275,40 @@ func registerTools(srv *server.MCPServer, runtime Runtime) {
 		),
 		makeStopHandler(runtime),
 	)
+
+	registerPhase16Tools(srv, runtime)
 }
 
 // ---- handlers ----
 
 func makeListHandler(runtime Runtime) server.ToolHandlerFunc {
-	runtime = runtime.normalized()
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id := req.GetString("instance_id", "")
-		if id != "" {
-			if err := validateInstanceID(id); err != nil {
-				return sdk.WrapError("cvm.DescribeInstances", err), nil
-			}
-		}
-		limit := req.GetInt("limit", 20)
-		if err := validateLimit(limit); err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		creds, region, err := loadCredsAndRegion(runtime, req.GetString("region", ""))
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		args := []string{"cvm", "DescribeInstances", "--region", region}
-		if id != "" {
-			args = append(args, "--InstanceIds.0", id)
-		}
-		args = append(args, "--Limit", fmt.Sprintf("%d", limit))
-
-		out, err := runTccli(ctx, runtime, creds, args)
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		return mcp.NewToolResultText(string(out)), nil
-	}
+	spec := cvmSpec
+	spec.ToolName = "tencent_cvm_list_instances"
+	spec.Action = "DescribeInstances"
+	return makeResourceListHandler(runtime, spec)
 }
 
 func makeDescribeHandler(runtime Runtime) server.ToolHandlerFunc {
-	runtime = runtime.normalized()
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id, err := req.RequireString("instance_id")
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		if err := validateInstanceID(id); err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		creds, region, err := loadCredsAndRegion(runtime, req.GetString("region", ""))
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		// tccli 3.1.x --InstanceIds.0 syntax is not portable; use --cli-input-json
-		// with a file:// URI and remove the payload as soon as the call returns.
-		payload, err := instancePayload(id)
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		tmp, err := writePayload(runtime.TempDir, payload)
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		defer os.Remove(tmp)
-		args := []string{"cvm", "DescribeInstances", "--region", region, "--cli-input-json", "file://" + tmp}
-		out, err := runTccli(ctx, runtime, creds, args)
-		if err != nil {
-			return sdk.WrapError("cvm.DescribeInstances", err), nil
-		}
-		return mcp.NewToolResultText(string(out)), nil
-	}
+	spec := cvmSpec
+	spec.ToolName = "tencent_cvm_describe_instance"
+	spec.Action = "DescribeInstances"
+	return makeResourceDescribeHandler(runtime, spec)
 }
 
 func makeStartHandler(runtime Runtime) server.ToolHandlerFunc {
-	runtime = runtime.normalized()
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if res, err := sdk.RequireMutationApproval(runtime.AllowMutations, req.GetBool("force", false)); res != nil {
-			return res, err
-		}
-		id, err := req.RequireString("instance_id")
-		if err != nil {
-			return sdk.WrapError("cvm.StartInstances", err), nil
-		}
-		if err := validateInstanceID(id); err != nil {
-			return sdk.WrapError("cvm.StartInstances", err), nil
-		}
-		creds, region, err := loadCredsAndRegion(runtime, req.GetString("region", ""))
-		if err != nil {
-			return sdk.WrapError("cvm.StartInstances", err), nil
-		}
-		payload, err := instancePayload(id)
-		if err != nil {
-			return sdk.WrapError("cvm.StartInstances", err), nil
-		}
-		tmp, err := writePayload(runtime.TempDir, payload)
-		if err != nil {
-			return sdk.WrapError("cvm.StartInstances", err), nil
-		}
-		defer os.Remove(tmp)
-		args := []string{"cvm", "StartInstances", "--region", region, "--cli-input-json", "file://" + tmp}
-		out, err := runTccli(ctx, runtime, creds, args)
-		if err != nil {
-			return sdk.WrapError("cvm.StartInstances", err), nil
-		}
-		return mcp.NewToolResultText(string(out)), nil
-	}
+	spec := cvmSpec
+	spec.ToolName = "tencent_cvm_start_instance"
+	spec.Action = "StartInstances"
+	spec.Mutation = true
+	return makeResourceMutationHandler(runtime, spec)
 }
 
 func makeStopHandler(runtime Runtime) server.ToolHandlerFunc {
-	runtime = runtime.normalized()
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if res, err := sdk.RequireMutationApproval(runtime.AllowMutations, req.GetBool("force", false)); res != nil {
-			return res, err
-		}
-		id, err := req.RequireString("instance_id")
-		if err != nil {
-			return sdk.WrapError("cvm.StopInstances", err), nil
-		}
-		if err := validateInstanceID(id); err != nil {
-			return sdk.WrapError("cvm.StopInstances", err), nil
-		}
-		creds, region, err := loadCredsAndRegion(runtime, req.GetString("region", ""))
-		if err != nil {
-			return sdk.WrapError("cvm.StopInstances", err), nil
-		}
-		payload, err := instancePayload(id)
-		if err != nil {
-			return sdk.WrapError("cvm.StopInstances", err), nil
-		}
-		tmp, err := writePayload(runtime.TempDir, payload)
-		if err != nil {
-			return sdk.WrapError("cvm.StopInstances", err), nil
-		}
-		defer os.Remove(tmp)
-		args := []string{"cvm", "StopInstances", "--region", region, "--cli-input-json", "file://" + tmp}
-		out, err := runTccli(ctx, runtime, creds, args)
-		if err != nil {
-			return sdk.WrapError("cvm.StopInstances", err), nil
-		}
-		return mcp.NewToolResultText(string(out)), nil
-	}
-}
-
-// ---- tccli subprocess plumbing ----
-
-// runTccli executes tccli with creds exported as env vars (the same way
-// scripts/_creds.sh does for the bash fallback), captures stdout+stderr, and
-// returns either (stdout, nil) on success or a *sdk.CLIError on failure.
-//
-// We do NOT use a pipe + `if cmd | head` pattern here — that has the classic
-// "head exits 0, masking the upstream failure" gotcha. Instead we run tccli
-// with combined stdout/stderr captured into a single buffer, then check
-// cmd.Wait() for the real exit code.
-func runTccli(ctx context.Context, runtime Runtime, creds *sdk.Creds, args []string) ([]byte, error) {
-	// tccli reads TENCENTCLOUD_SECRET_ID (with underscores) — verified in scripts/_creds.sh.
-	env := append(os.Environ(),
-		"TENCENTCLOUD_SECRET_ID="+creds.AccessKeyID,
-		"TENCENTCLOUD_SECRET_KEY="+creds.AccessKeySecret,
-	)
-	if creds.SecurityToken != "" {
-		env = append(env, "TENCENTCLOUD_TOKEN="+creds.SecurityToken)
-	}
-	if creds.Region != "" {
-		env = append(env, "TENCENTCLOUD_REGION="+creds.Region)
-	}
-
-	cctx, cancel := context.WithTimeout(ctx, runtime.CLITimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(cctx, runtime.CLIPath, args...)
-	cmd.Env = env
-	// tccli prints JSON to stdout and errors to stderr. CombinedOutput safely
-	// serializes both streams into one buffer; separate copy goroutines writing
-	// to a shared strings.Builder would introduce a data race.
-	out, err := cmd.CombinedOutput()
-
-	if err != nil {
-		// exec.ExitError doesn't carry the captured output, so we wrap with our
-		// own CLIError that includes stdout+stderr for the LLM to read.
-		code := -1
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		}
-		return nil, &sdk.CLIError{
-			CLI:    runtime.CLIPath,
-			Args:   args,
-			Stderr: string(out),
-			Code:   code,
-		}
-	}
-	return out, nil
+	spec := cvmSpec
+	spec.ToolName = "tencent_cvm_stop_instance"
+	spec.Action = "StopInstances"
+	spec.Mutation = true
+	return makeResourceMutationHandler(runtime, spec)
 }
 
 // writePayload writes payload to a 0600 temporary file. Callers remove it with
@@ -425,14 +329,6 @@ func writePayload(tempDir, payload string) (string, error) {
 		return "", fmt.Errorf("close temp: %w", err)
 	}
 	return path, nil
-}
-
-func instancePayload(id string) (string, error) {
-	payload, err := json.Marshal(map[string][]string{"InstanceIds": {id}})
-	if err != nil {
-		return "", fmt.Errorf("encode instance payload: %w", err)
-	}
-	return string(payload), nil
 }
 
 func loadCredsAndRegion(runtime Runtime, requestedRegion string) (*sdk.Creds, string, error) {
@@ -462,8 +358,22 @@ func loadCredsAndRegion(runtime Runtime, requestedRegion string) (*sdk.Creds, st
 }
 
 func validateInstanceID(id string) error {
-	if !instanceIDPattern.MatchString(id) {
-		return fmt.Errorf("invalid CVM instance_id %q: expected ins- followed by 8-64 letters or digits", id)
+	return validateResourceID("cvm", id)
+}
+
+func validateResourceID(kind, id string) error {
+	patterns := map[string]*regexp.Regexp{
+		"cvm":        instanceIDPattern,
+		"lighthouse": lighthouseIDPattern,
+		"cdb":        cdbIDPattern,
+		"cloudbase":  cloudbaseEnvironmentIDExpr,
+	}
+	pattern, ok := patterns[kind]
+	if !ok {
+		return fmt.Errorf("unknown Tencent Cloud resource kind %q", kind)
+	}
+	if !pattern.MatchString(id) {
+		return fmt.Errorf("invalid %s resource id %q", kind, id)
 	}
 	return nil
 }
@@ -476,8 +386,15 @@ func validateRegion(region string) error {
 }
 
 func validateLimit(limit int) error {
-	if limit < 1 || limit > 100 {
-		return fmt.Errorf("invalid limit %d: expected a value between 1 and 100", limit)
+	return validatePagination(0, limit, 100)
+}
+
+func validatePagination(offset, limit, maxLimit int) error {
+	if offset < 0 {
+		return fmt.Errorf("invalid offset %d: expected a non-negative value", offset)
+	}
+	if limit < 1 || limit > maxLimit {
+		return fmt.Errorf("invalid limit %d: expected a value between 1 and %d", limit, maxLimit)
 	}
 	return nil
 }

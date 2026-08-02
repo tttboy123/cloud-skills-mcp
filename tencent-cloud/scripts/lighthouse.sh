@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # lighthouse.sh — 管理 Lighthouse (轻量应用服务器) 实例
 # 用法: lighthouse.sh list|describe|start|stop|reboot|reset-pass [args]
 #

@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source-path=SCRIPTDIR
 # 查 CVM 列表 (ListInstances) — 用修好的 v3 签名
 set -euo pipefail
 
@@ -68,5 +69,3 @@ unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
 echo "📡 ${action} region=${region}"
 echo ""
 curl -sS -XPOST "https://${host}" -d "$payload" -H "@${headers_file}" | python3 -m json.tool
-echo ""
-echo "curl exit: $?"

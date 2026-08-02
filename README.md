@@ -1,157 +1,161 @@
 # cloud-skills-mcp
 
-> 面向 AI Agent 的云管理 Skill + MCP 双形态项目。
+面向 AI Agent 的六云全资源 Skill + MCP 服务。统一 stdio MCP server 通过各云官方通用 API/CLI 入口访问 AWS、Azure、Google Cloud、Alibaba Cloud、Tencent Cloud 和 Baidu AI Cloud 的已公开资源 API；新增服务或资源不需要再增加一个 Go handler。
 
-当前可运行范围是 **Tencent Cloud Phase 1.5**：一个 Go stdio MCP server，提供
-CVM list / describe / start / stop 四个工具。Google Cloud 与 Alibaba Cloud 目录
-目前是上游 Skill 的 meta 入口；AWS、Azure、Baidu BCE 仍在路线图中。
+## 能力模型
 
-## 当前能力
+服务暴露 19 个工具：
 
-| 云 | Skill | MCP server | 状态 |
-|---|---:|---:|---|
-| Tencent Cloud | ✅ | ✅ 4 个 CVM 工具 | Phase 1.5，本地试用 |
-| Alibaba Cloud | ✅ meta | — | 上游 `cinience/alicloud-skills` 入口 |
-| Google Cloud | ✅ meta | — | 上游 `google/skills` 入口 |
-| AWS | — | — | 计划中 |
-| Azure | — | — | 计划中 |
-| Baidu BCE | — | — | 计划中 |
+- `cloud_provider_status`
+- 每个云一个 `<provider>_api_discover`
+- 每个云一个 `<provider>_api_read`
+- 每个云一个 `<provider>_api_mutate`
 
-这里的“双形态”是分层关系：
+provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiducloud`。
 
-- `SKILL.md` 描述触发条件、操作流程与安全规则。
-- MCP server 暴露参数化的原子工具并负责调用云 CLI。
+| 云 | 通用访问层 | 官方身份链 |
+|---|---|---|
+| AWS | AWS CLI 任意 service/operation；Cloud Control 可作为标准资源模型 | Profile/SSO、IAM Role、Web Identity、AKSK/STS |
+| Azure | `az rest` 访问 ARM、Microsoft Graph 和官方 Azure REST endpoint | `az login`、Managed Identity、Workload Identity、Service Principal |
+| Google Cloud | 受限于 `googleapis.com` 的 authenticated REST + Discovery Service | ADC、Workload Identity、Impersonation、gcloud identity |
+| Alibaba Cloud | Alibaba Cloud CLI 任意 product/OpenAPI action | CLI profile、RAM role/STS、AKSK |
+| Tencent Cloud | TCCLI 任意 API 3.0 product/action | TCCLI profile、CAM role/STS、SecretId/SecretKey |
+| Baidu AI Cloud | 受限于 `baidubce.com` 的 BCE signed HTTPS | BCE AK/SK、IAM/STS temporary AK/SK/session token |
 
-当前 MCP transport 只有 JSON-RPC over stdio。
+原有 `tencent-cloud-mcp` 15 个细粒度工具继续保留，作为兼容入口。
 
-## 安全模型
+## 安全边界
 
-Tencent MCP 默认是 read-only 模式：
+- 默认只读。read 工具只允许保守分类的 CLI 查询操作或 REST `GET`/`HEAD`/`OPTIONS`。
+- 写操作必须同时满足宿主已取得人类批准、server 环境设置 `CLOUD_SKILLS_ALLOW_MUTATIONS=1`、单次调用包含 `force=true`。
+- secret/password/token/credential/access-key 类操作还要求 `CLOUD_SKILLS_ALLOW_SENSITIVE=1`。
+- CLI executable 固定且不经过 shell；service、operation、参数、文件引用和 endpoint 均先校验。
+- REST 只允许官方 HTTPS 域名、443 端口且禁止 redirect；调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。
+- 本地文件只允许位于 `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` 下，且会解析 symlink 后再判断。
+- CLI 和 HTTP 响应均有大小上限；结果会做 credential-field redaction。
+- `CLOUD_SKILLS_AUDIT_LOG` 写入 mode `0600` JSONL。审计不记录请求 body、headers、response 或 URL query；写操作的预执行审计失败时 fail closed。
+- MCP server 不创建、不更新、不导出凭证。凭证只来自各云官方身份链或 operator 注入的 AKSK/IAM 环境。
 
-- `list` / `describe` 可调用，MCP annotation 正确标为 read-only。
-- `start` / `stop` 默认拒绝执行。
-- 写操作需要服务器进程显式设置 `CLOUD_SKILLS_ALLOW_MUTATIONS=1`，并且每次请求
-  仍须包含 `force=true`。
-- `force=true` 不是人类批准证明。Codex、Claude、Cursor 或 Loom 等宿主仍必须在
-  调用写工具前取得用户明确批准。
-- 实例 ID、region 和分页 limit 会在启动 `tccli` 前校验。
-- 凭证错误会做字段级 redaction；RequestId 等排障标识会保留。
-
-建议使用最小权限 CAM 子账号，并将只读 MCP 与获批维护窗口分开运行。
+`force=true` 和环境开关只是 server 技术门，不能替代 MCP 宿主的人类批准。
 
 ## 安装
 
-要求：Go 1.25.12+、`tccli`，以及 macOS（如果使用 Keychain 凭证）。仓库的
-`toolchain` 指令使用已修复 `GO-2026-5856` 的 Go 1.26.5。
+要求 Go 1.25.12+。按需安装官方 CLI：AWS CLI、Azure CLI、Google Cloud CLI、Alibaba Cloud CLI、TCCLI。百度 BCE REST adapter 不依赖额外 CLI。
 
 ```bash
 git clone https://github.com/tttboy123/cloud-skills-mcp.git
 cd cloud-skills-mcp
 
-# 只安装已实现的 Tencent MCP binary；不改任何客户端配置
-./install.sh --bin-dir "$HOME/.local/bin"
-
-# 可选：同时安装当前三个 skill/meta-skill
 ./install.sh \
   --bin-dir "$HOME/.local/bin" \
   --skills-dir "$HOME/.codex/skills"
 ```
 
-安装器不会修改 MCP 配置、云资源或凭证。已有 Skill 目录默认不会覆盖；只有显式
-传入 `--force` 才会替换。
+安装器会构建 `cloud-skills-mcp` 和兼容的 `tencent-cloud-mcp`，复制六份 Skill；不会修改 MCP 客户端配置、云凭证或云资源。已有 Skill 默认不覆盖，只有显式传 `--force` 才替换。
 
-也可以只在仓库内构建：
+只构建仓库内二进制：
 
 ```bash
 ./build-mcp-servers.sh
-# 输出: ./bin/tencent-cloud-mcp
 ```
 
-## 配置腾讯云凭证
+## 注册统一 MCP server
+
+Codex CLI：
 
 ```bash
-bash tencent-cloud/scripts/setup-keychain.sh
+codex mcp add cloud-skills -- "$HOME/.local/bin/cloud-skills-mcp"
 ```
 
-设置脚本会先用只读 `DescribeInstances` 验证输入，验证失败不会修改 Keychain。
-MCP 的凭证优先级为：
-
-1. macOS Keychain：service=`tencent-cloud`
-2. `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` 环境变量
-3. `~/.tencentcloud/credentials`
-
-## 注册 MCP server
-
-### Codex CLI / ECC
-
-```bash
-codex mcp add tencent-cloud -- "$HOME/.local/bin/tencent-cloud-mcp"
-```
-
-保持 `CLOUD_SKILLS_ALLOW_MUTATIONS` 未设置，即为默认只读模式。不要把长期写权限环境
-变量写进共享基线；需要维护时应在受控会话中临时启用，并保留宿主审批。
-
-### Claude Desktop / 兼容客户端
+兼容 stdio MCP 的其他宿主：
 
 ```json
 {
   "mcpServers": {
-    "tencent-cloud": {
-      "command": "/absolute/path/to/tencent-cloud-mcp",
+    "cloud-skills": {
+      "command": "/absolute/path/to/cloud-skills-mcp",
       "env": {}
     }
   }
 }
 ```
 
+把凭证/IAM 环境只注入 server 进程，不要放在 MCP tool arguments 或 prompt 中。
+
+## 凭证入口
+
+```text
+AWS       AWS_PROFILE / AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE /
+          AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN)
+Azure     az login / managed identity /
+          AZURE_TENANT_ID + AZURE_CLIENT_ID + AZURE_CLIENT_SECRET
+GCP       ADC / GOOGLE_APPLICATION_CREDENTIALS / gcloud auth
+Alibaba   aliyun profile / ALIBABACLOUD_ACCESS_KEY_ID + ALIBABACLOUD_ACCESS_KEY_SECRET
+Tencent   tccli profile / TENCENTCLOUD_SECRET_ID + TENCENTCLOUD_SECRET_KEY
+Baidu     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY (+ BCE_SESSION_TOKEN)
+```
+
+优先使用最小权限 IAM/RAM/CAM role 或临时凭证；不要给日常只读 server 长期写权限。
+
+## MCP 调用示例
+
+AWS 查询：
+
+```json
+{"name":"aws_api_read","arguments":{"service":"ec2","operation":"describe-instances","region":"us-east-1","parameters":{"MaxResults":20}}}
+```
+
+Azure 查询：
+
+```json
+{"name":"azure_api_read","arguments":{"method":"GET","url":"https://management.azure.com/subscriptions/<id>/resources?api-version=2021-04-01","subscription":"<id>"}}
+```
+
+GCP 查询：
+
+```json
+{"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
+```
+
+Alibaba/Tencent 使用 `service` + `operation` + `parameters`；Baidu 使用 `method` + 官方 `baidubce.com` URL。六份 Skill 中有完整路由规则和官方文档入口。
+
 ## 验证
+
+无需凭证的 hermetic gate：
 
 ```bash
 go test -race ./...
 go vet ./...
-go build -trimpath -o /tmp/tencent-cloud-mcp ./cmd/tencent-cloud-mcp
-/tmp/tencent-cloud-mcp --help
+go build -trimpath ./cmd/cloud-skills-mcp ./cmd/tencent-cloud-mcp
+./scripts/ci/protocol-smoke.sh ./bin/cloud-skills-mcp
+./scripts/ci/install-smoke.sh
 ```
 
-工具发现不需要云凭证：
+真实云只读验收必须由 operator 显式打开，并只从进程环境读取凭证：
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  | "$HOME/.local/bin/tencent-cloud-mcp"
+CLOUD_SKILLS_LIVE_TEST=1 go test ./internal/mcp/cloud -run TestLiveSixCloudReadOnly -v
 ```
 
-Live 云调用不属于默认测试。只有显式设置 `CLOUD_SKILLS_LIVE_TEST=1` 时，测试才会读取
-真实 Keychain。
+GCP live 验收需要 `CLOUD_SKILLS_LIVE_GCP_PROJECT`。各云可用 `CLOUD_SKILLS_LIVE_PROVIDERS` 选择子集。live gate 永不调用 mutate 工具。
 
 ## 目录
 
 ```text
-cloud-skills-mcp/
-├── cmd/tencent-cloud-mcp/       # 可执行程序入口
-├── internal/mcp/sdk/            # 凭证、错误、工具公共代码
-├── internal/mcp/tencent/        # Tencent MCP server 与测试
-├── tencent-cloud/               # Tencent Skill + bash fallback
-├── alicloud/                    # Alibaba Cloud meta-skill
-├── google-cloud/                # Google Cloud meta-skill
-├── aws/ azure/ baiducloud/      # 路线图占位
-├── install.sh                   # 安全、可选路径安装器
-├── build-mcp-servers.sh         # 构建当前已实现 server
-└── docs/                        # 设计与阶段交付记录
+cmd/cloud-skills-mcp/       # 六云统一 stdio server
+cmd/tencent-cloud-mcp/     # Tencent 15 工具兼容入口
+internal/mcp/cloud/        # 通用 contract、policy 与六云 adapters
+internal/mcp/tencent/      # Tencent 细粒度兼容 server
+aws/ azure/ google-cloud/ alicloud/ tencent-cloud/ baiducloud/
+                            # 六份 Skills + 官方文档映射
+docs/six-cloud-full-resource-contract.md
+scripts/ci/                # 协议、安装与安全验证
 ```
 
-## 路线图
+## 官方文档
 
-- [x] Phase 1：Tencent CVM MCP PoC
-- [x] Phase 1.5：构建入口、惰性凭证、默认只读门、输入校验、hermetic tests、CI
-- [ ] Phase 2：逐云设计原生认证模型，再扩展核心 read-only 工具
-- [ ] Phase 3：经过独立安全审查后增加更多写操作与 Loom adapter
+每份 Skill 的 `references/official-docs.md` 保存对应云厂商的认证、CLI/REST、资源发现和 API reference 链接。通用访问层的完成定义、安全合同与真实验收门见 [docs/six-cloud-full-resource-contract.md](docs/six-cloud-full-resource-contract.md)。
 
-不会在 Phase 2 直接复制统一 `AccessKeyID/AccessKeySecret` 抽象：GCP ADC、Azure
-tenant/subscription 等认证模型需要分别设计。
+## License
 
-## 上游与许可证
-
-- 本仓库：MIT
-- [`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go)：MIT
-- [`google/skills`](https://github.com/google/skills)：Apache-2.0
-- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills)：MIT
+MIT

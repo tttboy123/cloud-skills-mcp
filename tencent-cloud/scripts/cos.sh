@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # cos.sh — 管理 COS (对象存储) 桶和文件
 # 用法: cos.sh list|describe|put|get|rm [args]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_creds.sh
 source "${SCRIPT_DIR}/_creds.sh"
 
 REGION="${TENCENTCLOUD_REGION:-ap-shanghai}"
