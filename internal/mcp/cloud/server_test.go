@@ -390,9 +390,11 @@ func TestInvocationBoundaryAllowsOfficialAzureAndBaiduDataPlaneEndpoints(t *test
 
 func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testing.T) {
 	requests := []Invocation{
-		{Provider: ProviderAlicloud, AuthScheme: "sls", Service: "sls", Operation: "ListLogstores", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores"},
+		{Provider: ProviderAlicloud, AuthScheme: "sls", Service: "sls", Operation: "ListLogstores", APIVersion: "0.6.0", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores"},
 		{Provider: ProviderAlicloud, AuthScheme: "sls4", Service: "sls", Operation: "ListLogstores", Region: "cn-hangzhou", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores"},
 		{Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "ListQueues", Method: "GET", URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues"},
+		{Provider: ProviderAlicloud, AuthScheme: "ots", Service: "ots", Operation: "ListTable", Method: "POST", URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable"},
+		{Provider: ProviderAlicloud, AuthScheme: "ots4", Service: "ots", Operation: "ListTable", Region: "cn-hangzhou", Method: "POST", URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -402,6 +404,14 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	requests[1].Region = ""
 	if err := validateInvocation(requests[1], nil); err == nil || !strings.Contains(err.Error(), "region") {
 		t.Fatalf("SLS4 missing region error=%v", err)
+	}
+	requests[4].Region = ""
+	if err := validateInvocation(requests[4], nil); err == nil || !strings.Contains(err.Error(), "region") {
+		t.Fatalf("OTS4 missing region error=%v", err)
+	}
+	requests[3].Method = "GET"
+	if err := validateInvocation(requests[3], nil); err == nil || !strings.Contains(err.Error(), "POST") {
+		t.Fatalf("OTS non-POST error=%v", err)
 	}
 }
 

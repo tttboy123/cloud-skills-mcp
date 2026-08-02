@@ -36,6 +36,8 @@ const (
 	authSchemeAlibabaSLS     = "sls"
 	authSchemeAlibabaSLSV4   = "sls4"
 	authSchemeAlibabaMNS     = "mns"
+	authSchemeAlibabaOTS     = "ots"
+	authSchemeAlibabaOTSV4   = "ots4"
 	authSchemeTencentTC3     = "tc3"
 	authSchemeTencentCOS     = "cos"
 	defaultHTTPClientTimeout = 60 * time.Second
@@ -311,7 +313,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+oss4+sls+sls4+mns",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -324,13 +326,14 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
+		"ots_signature":  "https://github.com/aliyun/aliyun-tablestore-go-sdk/blob/master/tablestore/ots_header.go",
 	})
 }
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, or mns")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -370,6 +373,14 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeAlibabaMNS:
 		if err := signAlibabaMNS(request, credentials, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaOTS:
+		if err := signAlibabaOTSV2(request, credentials, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaOTSV4:
+		if err := signAlibabaOTSV4(request, credentials, invocation.Region, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	}
@@ -813,6 +824,131 @@ func signAlibabaMNS(request *http.Request, credentials AlibabaCredentials, apiVe
 	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
 	request.Header.Set("Authorization", "MNS "+credentials.AccessKeyID+":"+signature)
 	return nil
+}
+
+func signAlibabaOTSV2(request *http.Request, credentials AlibabaCredentials, apiVersion string, now time.Time) error {
+	if err := prepareAlibabaOTSHeaders(request, credentials, apiVersion, now); err != nil {
+		return err
+	}
+	stringToSign, err := alibabaOTSStringToSign(request, false)
+	if err != nil {
+		return err
+	}
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("X-Ots-Signature", signature)
+	return nil
+}
+
+func signAlibabaOTSV4(request *http.Request, credentials AlibabaCredentials, region, apiVersion string, now time.Time) error {
+	if !identifierPattern.MatchString(region) {
+		return fmt.Errorf("Alibaba Cloud OTS4 requires a valid region")
+	}
+	if err := prepareAlibabaOTSHeaders(request, credentials, apiVersion, now); err != nil {
+		return err
+	}
+	signingDate := request.Header.Get("X-Ots-Signdate")
+	if signingDate == "" {
+		requestDate := request.Header.Get("X-Ots-Date")
+		if len(requestDate) >= 10 {
+			signingDate = strings.ReplaceAll(requestDate[:10], "-", "")
+		} else {
+			signingDate = now.UTC().Format("20060102")
+		}
+		request.Header.Set("X-Ots-Signdate", signingDate)
+	}
+	request.Header.Set("X-Ots-Signregion", strings.ToLower(region))
+	stringToSign, err := alibabaOTSStringToSign(request, true)
+	if err != nil {
+		return err
+	}
+	dateKey := hmacBytes(sha256.New, []byte("aliyun_v4"+credentials.AccessKeySecret), []byte(signingDate))
+	regionKey := hmacBytes(sha256.New, dateKey, []byte(strings.ToLower(region)))
+	serviceKey := hmacBytes(sha256.New, regionKey, []byte("ots"))
+	finalKey := hmacBytes(sha256.New, serviceKey, []byte("aliyun_v4_request"))
+	signingAccessKey := base64.StdEncoding.EncodeToString(finalKey)
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha256.New, []byte(signingAccessKey), []byte(stringToSign+"ots")))
+	request.Header.Set("X-Ots-Signaturev4", signature)
+	return nil
+}
+
+func prepareAlibabaOTSHeaders(request *http.Request, credentials AlibabaCredentials, apiVersion string, now time.Time) error {
+	if apiVersion == "" {
+		apiVersion = "2015-12-31"
+	}
+	if request.Header.Get("X-Ots-Date") == "" {
+		request.Header.Set("X-Ots-Date", now.UTC().Format("2006-01-02T15:04:05.123Z"))
+	}
+	request.Header.Set("X-Ots-Apiversion", apiVersion)
+	request.Header.Set("X-Ots-Accesskeyid", credentials.AccessKeyID)
+	host := strings.ToLower(request.URL.Hostname())
+	if request.Header.Get("X-Ots-Instancename") == "" {
+		instance, _, ok := strings.Cut(host, ".")
+		if !ok || !endpointLabelPattern.MatchString(instance) {
+			return fmt.Errorf("Alibaba Cloud OTS endpoint must identify an instance in the first DNS label")
+		}
+		request.Header.Set("X-Ots-Instancename", instance)
+	}
+	bodyMD5, err := rawRequestBodyMD5(request)
+	if err != nil {
+		return fmt.Errorf("hash Alibaba OTS request body: %w", err)
+	}
+	request.Header.Set("X-Ots-Contentmd5", bodyMD5)
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Ots-Ststoken", credentials.SecurityToken)
+	}
+	return nil
+}
+
+var alibabaOTSSignedHeaders = []string{
+	"x-ots-accesskeyid", "x-ots-admin-target-userid", "x-ots-admin-task-type", "x-ots-apiversion",
+	"x-ots-charge-for-admin", "x-ots-contentmd5", "x-ots-date", "x-ots-instancename", "x-ots-issecuretransport",
+	"x-ots-playeraccountid", "x-ots-request-compress-size", "x-ots-request-compress-type", "x-ots-request-priority",
+	"x-ots-request-search-tag", "x-ots-request-tag", "x-ots-response-compress-type", "x-ots-sdk-traceid",
+	"x-ots-signdate", "x-ots-signregion", "x-ots-sourceip", "x-ots-ststoken", "x-ots-tunnel-type",
+}
+
+func alibabaOTSStringToSign(request *http.Request, v4 bool) (string, error) {
+	required := []string{"x-ots-date", "x-ots-apiversion", "x-ots-accesskeyid", "x-ots-contentmd5", "x-ots-instancename"}
+	if v4 {
+		required = append(required, "x-ots-signregion", "x-ots-signdate")
+	}
+	for _, name := range required {
+		if request.Header.Get(name) == "" {
+			return "", fmt.Errorf("Alibaba Cloud OTS signing requires %s", name)
+		}
+	}
+	var builder strings.Builder
+	builder.WriteString(canonicalURI(request.URL))
+	builder.WriteByte('\n')
+	builder.WriteString(request.Method)
+	builder.WriteString("\n\n")
+	for _, name := range alibabaOTSSignedHeaders {
+		if value := request.Header.Get(name); value != "" {
+			builder.WriteString(name)
+			builder.WriteByte(':')
+			builder.WriteString(strings.TrimSpace(value))
+			builder.WriteByte('\n')
+		}
+	}
+	return builder.String(), nil
+}
+
+func rawRequestBodyMD5(request *http.Request) (string, error) {
+	digest := md5.New()
+	if request.Body != nil && request.Body != http.NoBody {
+		if request.GetBody == nil {
+			return "", fmt.Errorf("signed HTTP body is not replayable")
+		}
+		body, err := request.GetBody()
+		if err != nil {
+			return "", err
+		}
+		defer body.Close()
+		if _, err := io.Copy(digest, body); err != nil {
+			return "", err
+		}
+	}
+	return base64.StdEncoding.EncodeToString(digest.Sum(nil)), nil
 }
 
 func requestBodyMD5(request *http.Request, mnsEncoding bool) (string, bool, error) {

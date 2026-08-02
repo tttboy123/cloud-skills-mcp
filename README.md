@@ -20,7 +20,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` HTTPS / Discovery Service | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
-| Alibaba Cloud | ACS3 OpenAPI；OSS4；SLS v1/v4；MNS 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
+| Alibaba Cloud | ACS3；OSS4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 HTTPS；COS 数据面 COS signed HTTPS | SecretId/SecretKey 或 CAM/STS 临时三元组 |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2 | BCE AK/SK、IAM/STS temporary AK/SK/session token |
 
@@ -148,7 +148,7 @@ GCP 查询：
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
 
-Alibaba ACS3 使用 `auth_scheme=acs3`、`api_version`、`operation` 和精确 URL；OSS 使用 `oss4`，SLS 使用 `sls|sls4`，MNS 使用 `mns`。Tencent API 3.0 使用 `auth_scheme=tc3`、`api_version`、`operation` 和精确 URL；COS 使用 `auth_scheme=cos`。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；对象下载、日志导出和备份响应使用 `response_file`，文件内容不会进入模型上下文。
+Alibaba ACS3 使用 `auth_scheme=acs3`、`api_version`、`operation` 和精确 URL；OSS 使用 `oss4`，SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore protobuf 数据面使用 `ots|ots4`。Tencent API 3.0 使用 `auth_scheme=tc3`、`api_version`、`operation` 和精确 URL；COS 使用 `auth_scheme=cos`。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；对象下载、日志导出和备份响应使用 `response_file`，文件内容不会进入模型上下文。
 
 Google Cloud Storage 分段下载示例（其他五云同样使用各自官方 GetObject/Get Blob URL 与 `Range` header）：
 

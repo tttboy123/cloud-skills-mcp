@@ -1000,6 +1000,79 @@ func TestAlibabaProductSpecificSignerRejectsUnreplayableBodyAndInvalidSLS4Date(t
 	}
 }
 
+func TestAlibabaOTSV2MatchesOfficialSDKVector(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "/ListTable", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("x-ots-date", "2024-08-08T03:22:47.8123Z")
+	request.Header.Set("x-ots-instancename", "credentials_test")
+	request.Header.Set("x-ots-contentmd5", "1B2M2Y8AsgTpgAmY7PhCfg==")
+	if err := signAlibabaOTSV2(request, AlibabaCredentials{
+		AccessKeyID: "credentials_test_id", AccessKeySecret: "credentials_test_secret",
+	}, "2015-12-31", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("x-ots-signature"), "A940TpusldxW4mUEOFbhrtwctoU="; got != want {
+		t.Fatalf("OTS V2 signature=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaOTSV4MatchesOfficialSDKVector(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "/ListTable", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("x-ots-date", "2024-08-08T03:22:47.8123Z")
+	request.Header.Set("x-ots-instancename", "credentials_test")
+	request.Header.Set("x-ots-contentmd5", "1B2M2Y8AsgTpgAmY7PhCfg==")
+	if err := signAlibabaOTSV4(request, AlibabaCredentials{
+		AccessKeyID: "credentials_test_id", AccessKeySecret: "credentials_test_secret",
+	}, "cn-hangzhou", "2015-12-31", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("x-ots-signaturev4"), "mUSbIuIfN/JuO4/mCOaQZ72JHDc8z6gjPdBpPyAd/ac="; got != want {
+		t.Fatalf("OTS V4 signature=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaOTSAdapterSignsProtobufHTTPWithInternalSTS(t *testing.T) {
+	for _, scheme := range []string{"ots", "ots4"} {
+		t.Run(scheme, func(t *testing.T) {
+			doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method != http.MethodPost || request.Header.Get("x-ots-instancename") != "demo" {
+					t.Fatalf("request=%s %s headers=%v", request.Method, request.URL, request.Header)
+				}
+				if request.Header.Get("x-ots-ststoken") != "ram-token" {
+					t.Fatalf("STS token missing")
+				}
+				signatureHeader := "x-ots-signature"
+				if scheme == "ots4" {
+					signatureHeader = "x-ots-signaturev4"
+				}
+				if request.Header.Get(signatureHeader) == "" {
+					t.Fatalf("%s missing", signatureHeader)
+				}
+				return httpResponse(200, "protobuf-response"), nil
+			})
+			adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+				Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{
+					AccessKeyID: "ak", AccessKeySecret: "secret", SecurityToken: "ram-token",
+				}},
+				HTTP: doer,
+				Now:  func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+			})
+			_, err := adapter.Invoke(t.Context(), Invocation{
+				Provider: ProviderAlicloud, AuthScheme: scheme, Service: "ots", Operation: "ListTable",
+				Region: "cn-hangzhou", Method: http.MethodPost, URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable", Body: "protobuf-request",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestTencentTC3AdapterMatchesOfficialSignatureExample(t *testing.T) {
 	now := time.Unix(1551113065, 0).UTC()
 	doer := doerFunc(func(request *http.Request) (*http.Response, error) {

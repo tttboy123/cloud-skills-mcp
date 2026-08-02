@@ -14,6 +14,7 @@ import (
 )
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+var apiVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var azureApplicationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:/\.default)?$`)
 var endpointLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var awsRegionSetEntryPattern = regexp.MustCompile(`^(?:\*|[a-z0-9][a-z0-9*-]{0,62})$`)
@@ -106,10 +107,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, or mns")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, mns, ots, or ots4")
 		}
-		if scheme == authSchemeAlibabaACS3 && !identifierPattern.MatchString(request.APIVersion) {
+		if scheme == authSchemeAlibabaACS3 && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud ACS3 requires a valid api_version")
 		}
 		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
@@ -118,7 +119,13 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if scheme == authSchemeAlibabaSLSV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("Alibaba Cloud SLS4 requires a valid region")
 		}
-		if scheme != authSchemeAlibabaACS3 && request.APIVersion != "" && !identifierPattern.MatchString(request.APIVersion) {
+		if scheme == authSchemeAlibabaOTSV4 && !identifierPattern.MatchString(request.Region) {
+			return fmt.Errorf("Alibaba Cloud OTS4 requires a valid region")
+		}
+		if (scheme == authSchemeAlibabaOTS || scheme == authSchemeAlibabaOTSV4) && !strings.EqualFold(request.Method, http.MethodPost) {
+			return fmt.Errorf("Alibaba Cloud OTS requires method POST")
+		}
+		if scheme != authSchemeAlibabaACS3 && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud requires a valid api_version when provided")
 		}
 	case ProviderTencent:
@@ -270,6 +277,8 @@ func isProtectedHeader(name string) bool {
 		"x-oss-date", "x-oss-content-sha256", "x-oss-security-token",
 		"x-log-apiversion", "x-log-signaturemethod", "x-log-date", "x-log-content-sha256",
 		"x-mns-version", "x-mns-date", "security-token",
+		"x-ots-date", "x-ots-apiversion", "x-ots-accesskeyid", "x-ots-contentmd5", "x-ots-instancename",
+		"x-ots-ststoken", "x-ots-signature", "x-ots-signaturev4", "x-ots-signregion", "x-ots-signdate",
 		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",
 		"x-cos-security-token", "x-bce-date", "x-bce-security-token", "x-goog-user-project":
 		return true
@@ -518,7 +527,7 @@ func isCredentialQueryParameter(name string) bool {
 	case "access_token", "oauth_token", "authorization", "sig", "signature",
 		"x-amz-credential", "x-amz-signature", "x-amz-security-token",
 		"x-goog-signature", "x-bce-security-token", "sharedaccesssignature",
-		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token", "security-token":
+		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token", "security-token", "x-ots-ststoken":
 		return true
 	default:
 		return false
