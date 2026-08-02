@@ -23,8 +23,8 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
 - `region_set`: required only for SigV4a, as a comma-separated official region set such as `us-east-1,us-west-*`. It is not a token or credential.
-- `payload_mode`: use `aws-chunked` only for SigV4 S3 `PutObject` or `UploadPart` streaming bodies. The server creates the 64 KiB chunk framing and chained signatures.
-- `payload_mode=aws-chunked-trailer`: for SigV4 S3 streaming uploads with a signed trailing checksum. Set `checksum_algorithm` to `crc32`, `crc32c`, `crc64nvme`, `sha1`, or `sha256`; the server computes the value and callers must not supply checksum or signing headers.
+- `payload_mode`: use `aws-chunked` only for SigV4 or SigV4a S3 `PutObject` or `UploadPart` streaming bodies. The server creates the 64 KiB chunk framing and HMAC or fixed-length DER-ECDSA chained signatures.
+- `payload_mode=aws-chunked-trailer`: for SigV4 or SigV4a S3 streaming uploads with a signed trailing checksum. Set `checksum_algorithm` to `crc32`, `crc32c`, `crc64nvme`, `sha1`, or `sha256`; the server computes the value and callers must not supply checksum or signing headers.
 - `payload_mode=aws-eventstream`: for a finite SigV4 HTTP request whose `body_file` contains consecutive CRC-valid unsigned Amazon EventStream frames. The server validates the 24 MiB per-frame bound, adds signing envelopes and a terminal frame. This is not an interactive WebSocket transport.
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
@@ -36,6 +36,8 @@ Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="descr
 Example streaming upload: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-chunked", service="s3", operation="put-object", region="us-east-1", method="PUT", url="https://bucket.s3.us-east-1.amazonaws.com/object", body_file="/approved/uploads/object.bin", force=true)`.
 
 Example signed checksum upload: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-chunked-trailer", checksum_algorithm="crc64nvme", service="s3", operation="put-object", region="us-east-1", method="PUT", url="https://bucket.s3.us-east-1.amazonaws.com/object", body_file="/approved/uploads/object.bin", force=true)`.
+
+For an official multi-region S3 endpoint, use either streaming example with `auth_scheme="sigv4a"`, its exact multi-region URL, and the documented `region_set` instead of `region`.
 
 Example finite event stream: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-eventstream", service="transcribestreaming", operation="start-stream-transcription", region="us-east-1", method="POST", url="https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", body_file="/approved/streams/audio.events", response_file="/approved/streams/transcript.events", force=true)`.
 

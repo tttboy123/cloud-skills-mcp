@@ -153,23 +153,33 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 	var trailerEncodedLength int64
 	var trailerChecksum *awsTrailerChecksum
 	if payloadMode == awsPayloadModeChunked {
-		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
-			return InvocationResult{}, fmt.Errorf("aws-chunked requires AWS SigV4, service s3, and method PUT")
+		if !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
+			return InvocationResult{}, fmt.Errorf("aws-chunked requires service s3 and method PUT")
 		}
-		if err := configureAWSSigV4ChunkedRequest(request, defaultAWSChunkSize); err != nil {
-			return InvocationResult{}, err
+		if scheme == authSchemeAWSSigV4 {
+			err = configureAWSSigV4ChunkedRequest(request, defaultAWSChunkSize)
+			payloadHash = awsSigV4StreamingPayload
+		} else {
+			err = configureAWSSigV4aChunkedRequest(request, defaultAWSChunkSize)
+			payloadHash = awsSigV4aStreamingPayload
 		}
-		payloadHash = awsSigV4StreamingPayload
-	} else if payloadMode == awsPayloadModeChunkedTrailer {
-		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
-			return InvocationResult{}, fmt.Errorf("aws-chunked-trailer requires AWS SigV4, service s3, and method PUT")
-		}
-		var err error
-		trailerEncodedLength, trailerChecksum, err = configureAWSSigV4ChunkedTrailerRequest(request, defaultAWSChunkSize, invocation.ChecksumAlgorithm)
 		if err != nil {
 			return InvocationResult{}, err
 		}
-		payloadHash = awsSigV4StreamingPayloadTrailer
+	} else if payloadMode == awsPayloadModeChunkedTrailer {
+		if !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
+			return InvocationResult{}, fmt.Errorf("aws-chunked-trailer requires service s3 and method PUT")
+		}
+		if scheme == authSchemeAWSSigV4 {
+			trailerEncodedLength, trailerChecksum, err = configureAWSSigV4ChunkedTrailerRequest(request, defaultAWSChunkSize, invocation.ChecksumAlgorithm)
+			payloadHash = awsSigV4StreamingPayloadTrailer
+		} else {
+			trailerEncodedLength, trailerChecksum, err = configureAWSSigV4aChunkedTrailerRequest(request, defaultAWSChunkSize, invocation.ChecksumAlgorithm)
+			payloadHash = awsSigV4aStreamingPayloadTrailer
+		}
+		if err != nil {
+			return InvocationResult{}, err
+		}
 	} else if payloadMode == awsPayloadModeEventStream {
 		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Method, http.MethodPost) {
 			return InvocationResult{}, fmt.Errorf("aws-eventstream requires AWS SigV4 and method POST")
@@ -215,8 +225,21 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			}
 			request.Body = newAWSSigV4EventStreamReader(ctx, request.Body, awsCredentials, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now, seed)
 		}
-	} else if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, signingTime); err != nil {
-		return InvocationResult{}, fmt.Errorf("sign AWS SigV4a request: %w", err)
+	} else {
+		if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, signingTime); err != nil {
+			return InvocationResult{}, fmt.Errorf("sign AWS SigV4a request: %w", err)
+		}
+		if payloadMode == awsPayloadModeChunked || payloadMode == awsPayloadModeChunkedTrailer {
+			seed, err := awsSigV4aSeedSignature(request.Header.Get("Authorization"))
+			if err != nil {
+				return InvocationResult{}, err
+			}
+			request.Body, err = newAWSSigV4aChunkedReader(request.Body, decodedContentLength, credentials, "s3", signingTime, seed, defaultAWSChunkSize, trailerChecksum)
+			if err != nil {
+				return InvocationResult{}, err
+			}
+			request.GetBody = nil
+		}
 	}
 	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, invocation, "AWS API")
 }

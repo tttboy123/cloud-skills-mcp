@@ -124,3 +124,59 @@ func signAWSSigV4a(request *http.Request, payloadHash string, credentials AWSCre
 	request.Header.Set("Authorization", awsSigV4aAlgorithm+" Credential="+credentials.AccessKeyID+"/"+scope+", SignedHeaders="+signedHeaders+", Signature="+hex.EncodeToString(signature))
 	return stringToSign, nil
 }
+
+func awsSigV4aChunkSignature(privateKey *ecdsa.PrivateKey, previousSignature, amzDate, scope string, chunk []byte) (string, error) {
+	stringToSign := strings.Join([]string{
+		awsSigV4aChunkAlgorithm,
+		amzDate,
+		scope,
+		strings.TrimRight(previousSignature, "*"),
+		sha256Hex(nil),
+		sha256Hex(chunk),
+	}, "\n")
+	return signAWSSigV4aStreamingString(privateKey, stringToSign)
+}
+
+func awsSigV4aTrailerSignature(privateKey *ecdsa.PrivateKey, previousSignature, amzDate, scope, checksumLine string) (string, error) {
+	stringToSign := strings.Join([]string{
+		awsSigV4aTrailerAlgorithm,
+		amzDate,
+		scope,
+		strings.TrimRight(previousSignature, "*"),
+		sha256Hex([]byte(checksumLine)),
+	}, "\n")
+	return signAWSSigV4aStreamingString(privateKey, stringToSign)
+}
+
+func signAWSSigV4aStreamingString(privateKey *ecdsa.PrivateKey, stringToSign string) (string, error) {
+	if privateKey == nil {
+		return "", fmt.Errorf("AWS SigV4a streaming private key is required")
+	}
+	digest := sha256.Sum256([]byte(stringToSign))
+	signature, err := ecdsa.SignASN1(rand.Reader, privateKey, digest[:])
+	if err != nil {
+		return "", fmt.Errorf("ECDSA sign streaming payload: %w", err)
+	}
+	encoded := hex.EncodeToString(signature)
+	if len(encoded) > awsSigV4aStreamingSignatureLength {
+		return "", fmt.Errorf("AWS SigV4a streaming signature exceeds fixed wire length")
+	}
+	return encoded + strings.Repeat("*", awsSigV4aStreamingSignatureLength-len(encoded)), nil
+}
+
+func awsSigV4aSeedSignature(authorization string) (string, error) {
+	const marker = "Signature="
+	index := strings.LastIndex(authorization, marker)
+	if index < 0 {
+		return "", fmt.Errorf("AWS SigV4a authorization is missing its seed signature")
+	}
+	value := strings.TrimSpace(authorization[index+len(marker):])
+	if separator := strings.IndexAny(value, ", "); separator >= 0 {
+		value = value[:separator]
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) == 0 || len(decoded) > awsSigV4aStreamingSignatureLength/2 {
+		return "", fmt.Errorf("AWS SigV4a authorization has an invalid seed signature")
+	}
+	return value, nil
+}

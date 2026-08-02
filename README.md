@@ -116,7 +116,7 @@ AWS S3 Multi-Region Access Point 使用 `auth_scheme=sigv4a` 和官方 region se
 {"name":"aws_api_read","arguments":{"auth_scheme":"sigv4a","service":"s3","operation":"get-object","region_set":"us-east-1,us-west-*","method":"GET","url":"https://<alias>.accesspoint.s3-global.amazonaws.com/object","response_file":"/approved/downloads/object.bin"}}
 ```
 
-S3 `PutObject`/`UploadPart` 的 SigV4 流式上传使用 `payload_mode=aws-chunked`。服务端固定使用官方建议的 64 KiB chunk，并生成链式签名；签名头不能由 MCP 调用方传入：
+S3 `PutObject`/`UploadPart` 的 SigV4 或 SigV4a 流式上传使用 `payload_mode=aws-chunked`。服务端固定使用官方建议的 64 KiB chunk，并生成对应的 HMAC 或定长 DER-ECDSA 链式签名；签名头不能由 MCP 调用方传入：
 
 ```json
 {"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-chunked","service":"s3","operation":"put-object","region":"us-east-1","method":"PUT","url":"https://<bucket>.s3.us-east-1.amazonaws.com/object","body_file":"/approved/uploads/object.bin","force":true}}
@@ -127,6 +127,8 @@ S3 `PutObject`/`UploadPart` 的 SigV4 流式上传使用 `payload_mode=aws-chunk
 ```json
 {"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-chunked-trailer","checksum_algorithm":"crc64nvme","service":"s3","operation":"put-object","region":"us-east-1","method":"PUT","url":"https://<bucket>.s3.us-east-1.amazonaws.com/object","body_file":"/approved/uploads/object.bin","force":true}}
 ```
+
+多区域 S3 endpoint 使用相同两个 `payload_mode`，把 `auth_scheme` 改为 `sigv4a` 并提供官网定义的 `region_set`；流式请求的 seed、每个 chunk 与可选 trailer 都由同一个服务端派生密钥链签名。
 
 需要 SigV4 EventStream 请求签名的有限 HTTP 流使用 `payload_mode=aws-eventstream`。`body_file` 是一个或多个连续的、CRC 有效但尚未添加签名外层的 Amazon EventStream 帧；服务端验证单帧边界后添加 `:date`、链式 `:chunk-signature` 和终止帧。交互式 WebSocket 会话不属于这个有限 HTTP 请求模式。
 

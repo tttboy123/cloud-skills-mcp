@@ -73,11 +73,14 @@ remain available through the guarded resource gateway.
 - AWS SigV4a derives the documented ECDSA P-256 key from the same
   operator-owned AKSK/IAM chain and requires a validated `region_set`; it never
   exposes the derived private key and does not enable presigned URLs.
-- AWS SigV4 S3 streaming uploads accept only an approved request body and
+- AWS SigV4/SigV4a S3 streaming uploads accept only an approved request body and
   generate `aws-chunked` framing, content lengths, seed and chained chunk
   signatures in-process; callers cannot provide signing or transfer-length
   headers.
-- AWS SigV4 S3 signed-trailer uploads compute CRC32, CRC32C, CRC64NVME, SHA-1,
+- SigV4a streaming uses the documented region-independent scope and fixed
+  144-character padded DER-ECDSA chunk signatures so the wire length is known
+  before header signing; the derived private key never leaves the process.
+- AWS SigV4/SigV4a S3 signed-trailer uploads compute CRC32, CRC32C, CRC64NVME, SHA-1,
   or SHA-256 over the decoded payload while streaming, then generate the
   checksum and trailer signatures in-process. Callers select only the
   algorithm and cannot provide checksum values or trailer headers.

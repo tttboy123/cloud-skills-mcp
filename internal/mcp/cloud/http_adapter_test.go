@@ -264,6 +264,113 @@ func TestAWSSigV4aSignerProducesVerifiableMultiRegionHeader(t *testing.T) {
 	}
 }
 
+func TestAWSSigV4aChunkSigningMatchesOfficialAWSSDKVectorShape(t *testing.T) {
+	privateKey, err := deriveAWSSigV4aKey("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantX, _ := new(big.Int).SetString("18b7d04643359f6ec270dcbab8dce6d169d66ddc9778c75cfb08dfdb701637ab", 16)
+	wantY, _ := new(big.Int).SetString("fa36b35e4fe67e3112261d2e17a956ef85b06e44712d2850bcd3c2161e9993f2", 16)
+	if privateKey.X.Cmp(wantX) != 0 || privateKey.Y.Cmp(wantY) != 0 {
+		t.Fatalf("official streaming public key=(%X,%X)", privateKey.X, privateKey.Y)
+	}
+	previous := "30440220010203040506070809000102030405060708090001020304050607080900010202200102030405060708090001020304050607080900010203040506070809000102"
+	amzDate := "20130524T000000Z"
+	scope := "20130524/s3/aws4_request"
+	chunk := bytes.Repeat([]byte("a"), 64*1024)
+	signature, err := awsSigV4aChunkSignature(privateKey, previous, amzDate, scope, chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signature) != awsSigV4aStreamingSignatureLength {
+		t.Fatalf("padded signature length=%d", len(signature))
+	}
+	encodedSignature := strings.TrimRight(signature, "*")
+	der, err := hex.DecodeString(encodedSignature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringToSign := strings.Join([]string{
+		awsSigV4aChunkAlgorithm, amzDate, scope, previous, sha256Hex(nil), sha256Hex(chunk),
+	}, "\n")
+	digest := sha256.Sum256([]byte(stringToSign))
+	if !ecdsa.VerifyASN1(&privateKey.PublicKey, digest[:], der) {
+		t.Fatal("SigV4a chunk signature does not verify")
+	}
+	checksumLine := "x-amz-checksum-crc32c:sOO8/Q==\n"
+	trailerSignature, err := awsSigV4aTrailerSignature(privateKey, signature, amzDate, scope, checksumLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trailerDER, err := hex.DecodeString(strings.TrimRight(trailerSignature, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trailerStringToSign := strings.Join([]string{
+		awsSigV4aTrailerAlgorithm, amzDate, scope, strings.TrimRight(signature, "*"), sha256Hex([]byte(checksumLine)),
+	}, "\n")
+	trailerDigest := sha256.Sum256([]byte(trailerStringToSign))
+	if len(trailerSignature) != awsSigV4aStreamingSignatureLength || !ecdsa.VerifyASN1(&privateKey.PublicKey, trailerDigest[:], trailerDER) {
+		t.Fatal("SigV4a trailer signature does not verify")
+	}
+}
+
+func TestAWSSigV4aChunkedConfigurationUsesFixedSignatureLength(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", strings.NewReader(strings.Repeat("a", 65*1024)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configureAWSSigV4aChunkedRequest(request, defaultAWSChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	if request.ContentLength != 67064 || request.Header.Get("Content-Length") != "67064" {
+		t.Fatalf("SigV4a encoded length=%d header=%q want=67064", request.ContentLength, request.Header.Get("Content-Length"))
+	}
+	if request.Header.Get("X-Amz-Content-Sha256") != awsSigV4aStreamingPayload {
+		t.Fatalf("payload marker=%q", request.Header.Get("X-Amz-Content-Sha256"))
+	}
+}
+
+func TestAWSSigV4aChunkedTrailerAdapterSignsStreamingChecksum(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.Header.Get("X-Amz-Content-Sha256") != awsSigV4aStreamingPayloadTrailer || request.Header.Get("X-Amz-Trailer") != "x-amz-checksum-crc64nvme" {
+			t.Fatalf("SigV4a trailer headers=%v", request.Header)
+		}
+		if !bytes.Contains(body, []byte("x-amz-checksum-crc64nvme:")) {
+			t.Fatalf("SigV4a trailer checksum missing: %q", body)
+		}
+		if int64(len(body)) != request.ContentLength {
+			t.Fatalf("SigV4a trailer wire length=%d header=%d", len(body), request.ContentLength)
+		}
+		for _, line := range bytes.Split(body, []byte("\r\n")) {
+			if bytes.Contains(line, []byte("signature=")) || bytes.HasPrefix(line, []byte("x-amz-trailer-signature:")) {
+				value := line[strings.LastIndex(string(line), ":")+1:]
+				if bytes.Contains(line, []byte("chunk-signature=")) {
+					value = line[strings.LastIndex(string(line), "=")+1:]
+				}
+				if len(value) != awsSigV4aStreamingSignatureLength {
+					t.Fatalf("SigV4a wire signature length=%d line=%q", len(value), line)
+				}
+			}
+		}
+		return httpResponse(200, `{"ok":true}`), nil
+	})
+	adapter := NewAWSRESTAdapter(AWSRESTConfig{
+		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}}, HTTP: doer,
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4a", RegionSet: "us-east-1", PayloadMode: "aws-chunked-trailer", ChecksumAlgorithm: "crc64nvme", Method: "PUT",
+		URL: "https://bucket.s3.us-east-1.amazonaws.com/object", Service: "s3", Operation: "put-object", Body: "payload",
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestAWSSigV4aAdapterSignsAndSendsHTTP(t *testing.T) {
 	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
 		if !strings.HasPrefix(request.Header.Get("Authorization"), "AWS4-ECDSA-P256-SHA256 Credential=AKIDEXAMPLE/") {
@@ -399,7 +506,7 @@ func TestAWSSigV4ChunkedPolicyRejectsUnsafeCombinationsAndHeaders(t *testing.T) 
 		t.Fatalf("valid aws-chunked request rejected: %v", err)
 	}
 	for _, mutate := range []func(*Invocation){
-		func(request *Invocation) { request.AuthScheme = "sigv4a"; request.RegionSet = "*" },
+		func(request *Invocation) { request.AuthScheme = "sigv4a" },
 		func(request *Invocation) { request.Service = "ec2" },
 		func(request *Invocation) { request.Method = "POST" },
 		func(request *Invocation) { request.Body = nil },
@@ -554,7 +661,7 @@ func TestAWSSigV4ChunkedTrailerPolicyRequiresSupportedChecksum(t *testing.T) {
 			request.Headers = map[string]string{"X-Amz-Trailer-Signature": strings.Repeat("0", 64)}
 		},
 		func(request *Invocation) { request.PayloadMode = "aws-chunked" },
-		func(request *Invocation) { request.AuthScheme = "sigv4a"; request.RegionSet = "*" },
+		func(request *Invocation) { request.AuthScheme = "sigv4a" },
 	} {
 		request := valid
 		mutate(&request)

@@ -69,7 +69,7 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithString("auth_scheme", mcp.Description("Optional provider HTTP authentication scheme: sigv4, sigv4a, acs3, oss4, tc3, cos, or the provider default.")),
 		mcp.WithString("auth_version", mcp.Description("Optional Baidu BCE signing version: v1 (default) or v2. BCE v2 also requires service and region.")),
 		mcp.WithString("api_version", mcp.Description("Provider API version used by Alibaba ACS3 and Tencent TC3 common headers.")),
-		mcp.WithString("payload_mode", mcp.Description("Optional AWS SigV4 payload protocol: aws-chunked for S3 streaming PutObject/UploadPart, aws-chunked-trailer for a server-computed signed checksum trailer, or aws-eventstream for a bounded CRC-valid encoded event-stream body.")),
+		mcp.WithString("payload_mode", mcp.Description("Optional AWS payload protocol: aws-chunked for SigV4/SigV4a S3 streaming PutObject/UploadPart, aws-chunked-trailer for a server-computed signed checksum trailer, or aws-eventstream for a bounded SigV4 CRC-valid encoded event-stream body.")),
 		mcp.WithString("checksum_algorithm", mcp.Description("Required for payload_mode=aws-chunked-trailer: crc32, crc32c, crc64nvme, sha1, or sha256. The server computes the checksum; callers never provide its value.")),
 		mcp.WithString("method", mcp.Description("HTTP method for the official provider API request.")),
 		mcp.WithString("url", mcp.Description("Exact official HTTPS provider API URL.")),

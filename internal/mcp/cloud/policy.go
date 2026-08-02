@@ -135,8 +135,12 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if request.Provider != ProviderAWS || (payloadMode != awsPayloadModeChunked && payloadMode != awsPayloadModeChunkedTrailer && payloadMode != awsPayloadModeEventStream) {
 			return fmt.Errorf("unsupported payload_mode %q", request.PayloadMode)
 		}
-		if normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) != authSchemeAWSSigV4 {
-			return fmt.Errorf("%s requires AWS SigV4", payloadMode)
+		payloadScheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
+		if payloadMode == awsPayloadModeEventStream && payloadScheme != authSchemeAWSSigV4 {
+			return fmt.Errorf("aws-eventstream requires AWS SigV4")
+		}
+		if payloadMode != awsPayloadModeEventStream && payloadScheme != authSchemeAWSSigV4 && payloadScheme != authSchemeAWSSigV4a {
+			return fmt.Errorf("%s requires AWS SigV4 or SigV4a", payloadMode)
 		}
 		if request.Body == nil && request.BodyFile == "" {
 			return fmt.Errorf("%s requires a request body", payloadMode)
