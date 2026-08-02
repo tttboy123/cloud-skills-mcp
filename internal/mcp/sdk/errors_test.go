@@ -21,6 +21,15 @@ func TestWrapError(t *testing.T) {
 	}
 }
 
+func TestRedactSecretRemovesTransferableSignatures(t *testing.T) {
+	message := RedactSecret("dial failed: signature=TWnOXzSRGSW/kExVPvxQSP6/4Uk= q-signature=abcdef x-amz-signature=1234 next=ok; signature=TWnOXzSRGSW%2FkExVPvxQSP6%2F4Uk%3D")
+	for _, secret := range []string{"TWnOXzSRGSW/kExVPvxQSP6/4Uk=", "abcdef", "1234", "%2FkExVPvxQSP6%2F4Uk%3D"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("signature leaked in %q", message)
+		}
+	}
+}
+
 func TestMutationApprovalRequiresOperatorGateAndPerCallForce(t *testing.T) {
 	result, err := RequireMutationApproval(false, true)
 	if result == nil || !result.IsError || err == nil || !errors.Is(err, ErrMutationsDisabled) {

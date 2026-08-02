@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,7 +115,7 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
 		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
-			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "response_file", "audience", "auth_version"} {
+			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "audience", "auth_version"} {
 				if _, ok := tool.InputSchema.Properties[field]; !ok {
 					t.Errorf("%s must expose HTTP field %s", tool.Name, field)
 				}
@@ -376,6 +377,32 @@ func TestInvocationBoundaryKeepsOrdinaryIAMResourceManagementAvailable(t *testin
 	for _, request := range allowed {
 		if err := validateInvocation(request, nil); err != nil {
 			t.Errorf("ordinary IAM resource operation was rejected: %#v: %v", request, err)
+		}
+	}
+}
+
+func TestInvocationBoundaryAllowsOnlyGuardedTencentASRWebSocket(t *testing.T) {
+	root := t.TempDir()
+	audio := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audio, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "asr-ws", Service: "asr", Operation: "RecognizeStream", Method: http.MethodGet,
+		URL: "wss://asr.cloud.tencent.com/asr/v2/1259220000", Parameters: map[string]any{"engine_model_type": "16k_zh", "voice_format": 1},
+		BodyFile: audio, ResponseFile: filepath.Join(root, "result.ndjson"), StreamChunkBytes: 6400, StreamIntervalMS: 200,
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded ASR WebSocket rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request}
+	invalid[0].URL += "?signature=caller"
+	invalid[1].Method = http.MethodPost
+	invalid[2].Headers = map[string]string{"Origin": "https://example.com"}
+	invalid[3].BodyFile = ""
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe ASR WebSocket invocation accepted: %#v", candidate)
 		}
 	}
 }

@@ -4,6 +4,8 @@
 - Direct Connect current API introduction confirming old APIs remain functional: https://cloud.tencent.com/document/product/216/18403
 - Direct Connect API 2017 authentication and exact request-path signing: https://cloud.tencent.com/document/product/216/1714
 - Direct Connect API 2017 request example: https://cloud.tencent.com/document/product/216/9343
+- Realtime Speech Recognition WebSocket protocol and HMAC-SHA1 signing: https://cloud.tencent.com/document/product/1093/48982
+- Official Tencent Cloud Speech SDK for Go: https://github.com/TencentCloud/tencentcloud-speech-sdk-go
 - API 3.0 common parameters: https://intl.cloud.tencent.com/document/product/1005/34677
 - TC3-HMAC-SHA256 signature: https://intl.cloud.tencent.com/document/product/627/64494
 - API 3.0 Signature v1 HmacSHA1/HmacSHA256 canonical request and fixed example: https://cloud.tencent.com/document/api/583/17239
@@ -13,4 +15,4 @@
 - Tencent Cloud API Explorer: https://console.cloud.tencent.com/api/explorer
 - COS GET Object and Range download: https://intl.cloud.tencent.com/document/product/436/7753
 
-The universal adapter signs API 3.0 requests with recommended TC3 or the still-documented v1 HmacSHA1/HmacSHA256 query/form protocol, legacy qcloud API 2017 requests at their exact `/v2/index.php` path, and COS data-plane requests with the COS REST signature. It never executes TCCLI.
+The universal adapter signs API 3.0 requests with recommended TC3 or the still-documented v1 HmacSHA1/HmacSHA256 query/form protocol, legacy qcloud API 2017 requests at their exact `/v2/index.php` path, COS data-plane requests with the COS REST signature, and realtime ASR WSS requests using the official raw canonical query plus HMAC-SHA1 algorithm. ASR signed URLs remain internal to the connection dialer. It never executes TCCLI.

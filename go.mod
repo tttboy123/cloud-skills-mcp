@@ -12,6 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.43.3
 	github.com/aws/aws-sdk-go-v2/config v1.32.34
 	github.com/aws/smithy-go v1.27.6
+	github.com/coder/websocket v1.8.15
 	github.com/mark3labs/mcp-go v0.57.0
 )
 

@@ -1747,6 +1747,139 @@ func TestTencentQCloudLegacyRejectsNonProductEndpoint(t *testing.T) {
 	}
 }
 
+func TestTencentASRWebSocketSignatureMatchesOfficialCanonicalAlgorithm(t *testing.T) {
+	signedURL, err := signTencentASRWebSocketURL(
+		"wss://asr.cloud.tencent.com/asr/v2/1259220000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"engine_model_type": "16k_zh", "needvad": 1, "voice_format": 1},
+		time.Unix(1673408372, 0).UTC(),
+		"1673408372",
+		"c64385ee-3e5c-4fc5-bbfd-7c71addb35b0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if got, want := query.Get("signature"), "TWnOXzSRGSW/kExVPvxQSP6/4Uk="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if query.Get("secretid") != "AKIDEXAMPLE" || query.Get("expired") != "1673494772" || query.Get("voice_id") == "" {
+		t.Fatalf("query=%v", query)
+	}
+}
+
+func TestTencentASRGeneratedNonceAndVoiceIDStayWithinProtocolBounds(t *testing.T) {
+	for range 100 {
+		nonce := secureTencentASRNonce()
+		if !validTencentASRNonce(nonce) {
+			t.Fatalf("invalid generated nonce %q", nonce)
+		}
+		voiceID := secureTencentVoiceID()
+		if !tencentVoiceIDPattern.MatchString(voiceID) {
+			t.Fatalf("invalid generated voice ID %q", voiceID)
+		}
+	}
+}
+
+type fakeTencentWebSocketConnection struct {
+	reads  [][]byte
+	writes []struct {
+		messageType tencentWebSocketMessageType
+		data        []byte
+	}
+}
+
+func (connection *fakeTencentWebSocketConnection) Read(context.Context) (tencentWebSocketMessageType, []byte, error) {
+	if len(connection.reads) == 0 {
+		return 0, nil, io.EOF
+	}
+	data := connection.reads[0]
+	connection.reads = connection.reads[1:]
+	return tencentWebSocketMessageText, data, nil
+}
+
+func (connection *fakeTencentWebSocketConnection) Write(_ context.Context, messageType tencentWebSocketMessageType, data []byte) error {
+	connection.writes = append(connection.writes, struct {
+		messageType tencentWebSocketMessageType
+		data        []byte
+	}{messageType: messageType, data: append([]byte(nil), data...)})
+	return nil
+}
+
+func (*fakeTencentWebSocketConnection) Close() error { return nil }
+
+func TestTencentASRWebSocketAdapterStreamsGuardedAudioInternally(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "audio.pcm")
+	if err := os.WriteFile(audioFile, []byte("abcdefgh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","result":{"slice_type":2,"voice_text_str":"hello"}}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","final":1}`),
+	}}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}},
+		Now:         func() time.Time { return time.Unix(1673408372, 0).UTC() },
+		Nonce:       func() string { return "1673408372" },
+		VoiceID:     func() string { return "c64385ee-3e5c-4fc5-bbfd-7c71addb35b0" },
+		WebSocketDial: func(_ context.Context, signedURL string) (tencentWebSocketConnection, error) {
+			parsed, err := url.Parse(signedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Query().Get("signature") == "" || parsed.Query().Get("secretid") != "AKIDEXAMPLE" {
+				t.Fatalf("signed query=%v", parsed.Query())
+			}
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "asr-ws", Service: "asr", Operation: "RecognizeStream", Method: http.MethodGet,
+		URL: "wss://asr.cloud.tencent.com/asr/v2/1259220000", Parameters: map[string]any{"engine_model_type": "16k_zh", "voice_format": 1}, BodyFile: audioFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(result.Output, []byte(`"voice_text_str":"hello"`)) || result.RequestID != "voice" {
+		t.Fatalf("result=%#v", result)
+	}
+	if len(connection.writes) != 2 || connection.writes[0].messageType != tencentWebSocketMessageBinary || string(connection.writes[0].data) != "abcdefgh" || connection.writes[1].messageType != tencentWebSocketMessageText || string(connection.writes[1].data) != `{"type":"end"}` {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentWebSocketOutputSinkAtomicallyPublishesNDJSON(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "result.ndjson")
+	sink, err := newTencentWebSocketOutputSink(Invocation{ResponseFile: target, MaxResponseFileBytes: 1024}, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.abort()
+	if err := sink.writeMessage([]byte(`{"code":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := sink.finish("voice-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "{\"code\":0}\n" || !bytes.Contains(metadata, []byte(`"content_type":"application/x-ndjson"`)) || !bytes.Contains(metadata, []byte(`"request_id":"voice-id"`)) {
+		t.Fatalf("data=%q metadata=%s", data, metadata)
+	}
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("response file info=%v err=%v", info, err)
+	}
+}
+
 func TestAlibabaOSS4AndTencentCOSDataPlaneSchemes(t *testing.T) {
 	ossRequest, err := http.NewRequest(http.MethodGet, "https://bucket.oss-cn-hangzhou.aliyuncs.com/object?acl", nil)
 	if err != nil {

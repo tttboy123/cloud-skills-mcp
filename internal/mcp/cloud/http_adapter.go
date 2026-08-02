@@ -53,6 +53,7 @@ const (
 	authSchemeTencentV1SHA256   = "tc1-sha256"
 	authSchemeTencentQCloud     = "qcloud"
 	authSchemeTencentQCloud256  = "qcloud-sha256"
+	authSchemeTencentASRWS      = "asr-ws"
 	authSchemeTencentCOS        = "cos"
 	defaultHTTPClientTimeout    = 60 * time.Second
 )
@@ -485,13 +486,16 @@ func (EnvTencentCredentialProvider) Credentials(context.Context) (TencentCredent
 }
 
 type TencentRESTConfig struct {
-	Credentials  TencentCredentialProvider
-	HTTP         HTTPDoer
-	MaxBodyBytes int64
-	Timeout      time.Duration
-	Now          func() time.Time
-	Nonce        func() string
-	AllowedHosts []string
+	Credentials   TencentCredentialProvider
+	HTTP          HTTPDoer
+	MaxBodyBytes  int64
+	Timeout       time.Duration
+	Now           func() time.Time
+	Nonce         func() string
+	VoiceID       func() string
+	WebSocketDial func(context.Context, string) (tencentWebSocketConnection, error)
+	StreamPause   func(context.Context, time.Duration) error
+	AllowedHosts  []string
 }
 
 type TencentRESTAdapter struct {
@@ -506,12 +510,21 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 	if config.Nonce == nil {
 		config.Nonce = secureTencentNonce
 	}
+	if config.VoiceID == nil {
+		config.VoiceID = secureTencentVoiceID
+	}
+	if config.WebSocketDial == nil {
+		config.WebSocketDial = defaultTencentWebSocketDial
+	}
+	if config.StreamPause == nil {
+		config.StreamPause = pauseTencentStream
+	}
 	return &TencentRESTAdapter{config: config}
 }
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+cos",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -523,14 +536,25 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"tc3_signature":    "https://intl.cloud.tencent.com/document/product/627/64494",
 		"tc1_signature":    "https://cloud.tencent.com/document/api/583/17239",
 		"qcloud_signature": "https://cloud.tencent.com/document/product/216/1714",
+		"asr_websocket":    "https://cloud.tencent.com/document/product/1093/48982",
 		"cos_signature":    "https://intl.cloud.tencent.com/document/product/436/7778",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, or cos")
+	}
+	if scheme == authSchemeTencentASRWS {
+		credentials, err := adapter.config.Credentials.Credentials(ctx)
+		if err != nil {
+			return InvocationResult{}, err
+		}
+		if credentials.SecretID == "" || credentials.SecretKey == "" {
+			return InvocationResult{}, fmt.Errorf("Tencent Cloud credential provider returned incomplete AKSK material")
+		}
+		return invokeTencentASRWebSocket(ctx, adapter, credentials, invocation)
 	}
 	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
 	if err != nil {
@@ -2219,15 +2243,7 @@ func secureNonce() string {
 }
 
 func secureTencentNonce() string {
-	value := make([]byte, 8)
-	if _, err := rand.Read(value); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano()&0x7fffffffffffffff, 10)
-	}
-	number, err := strconv.ParseUint(hex.EncodeToString(value)[:15], 16, 64)
-	if err != nil || number == 0 {
-		return "1"
-	}
-	return strconv.FormatUint(number, 10)
+	return secureTencentASRNonce()
 }
 
 func pointerString(value *string) string {
