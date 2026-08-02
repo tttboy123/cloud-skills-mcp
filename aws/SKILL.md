@@ -1,11 +1,11 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS and internally connected Amazon Transcribe WSS requests in cloud-skills-mcp. Use for AWS, EC2, S3, S3 Multi-Region Access Points, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, Transcribe streaming, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, Amazon Transcribe WSS, or finite AWS IoT MQTT-over-WSS subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, Transcribe streaming, IoT topics and shadows, or any documented AWS API.
 ---
 
 # AWS Cloud
 
-Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs the request in-process with AWS SigV4 or SigV4a, connects supported Transcribe WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
+Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, connects supported Transcribe and IoT WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default), `sigv4a` when the official endpoint requires multi-region signing, or `transcribe-ws` for standard, Medical, and Call Analytics streaming WebSocket sessions.
+- `auth_scheme`: `sigv4` (default), `sigv4a` when the official endpoint requires multi-region signing, `transcribe-ws` for standard, Medical, and Call Analytics streaming WebSocket sessions, or `iot-mqtt-ws` for a finite MQTT 3.1.1 subscription over the account's IoT data WSS endpoint.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
@@ -45,8 +45,12 @@ Example realtime transcription: `aws_api_read(auth_scheme="transcribe-ws", servi
 
 For `/medical-stream-transcription-websocket`, use `StartMedicalStreamTranscriptionWebSocket` and include the documented `language-code`, `specialty`, and `type`. For `/call-analytics-stream-transcription-websocket`, use `StartCallAnalyticsStreamTranscriptionWebSocket`; when post-call or channel configuration is needed, pass its JSON object as `body` while audio remains in `body_file`.
 
+AWS IoT Core subscriptions use `auth_scheme="iot-mqtt-ws"`, `service="iotdevicegateway"`, operation `SubscribeMQTT`, method `GET`, and the exact account endpoint `wss://<iot-data-endpoint>/mqtt`. `body` must contain a non-secret UTF-8 `client_id` of at most 128 bytes, one to eight `subscriptions` with `topic_filter` and QoS 0 or 1, `max_messages` from 1 to 256, and `timeout_seconds` from 1 to 300. `response_file` is mandatory and receives atomic NDJSON whose payloads are Base64 encoded. Example: `aws_api_read(auth_scheme="iot-mqtt-ws", service="iotdevicegateway", operation="SubscribeMQTT", region="us-west-2", method="GET", url="wss://<account>-ats.iot.us-west-2.amazonaws.com/mqtt", body={"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/+/temperature","qos":1}],"max_messages":10,"timeout_seconds":30}, response_file="<approved-root>/mqtt.ndjson")`.
+
+The adapter generates the five-minute SigV4 WSS query internally, applies AWS IoT's documented STS exception by appending the session token only after signing, negotiates the `mqtt` subprotocol, uses a clean session, checks CONNACK/SUBACK, acknowledges inbound QoS 1 messages, and disconnects after the count or timeout. Caller query parameters, handshake headers, credentials, persistent sessions, publishing, and unbounded collection are rejected. Use the ordinary SigV4 HTTPS `/topics/<topic>` API for publishing.
+
 ## Credentials
 
 Use the AWS SDK credential chain: profiles/SSO, web identity, IAM roles, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / optional `AWS_SESSION_TOKEN`. Keep credentials in the server environment or official AWS config, never in MCP arguments.
 
-Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, Transcribe streaming parameters, or operation naming needs verification.
+Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, Transcribe or IoT streaming parameters, or operation naming needs verification.
