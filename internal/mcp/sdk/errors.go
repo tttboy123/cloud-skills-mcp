@@ -30,7 +30,7 @@ var (
 var (
 	sensitiveQuotedValue = regexp.MustCompile(`(?i)(["']?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)["']?\s*[:=]\s*["'])([^"']*)(["'])`)
 	sensitiveBareValue   = regexp.MustCompile(`(?i)(["']?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)["']?\s*[:=]\s*)([A-Za-z0-9+/=_-]+)`)
-	sensitiveSpaceValue  = regexp.MustCompile(`(?i)((?:--)?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)\s+)([^\s\]]+)`)
+	sensitiveSpaceValue  = regexp.MustCompile(`(?i)(--(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)\s+)([^\s\]]+)`)
 	bearerValue          = regexp.MustCompile(`(?i)(Bearer\s+)([A-Za-z0-9._~+/=-]+)`)
 	rawTencentAKID       = regexp.MustCompile(`AKID[A-Za-z0-9]{8,}`)
 	rawAWSAccessKey      = regexp.MustCompile(`(?:AKIA|ASIA)[A-Z0-9]{16}`)

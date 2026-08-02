@@ -114,7 +114,7 @@ func TestRedactSecret(t *testing.T) {
 }
 
 func TestRedactSecretPreservesOperationalIdentifiers(t *testing.T) {
-	in := `requestId: 36974a26-56f7-4d61-ab17-39107e442a5f file:///tmp/tccli-payload-1234567890.json`
+	in := `requestId: 36974a26-56f7-4d61-ab17-39107e442a5f file:///tmp/tccli-payload-1234567890.json plus session token for IAM/STS`
 	out := RedactSecret(in)
 	if out != in {
 		t.Fatalf("operational identifiers must remain available for debugging:\nwant: %s\n got: %s", in, out)
