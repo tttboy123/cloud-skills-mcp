@@ -318,9 +318,6 @@ func signTencentASRWebSocketURL(rawURL string, credentials TencentCredentials, i
 	if credentials.SecretID == "" || credentials.SecretKey == "" {
 		return "", fmt.Errorf("Tencent Cloud ASR WebSocket requires complete SecretId/SecretKey credentials")
 	}
-	if credentials.Token != "" {
-		return "", fmt.Errorf("Tencent Cloud ASR WebSocket does not document CAM temporary-token authentication")
-	}
 	if !validTencentASRNonce(nonce) {
 		return "", fmt.Errorf("Tencent Cloud ASR WebSocket requires a positive nonce of at most 10 digits")
 	}
@@ -351,6 +348,9 @@ func signTencentASRWebSocketURL(rawURL string, credentials TencentCredentials, i
 	parameters["expired"] = strconv.FormatInt(timestamp+24*60*60, 10)
 	parameters["nonce"] = nonce
 	parameters["voice_id"] = voiceID
+	if credentials.Token != "" {
+		parameters["token"] = credentials.Token
+	}
 	canonical := canonicalTencentV1Parameters(parameters)
 	target.Scheme = "wss"
 	target.Host = "asr.cloud.tencent.com"
@@ -736,7 +736,7 @@ func tencentScalarParameterEquals(parameters map[string]any, name, expected stri
 
 func isTencentASRControlledParameter(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "expired", "nonce", "secretid", "signature", "timestamp", "voice_id":
+	case "expired", "nonce", "secretid", "signature", "timestamp", "token", "voice_id":
 		return true
 	default:
 		return false

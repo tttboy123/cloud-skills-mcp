@@ -21,7 +21,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` HTTPS / Discovery Service | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
-| Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS 与标准实时 TTS signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；这些 WSS 接口按官方约束使用长期 SecretId/SecretKey |
+| Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS 与标准实时 TTS signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2 | BCE AK/SK、IAM/STS temporary AK/SK/session token |
 
 ## 安全边界
@@ -156,7 +156,7 @@ Tencent ASR WebSocket 有限音频流示例：
 {"name":"tencent_api_read","arguments":{"auth_scheme":"asr-ws","service":"asr","operation":"RecognizeStream","method":"GET","url":"wss://asr.cloud.tencent.com/asr/v2/<appid>","parameters":{"engine_model_type":"16k_zh","voice_format":1},"body_file":"/approved/audio/input.pcm","response_file":"/approved/results/asr.ndjson"}}
 ```
 
-默认按官方建议每 200ms 发送一帧；PCM 根据 8k/16k 自动选择 3200/6400 字节。压缩格式或完整 m4a 分片可用 `stream_chunk_bytes` 指定单帧大小，`stream_interval_ms` 调整节奏。两者只控制内部连接，不进入签名查询参数。
+默认按官方建议每 200ms 发送一帧；PCM 根据 8k/16k 自动选择 3200/6400 字节。压缩格式或完整 m4a 分片可用 `stream_chunk_bytes` 指定单帧大小，`stream_interval_ms` 调整节奏。两者只控制内部连接，不进入签名查询参数。若 operator 注入 CAM/STS 三元组，server 按官方 Web SDK 行为将小写 `token` 加入排序后的签名查询；调用方仍不能通过 MCP 参数提供 token。
 
 Tencent 虚拟号真人判定示例：
 

@@ -1772,6 +1772,30 @@ func TestTencentASRWebSocketSignatureMatchesOfficialCanonicalAlgorithm(t *testin
 	}
 }
 
+func TestTencentASRWebSocketSignsOfficialTemporaryToken(t *testing.T) {
+	signedURL, err := signTencentASRWebSocketURL(
+		"wss://asr.cloud.tencent.com/asr/v2/1259220000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret", Token: "session-token"},
+		map[string]any{"engine_model_type": "16k_zh", "needvad": 1, "voice_format": 1},
+		time.Unix(1673408372, 0).UTC(),
+		"1673408372",
+		"c64385ee-3e5c-4fc5-bbfd-7c71addb35b0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := url.ParseQuery(strings.SplitN(signedURL, "?", 2)[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Get("token") != "session-token" {
+		t.Fatalf("query=%v", query)
+	}
+	if got, want := query.Get("signature"), "ktYY613rhDshviEkWWnR9/gVvqo="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+}
+
 func TestTencentSpeechTranslateWebSocketSignatureMatchesOfficialAlgorithm(t *testing.T) {
 	signedURL, err := signTencentSpeechTranslateWebSocketURL(
 		"wss://asr.cloud.tencent.com/asr/speech_translate/1259220000",

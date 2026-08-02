@@ -398,11 +398,12 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentASRWebSocket(t *testing.T) {
 	if err := validateInvocation(request, []string{root}); err != nil {
 		t.Fatalf("guarded ASR WebSocket rejected: %v", err)
 	}
-	invalid := []Invocation{request, request, request, request}
+	invalid := []Invocation{request, request, request, request, request}
 	invalid[0].URL += "?signature=caller"
 	invalid[1].Method = http.MethodPost
 	invalid[2].Headers = map[string]string{"Origin": "https://example.com"}
 	invalid[3].BodyFile = ""
+	invalid[4].Parameters = map[string]any{"engine_model_type": "16k_zh", "token": "caller"}
 	for _, candidate := range invalid {
 		if err := validateInvocation(candidate, []string{root}); err == nil {
 			t.Fatalf("unsafe ASR WebSocket invocation accepted: %#v", candidate)
