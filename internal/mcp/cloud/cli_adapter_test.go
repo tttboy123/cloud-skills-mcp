@@ -140,6 +140,15 @@ func TestCLIAdapterStatusAndDiscoveryAreCredentialSafe(t *testing.T) {
 	}
 }
 
+func TestAlibabaCLIStatusUsesVersionSubcommand(t *testing.T) {
+	runner := &fakeProcessRunner{stdout: []byte("3.4.11\n")}
+	adapter := NewCLIAdapter(CLIAdapterConfig{Provider: ProviderAlicloud, Binary: "aliyun-test", Runner: runner})
+	status, err := adapter.Status(t.Context())
+	if err != nil || status.Version != "3.4.11" || len(runner.calls) != 1 || strings.Join(runner.calls[0].args, " ") != "version" {
+		t.Fatalf("status=%#v calls=%#v err=%v", status, runner.calls, err)
+	}
+}
+
 func TestCLIAdapterReturnsSeparatedProcessFailure(t *testing.T) {
 	runner := &fakeProcessRunner{stdout: []byte("stdout"), stderr: []byte("SecretKey=hidden RequestId=req-1"), err: errors.New("exit status 7")}
 	adapter := NewCLIAdapter(CLIAdapterConfig{Provider: ProviderTencent, Binary: "tccli-test", Runner: runner})

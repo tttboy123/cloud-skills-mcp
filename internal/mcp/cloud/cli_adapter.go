@@ -51,7 +51,11 @@ func NewCLIAdapter(config CLIAdapterConfig) *CLIAdapter {
 }
 
 func (adapter *CLIAdapter) Status(ctx context.Context) (ProviderStatus, error) {
-	stdout, stderr, err := adapter.run(ctx, []string{"--version"})
+	versionArgs := []string{"--version"}
+	if adapter.config.Provider == ProviderAlicloud {
+		versionArgs = []string{"version"}
+	}
+	stdout, stderr, err := adapter.run(ctx, versionArgs)
 	status := ProviderStatus{
 		Provider:         adapter.config.Provider,
 		Adapter:          adapter.config.Binary,
