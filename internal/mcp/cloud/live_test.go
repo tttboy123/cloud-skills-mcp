@@ -1,9 +1,11 @@
 package cloud
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -12,7 +14,16 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 		t.Skip("set CLOUD_SKILLS_LIVE_TEST=1 to use real provider credentials")
 	}
 	selected := liveProviderSet(os.Getenv("CLOUD_SKILLS_LIVE_PROVIDERS"))
-	c := newTestClient(t, DefaultRuntime())
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
 	tests := []struct {
 		provider  Provider
 		tool      string
@@ -53,6 +64,9 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 			continue
 		}
 		t.Run(string(test.provider), func(t *testing.T) {
+			auditLock.Lock()
+			beforeAudit := len(auditEvents)
+			auditLock.Unlock()
 			status := callCloudTool(t, c, "cloud_provider_status", map[string]any{"provider": string(test.provider)})
 			if status.IsError {
 				t.Fatalf("provider status: %s", cloudToolText(t, status))
@@ -64,7 +78,20 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 			if text := strings.TrimSpace(cloudToolText(t, result)); text == "" {
 				t.Fatal("provider returned an empty response")
 			} else {
-				t.Logf("%s read succeeded (%d response bytes)", test.provider, len(text))
+				auditLock.Lock()
+				providerEvents := append([]AuditEvent(nil), auditEvents[beforeAudit:]...)
+				auditLock.Unlock()
+				var observed *AuditEvent
+				for index := range providerEvents {
+					event := &providerEvents[index]
+					if event.Provider == test.provider && event.Mode == ModeRead && event.Outcome == "succeeded" {
+						observed = event
+					}
+				}
+				if observed == nil {
+					t.Fatalf("no succeeded read audit event for %s: %#v", test.provider, providerEvents)
+				}
+				t.Logf("provider=%s outcome=%s response_bytes=%d request_id=%q", test.provider, observed.Outcome, len(text), observed.RequestID)
 			}
 		})
 	}

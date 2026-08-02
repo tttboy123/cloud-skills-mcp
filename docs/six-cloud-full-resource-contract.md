@@ -107,5 +107,6 @@ Examples are navigation aids, not a support allowlist.
   vulnerability scanning, protocol smoke, installer smoke and cross-platform
   release builds.
 - Live tests are opt-in, read-only by default and provider-selectable. The
-  operator injects credentials and observes the request. Mutation live tests
-  use dedicated disposable resources and separate explicit approval.
+  operator injects credentials and observes provider, audit outcome, response
+  size and request ID without printing response bodies. Mutation live tests use
+  dedicated disposable resources and separate explicit approval.
