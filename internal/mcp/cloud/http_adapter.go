@@ -29,21 +29,22 @@ import (
 )
 
 const (
-	authSchemeAWSSigV4       = "sigv4"
-	authSchemeAWSSigV4a      = "sigv4a"
-	authSchemeAlibabaACS3    = "acs3"
-	authSchemeAlibabaRPCV2   = "rpc"
-	authSchemeAlibabaROAV2   = "roa"
-	authSchemeAlibabaDataHub = "datahub"
-	authSchemeAlibabaOSSV4   = "oss4"
-	authSchemeAlibabaSLS     = "sls"
-	authSchemeAlibabaSLSV4   = "sls4"
-	authSchemeAlibabaMNS     = "mns"
-	authSchemeAlibabaOTS     = "ots"
-	authSchemeAlibabaOTSV4   = "ots4"
-	authSchemeTencentTC3     = "tc3"
-	authSchemeTencentCOS     = "cos"
-	defaultHTTPClientTimeout = 60 * time.Second
+	authSchemeAWSSigV4          = "sigv4"
+	authSchemeAWSSigV4a         = "sigv4a"
+	authSchemeAlibabaACS3       = "acs3"
+	authSchemeAlibabaRPCV2      = "rpc"
+	authSchemeAlibabaROAV2      = "roa"
+	authSchemeAlibabaDataHub    = "datahub"
+	authSchemeAlibabaOpenSearch = "opensearch"
+	authSchemeAlibabaOSSV4      = "oss4"
+	authSchemeAlibabaSLS        = "sls"
+	authSchemeAlibabaSLSV4      = "sls4"
+	authSchemeAlibabaMNS        = "mns"
+	authSchemeAlibabaOTS        = "ots"
+	authSchemeAlibabaOTSV4      = "ots4"
+	authSchemeTencentTC3        = "tc3"
+	authSchemeTencentCOS        = "cos"
+	defaultHTTPClientTimeout    = 60 * time.Second
 )
 
 type AWSCredentials struct {
@@ -316,7 +317,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+oss4+sls+sls4+mns+ots+ots4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -329,6 +330,7 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"rpc_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/rpc-mechanism",
 		"roa_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism",
 		"datahub_api":    "https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz",
+		"opensearch_api": "https://www.alibabacloud.com/help/en/open-search/high-performance-searchedition/signature-method-of-opensearch-api-v3",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
@@ -338,8 +340,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, oss4, sls, sls4, mns, ots, or ots4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -380,6 +382,11 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeAlibabaDataHub:
 		if err := signAlibabaDataHub(request, credentials, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaOpenSearch:
+		now := adapter.config.Now().UTC()
+		if err := signAlibabaOpenSearch(request, credentials, now, alibabaOpenSearchNonce(now, adapter.config.Nonce())); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeAlibabaOSSV4:
@@ -908,6 +915,64 @@ func signAlibabaDataHub(request *http.Request, credentials AlibabaCredentials, a
 	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
 	request.Header.Set("Authorization", "DATAHUB "+credentials.AccessKeyID+":"+signature)
 	return nil
+}
+
+func signAlibabaOpenSearch(request *http.Request, credentials AlibabaCredentials, now time.Time, nonce string) error {
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud OpenSearch requires complete AKSK material")
+	}
+	if len(nonce) != 16 {
+		return fmt.Errorf("Alibaba Cloud OpenSearch requires a 16-digit nonce")
+	}
+	for _, character := range nonce {
+		if character < '0' || character > '9' {
+			return fmt.Errorf("Alibaba Cloud OpenSearch requires a 16-digit nonce")
+		}
+	}
+	request.Header.Set("Date", now.UTC().Format("2006-01-02T15:04:05Z"))
+	request.Header.Set("X-Opensearch-Nonce", nonce)
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Opensearch-Security-Token", credentials.SecurityToken)
+	}
+	if request.Body != nil && request.Body != http.NoBody {
+		bodyMD5, _, err := requestBodyMD5(request, false)
+		if err != nil {
+			return fmt.Errorf("hash Alibaba Cloud OpenSearch request body: %w", err)
+		}
+		request.Header.Set("Content-MD5", strings.ToLower(bodyMD5))
+	} else {
+		request.Header.Del("Content-MD5")
+	}
+	canonicalHeaders := canonicalPrefixedHeaders(request.Header, "x-opensearch-")
+	resource := canonicalURI(request.URL)
+	if request.Method == http.MethodGet {
+		if query := canonicalAlibabaOpenSearchQuery(request.URL.Query()); query != "" {
+			resource += "?" + query
+		}
+	}
+	stringToSign := request.Method + "\n" + request.Header.Get("Content-MD5") + "\n" + request.Header.Get("Content-Type") + "\n" + request.Header.Get("Date") + "\n" + canonicalHeaders + "\n" + resource
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("Authorization", "OPENSEARCH "+credentials.AccessKeyID+":"+signature)
+	return nil
+}
+
+func canonicalAlibabaOpenSearchQuery(values url.Values) string {
+	items := make([]string, 0)
+	for name, entries := range values {
+		for _, value := range entries {
+			if value != "" {
+				items = append(items, uriEncode(name, true)+"="+uriEncode(value, true))
+			}
+		}
+	}
+	sort.Strings(items)
+	return strings.Join(items, "&")
+}
+
+func alibabaOpenSearchNonce(now time.Time, seed string) string {
+	digest := sha256.Sum256([]byte(seed))
+	random := (int(digest[0])<<16|int(digest[1])<<8|int(digest[2]))%900000 + 100000
+	return fmt.Sprintf("%010d%06d", now.UTC().Unix(), random)
 }
 
 func signTencentTC3(request *http.Request, payloadHash string, credentials TencentCredentials, invocation Invocation, now time.Time) error {

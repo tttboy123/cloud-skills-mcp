@@ -47,7 +47,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated HTTPS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
-| Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OSS4 object, SLS v1/v4, MNS and OTS v2/v4 protobuf signed HTTPS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env |
+| Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, OSS4 object, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env |
 | Tencent Cloud | Direct API 3.0 TC3 HTTPS plus COS data-plane signed HTTPS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment |
 | Baidu AI Cloud | BCE signed HTTPS request against validated `baidubce.com` endpoints | BCE AK/SK or IAM/STS temporary AK/SK/session token |
 

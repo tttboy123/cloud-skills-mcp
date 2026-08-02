@@ -1,6 +1,6 @@
 ---
 name: alicloud
-description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
+description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
 ---
 
 # Alibaba Cloud
@@ -18,7 +18,7 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 
 ## MCP arguments
 
-- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc` or `roa` for matching legacy V2 APIs; `datahub` for DataHub; `oss4` for OSS; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
+- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `oss4` for OSS; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
 - `service`: product/signing code, such as `ecs`, `rds`, `vpc`, `ram`, or `oss`.
 - `operation`: exact action name used by ACS3 headers and read/write classification.
 - `api_version`: required for ACS3, RPC, and ROA, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
@@ -34,6 +34,8 @@ Legacy RPC example: `alicloud_api_read(auth_scheme="rpc", service="baas", operat
 Legacy ROA example: `alicloud_api_read(auth_scheme="roa", service="pds", operation="ListDrives", api_version="v2", method="POST", url="https://<domain-id>.api.aliyunpds.com/v2/drive/list", body={"limit":20})`. The adapter signs the exact path/query and body, derives `Content-MD5`, and internally adds Date, nonce, version, optional RAM `x-acs-security-token`, and `Authorization`. Do not provide those controlled headers. ROA supports the documented GET, POST, PUT, and DELETE methods.
 
 DataHub example: `alicloud_api_read(auth_scheme="datahub", service="datahub", operation="ListProjects", method="GET", url="https://dh-cn-hangzhou.aliyuncs.com/projects")`. The adapter defaults `x-datahub-client-version` to `1.1` (override with `api_version`), signs the exact resource path/query, and internally adds Date, optional RAM `x-datahub-security-token`, and `DATAHUB` authorization. Project, topic, shard, connector, record, and subscription endpoints use the same scheme.
+
+OpenSearch example: `alicloud_api_read(auth_scheme="opensearch", service="opensearch", operation="Search", method="GET", url="https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/<app>/search", parameters={"query":"config=start:0&&query=default:'term'"})`. The adapter RFC3986-canonicalizes non-empty search parameters, generates the required timestamp-plus-random nonce, and adds ISO-8601 Date, optional `X-Opensearch-Security-Token`, and `OPENSEARCH` authorization. Body requests receive the documented lowercase hexadecimal `Content-MD5`; non-GET request query parameters are not part of the OpenSearch push-resource signature.
 
 SLS example: `alicloud_api_read(auth_scheme="sls4", service="sls", operation="ListLogstores", region="cn-hangzhou", method="GET", url="https://<project>.cn-hangzhou.log.aliyuncs.com/logstores")`. For protobuf log ingestion, pass the encoded body through `body_file` and its documented non-auth headers such as `Content-Type` and `x-log-bodyrawsize`; signing headers are server-controlled.
 

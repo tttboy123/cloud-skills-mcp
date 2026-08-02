@@ -400,6 +400,7 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/"},
 		{Provider: ProviderAlicloud, AuthScheme: "roa", Service: "pds", Operation: "ListDrives", APIVersion: "v2", Method: "POST", URL: "https://123.api.aliyunpds.com/v2/drive/list"},
 		{Provider: ProviderAlicloud, AuthScheme: "datahub", Service: "datahub", Operation: "ListProjects", Method: "GET", URL: "https://dh-cn-hangzhou.aliyuncs.com/projects"},
+		{Provider: ProviderAlicloud, AuthScheme: "opensearch", Service: "opensearch", Operation: "Search", Method: "GET", URL: "https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/demo/search?query=config%3Dstart%3A0"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -442,6 +443,11 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	datahub.Headers = map[string]string{"X-Datahub-Security-Token": "caller"}
 	if err := validateInvocation(datahub, nil); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("DataHub caller token error=%v", err)
+	}
+	opensearch := requests[8]
+	opensearch.Headers = map[string]string{"X-Opensearch-Nonce": "caller"}
+	if err := validateInvocation(opensearch, nil); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("OpenSearch caller nonce error=%v", err)
 	}
 }
 

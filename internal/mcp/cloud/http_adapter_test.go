@@ -1033,6 +1033,49 @@ func TestAlibabaDataHubAdapterInjectsSTS(t *testing.T) {
 	}
 }
 
+func TestAlibabaOpenSearchMatchesOfficialSearchVector(t *testing.T) {
+	rawURL := "https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/app_schema_demo/search?query=query%3Dname%3A%27%E6%96%87%E6%A1%A3%27%26%26sort%3Did%26%26config%3Dformat%3Afulljson&fetch_fields=name&empty="
+	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if err := signAlibabaOpenSearch(request, AlibabaCredentials{
+		AccessKeyID: "LTAIEXAMPLE", AccessKeySecret: "yourAccessKeySecret",
+	}, time.Date(2019, 2, 25, 10, 9, 57, 0, time.UTC), "1551089397451704"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "OPENSEARCH LTAIEXAMPLE:Mv5FyQxr6myxxnwMPqJ6f6F9+9Y="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+	if request.Header.Get("Date") != "2019-02-25T10:09:57Z" || request.Header.Get("X-Opensearch-Nonce") != "1551089397451704" {
+		t.Fatalf("headers=%v", request.Header)
+	}
+}
+
+func TestAlibabaOpenSearchAdapterSignsPushBodyAndInjectsSTS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("Content-MD5") != "f2b1f6a843d9e59265e0ba88011b4b5d" || request.Header.Get("X-Opensearch-Security-Token") != "ram-token" {
+			t.Fatalf("headers=%v", request.Header)
+		}
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "OPENSEARCH ak:") {
+			t.Fatalf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		return httpResponse(200, `{"status":"OK"}`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "secret", SecurityToken: "ram-token"}},
+		HTTP:        doer, Now: func() time.Time { return time.Unix(1551089397, 0).UTC() }, Nonce: func() string { return "seed" },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "opensearch", Service: "opensearch", Operation: "PushDocuments",
+		Method: http.MethodPost, URL: "https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/demo/tab/actions/bulk", Body: `[{"cmd":"ADD"}]`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {
