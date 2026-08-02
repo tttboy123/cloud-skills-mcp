@@ -31,6 +31,7 @@ import (
 
 var tencentASRWebSocketPath = regexp.MustCompile(`^/asr/v2/[0-9]{5,20}$`)
 var tencentVirtualNumberWebSocketPath = regexp.MustCompile(`^/asr/virtual_number/v1/[0-9]{5,20}$`)
+var tencentSOEWebSocketPath = regexp.MustCompile(`^/soe/api/[0-9]{5,20}$`)
 var tencentSpeechTranslateWebSocketPath = regexp.MustCompile(`^/asr/speech_translate/[0-9]{5,20}$`)
 var tencentMPSWebSocketPath = regexp.MustCompile(`^/wss/v1/[0-9]{5,20}$`)
 var tencentMPSTTSWebSocketPath = regexp.MustCompile(`^/tts/v1/[0-9]{5,20}$`)
@@ -74,6 +75,32 @@ func validateTencentVirtualNumberWebSocketInvocation(invocation Invocation) erro
 		return fmt.Errorf("Tencent Cloud virtual-number WebSocket does not accept MPS frame controls")
 	}
 	return validateTencentVirtualNumberParameters(invocation.Parameters)
+}
+
+func validateTencentSOEWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket requires method GET for the HTTP upgrade")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "soe.cloud.tencent.com") || target.Port() != "" || !tencentSOEWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket requires wss://soe.cloud.tencent.com/soe/api/<appid> without caller query parameters")
+	}
+	if invocation.BodyFile == "" || invocation.Body != nil {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket requires body_file and does not accept inline body")
+	}
+	if len(invocation.Headers) != 0 {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket does not accept caller-supplied handshake headers")
+	}
+	if invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket does not accept MPS frame controls")
+	}
+	if err := validateTencentSOEParameters(invocation.Parameters); err != nil {
+		return err
+	}
+	if tencentScalarParameterEquals(invocation.Parameters, "rec_mode", "1") && (invocation.StreamChunkBytes != 0 || invocation.StreamIntervalMS != 0) {
+		return fmt.Errorf("Tencent Cloud SOE recording mode requires one server-sized audio frame and does not accept stream controls")
+	}
+	return nil
 }
 
 func validateTencentSpeechTranslateWebSocketInvocation(invocation Invocation) error {
@@ -346,6 +373,88 @@ func signTencentVirtualNumberWebSocketURL(rawURL string, credentials TencentCred
 	target.Host = "asr.cloud.tencent.com"
 	target.RawQuery = encodeTencentV1Parameters(parameters)
 	return target.String(), nil
+}
+
+func signTencentSOEWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, nonce, voiceID string) (string, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse Tencent Cloud SOE WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "soe.cloud.tencent.com") || target.Port() != "" || !tencentSOEWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return "", fmt.Errorf("Tencent Cloud SOE WebSocket requires wss://soe.cloud.tencent.com/soe/api/<appid> without caller query parameters")
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return "", fmt.Errorf("Tencent Cloud SOE WebSocket requires complete SecretId/SecretKey credentials")
+	}
+	if credentials.Token != "" {
+		return "", fmt.Errorf("Tencent Cloud SOE WebSocket does not document CAM temporary-token authentication")
+	}
+	if !validTencentASRNonce(nonce) {
+		return "", fmt.Errorf("Tencent Cloud SOE WebSocket requires a positive nonce of at most 10 digits")
+	}
+	if !tencentVoiceIDPattern.MatchString(voiceID) {
+		return "", fmt.Errorf("Tencent Cloud SOE WebSocket requires a generated voice_id of at most 128 characters")
+	}
+	if err := validateTencentSOEParameters(input); err != nil {
+		return "", err
+	}
+	parameters := make(map[string]string, len(input)+6)
+	for name, value := range input {
+		parameter, _ := tencentScalarStringValue(value)
+		parameters[name] = parameter
+	}
+	timestamp := now.UTC().Unix()
+	parameters["secretid"] = credentials.SecretID
+	parameters["timestamp"] = strconv.FormatInt(timestamp, 10)
+	parameters["expired"] = strconv.FormatInt(timestamp+24*60*60, 10)
+	parameters["nonce"] = nonce
+	parameters["voice_id"] = voiceID
+	canonical := canonicalTencentV1Parameters(parameters)
+	source := "soe.cloud.tencent.com" + target.EscapedPath() + "?" + canonical
+	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
+	target.Scheme = "wss"
+	target.Host = "soe.cloud.tencent.com"
+	target.RawQuery = encodeTencentV1Parameters(parameters)
+	return target.String(), nil
+}
+
+func validateTencentSOEParameters(input map[string]any) error {
+	parameters := make(map[string]string, len(input))
+	for name, value := range input {
+		if isTencentASRControlledParameter(name) {
+			return fmt.Errorf("caller-supplied Tencent Cloud SOE WebSocket signing parameter %q is forbidden", name)
+		}
+		switch name {
+		case "server_engine_type", "voice_format", "text_mode", "ref_text", "keyword", "eval_mode", "score_coeff", "sentence_info_enabled", "rec_mode":
+		default:
+			return fmt.Errorf("Tencent Cloud SOE WebSocket query parameter %q is not documented", name)
+		}
+		parameter, err := tencentScalarStringValue(value)
+		if err != nil {
+			return fmt.Errorf("Tencent Cloud SOE WebSocket query parameter %q must be scalar", name)
+		}
+		parameters[name] = parameter
+	}
+	if engine := parameters["server_engine_type"]; engine != "16k_zh" && engine != "16k_en" {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket server_engine_type must be 16k_zh or 16k_en")
+	}
+	evalMode, err := strconv.Atoi(parameters["eval_mode"])
+	if err != nil || evalMode < 0 || evalMode > 8 {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket eval_mode must be between 0 and 8")
+	}
+	score, err := strconv.ParseFloat(parameters["score_coeff"], 64)
+	if err != nil || math.IsNaN(score) || math.IsInf(score, 0) || score < 1 || score > 4 {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket score_coeff must be between 1.0 and 4.0")
+	}
+	if format, present := parameters["voice_format"]; present && format != "0" && format != "1" && format != "2" && format != "4" {
+		return fmt.Errorf("Tencent Cloud SOE WebSocket voice_format is unsupported")
+	}
+	for _, name := range []string{"text_mode", "sentence_info_enabled", "rec_mode"} {
+		if value, present := parameters[name]; present && value != "0" && value != "1" {
+			return fmt.Errorf("Tencent Cloud SOE WebSocket %s must be 0 or 1", name)
+		}
+	}
+	return nil
 }
 
 func validateTencentVirtualNumberParameters(input map[string]any) error {
@@ -1070,6 +1179,121 @@ func defaultTencentVirtualNumberChunkBytes(parameters map[string]any) int {
 		return 640
 	}
 	return 4096
+}
+
+func invokeTencentSOEWebSocket(ctx context.Context, adapter *TencentRESTAdapter, credentials TencentCredentials, invocation Invocation) (InvocationResult, error) {
+	streamInvocation := invocation
+	if tencentScalarParameterEquals(invocation.Parameters, "rec_mode", "1") {
+		info, err := os.Stat(invocation.BodyFile)
+		if err != nil {
+			return InvocationResult{}, fmt.Errorf("inspect Tencent Cloud SOE recording body_file: %w", err)
+		}
+		if info.Size() <= 0 {
+			return InvocationResult{}, fmt.Errorf("Tencent Cloud SOE recording body_file is empty")
+		}
+		streamInvocation.StreamChunkBytes = int(info.Size())
+		streamInvocation.StreamIntervalMS = 40
+	}
+	voiceID := adapter.config.VoiceID()
+	signedURL, err := signTencentSOEWebSocketURL(invocation.URL, credentials, invocation.Parameters, adapter.config.Now().UTC(), adapter.config.Nonce(), voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	dialContext, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
+	connection, err := adapter.config.WebSocketDial(dialContext, signedURL)
+	cancelDial()
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer connection.Close()
+	sink, err := newTencentWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer sink.abort()
+	handshakeContext, cancelHandshake := context.WithTimeout(ctx, adapter.config.Timeout)
+	messageType, handshake, err := connection.Read(handshakeContext)
+	cancelHandshake()
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("read Tencent Cloud SOE WebSocket handshake")
+	}
+	requestID, _, err := acceptTencentSOEText(messageType, handshake, sink, voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if streamInvocation.StreamChunkBytes == 0 {
+		if tencentScalarParameterEquals(invocation.Parameters, "voice_format", "0") || invocation.Parameters["voice_format"] == nil {
+			streamInvocation.StreamChunkBytes = 1280
+		} else {
+			streamInvocation.StreamChunkBytes = 4096
+		}
+	}
+	if streamInvocation.StreamIntervalMS == 0 {
+		streamInvocation.StreamIntervalMS = 40
+	}
+	streamContext, cancelStream := tencentASRStreamContext(ctx, streamInvocation)
+	defer cancelStream()
+	readResult := make(chan tencentASRReadResult, 1)
+	go readTencentSOEWebSocket(streamContext, cancelStream, connection, sink, requestID, readResult)
+	if err := streamTencentASRAudio(streamContext, connection, streamInvocation, adapter.config.StreamPause); err != nil {
+		cancelStream()
+		reader := <-readResult
+		if reader.err != nil {
+			return InvocationResult{}, reader.err
+		}
+		return InvocationResult{}, err
+	}
+	result := <-readResult
+	if result.err != nil {
+		return InvocationResult{}, result.err
+	}
+	output, err := sink.finish(result.requestID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return InvocationResult{Output: output, RequestID: result.requestID}, nil
+}
+
+func acceptTencentSOEText(messageType tencentWebSocketMessageType, data []byte, sink *tencentWebSocketOutputSink, expectedID string) (string, bool, error) {
+	if messageType != tencentWebSocketMessageText {
+		return expectedID, false, fmt.Errorf("Tencent Cloud SOE WebSocket returned a non-text response")
+	}
+	var message tencentASRWebSocketMessage
+	if err := json.Unmarshal(data, &message); err != nil {
+		return expectedID, false, fmt.Errorf("Tencent Cloud SOE WebSocket returned invalid JSON")
+	}
+	if message.Code != 0 {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud SOE WebSocket returned code %d", message.Code)
+	}
+	if strings.TrimSpace(message.VoiceID) == "" || (expectedID != "" && message.VoiceID != expectedID) {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud SOE WebSocket returned an invalid voice_id")
+	}
+	if err := sink.writeMessage(data); err != nil {
+		return message.VoiceID, false, err
+	}
+	return message.VoiceID, message.Final == 1, nil
+}
+
+func readTencentSOEWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, sink *tencentWebSocketOutputSink, requestID string, result chan<- tencentASRReadResult) {
+	for {
+		messageType, data, err := connection.Read(ctx)
+		if err != nil {
+			cancel()
+			result <- tencentASRReadResult{requestID: requestID, err: fmt.Errorf("read Tencent Cloud SOE WebSocket response")}
+			return
+		}
+		currentID, final, err := acceptTencentSOEText(messageType, data, sink, requestID)
+		if currentID != "" {
+			requestID = currentID
+		}
+		if err != nil || final {
+			if err != nil {
+				cancel()
+			}
+			result <- tencentASRReadResult{requestID: requestID, err: err}
+			return
+		}
+	}
 }
 
 func tencentASRStreamContext(ctx context.Context, invocation Invocation) (context.Context, context.CancelFunc) {

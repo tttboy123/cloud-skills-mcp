@@ -1840,6 +1840,75 @@ func TestTencentVirtualNumberWebSocketRejectsTemporaryTokenAndInvalidParameters(
 	}
 }
 
+func TestTencentSOEWebSocketSignatureMatchesOfficialAlgorithm(t *testing.T) {
+	signedURL, err := signTencentSOEWebSocketURL(
+		"wss://soe.cloud.tencent.com/soe/api/1306000000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"eval_mode": 1, "ref_text": "hello", "score_coeff": 1.5, "sentence_info_enabled": 1, "server_engine_type": "16k_zh", "text_mode": 0, "voice_format": 0},
+		time.Unix(1722321759, 0).UTC(),
+		"42261112",
+		"4943511b-192c-40f8-b6c9-c3df2a827b75",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := parsed.Query().Get("signature"), "rMeQTtXY/Gn3smDgzaGi463ynMM="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+}
+
+func TestTencentSOEWebSocketRejectsTemporaryTokenAndInvalidParameters(t *testing.T) {
+	baseURL := "wss://soe.cloud.tencent.com/soe/api/1306000000"
+	valid := map[string]any{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5}
+	if _, err := signTencentSOEWebSocketURL(baseURL, TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, valid, time.Unix(1722321759, 0), "42261112", "voice"); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+	invalid := []map[string]any{
+		{},
+		{"server_engine_type": "8k_en", "eval_mode": 1, "score_coeff": 1.5},
+		{"server_engine_type": "16k_en", "eval_mode": 9, "score_coeff": 1.5},
+		{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 0.5},
+		{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "voice_format": 3},
+		{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "text_mode": 2},
+		{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "signature": "caller"},
+		{"server_engine_type": []string{"16k_en"}, "eval_mode": 1, "score_coeff": 1.5},
+	}
+	for _, parameters := range invalid {
+		if err := validateTencentSOEParameters(parameters); err == nil {
+			t.Fatalf("invalid parameters accepted: %#v", parameters)
+		}
+	}
+	credentials := TencentCredentials{SecretID: "id", SecretKey: "key"}
+	if _, err := signTencentSOEWebSocketURL(baseURL, credentials, valid, time.Unix(1722321759, 0), "invalid", "voice"); err == nil {
+		t.Fatal("invalid nonce was accepted")
+	}
+	if _, err := signTencentSOEWebSocketURL(baseURL, credentials, valid, time.Unix(1722321759, 0), "42261112", "voice id"); err == nil {
+		t.Fatal("invalid voice_id was accepted")
+	}
+}
+
+func TestTencentSOEWebSocketRejectsMalformedProviderResponses(t *testing.T) {
+	sink := &tencentWebSocketOutputSink{maxBytes: 1024}
+	tests := []struct {
+		messageType tencentWebSocketMessageType
+		data        []byte
+	}{
+		{tencentWebSocketMessageBinary, []byte("binary")},
+		{tencentWebSocketMessageText, []byte("not-json")},
+		{tencentWebSocketMessageText, []byte(`{"code":4001,"voice_id":"voice"}`)},
+		{tencentWebSocketMessageText, []byte(`{"code":0,"voice_id":"other"}`)},
+	}
+	for _, test := range tests {
+		if _, _, err := acceptTencentSOEText(test.messageType, test.data, sink, "voice"); err == nil {
+			t.Fatalf("malformed response accepted: type=%d data=%q", test.messageType, test.data)
+		}
+	}
+}
+
 func TestTencentSpeechTranslateWebSocketRejectsTemporaryTokenAndInvalidInputs(t *testing.T) {
 	baseURL := "wss://asr.cloud.tencent.com/asr/speech_translate/1259220000"
 	credentials := TencentCredentials{SecretID: "id", SecretKey: "key"}
@@ -2212,6 +2281,71 @@ func TestTencentVirtualNumberWebSocketStreamsEightKilohertzAudio(t *testing.T) {
 		t.Fatalf("result=%#v", result)
 	}
 	if len(connection.writes) != 3 || len(connection.writes[0].data) != 640 || len(connection.writes[1].data) != 360 || string(connection.writes[2].data) != `{"type":"end"}` {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentSOEWebSocketStreamsEvaluationAudio(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "audio.pcm")
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{0x44}, 1500), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","message_id":"message","result":{"SuggestedScore":88.5},"final":1}`),
+	}}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1722321759, 0).UTC() },
+		Nonce:       func() string { return "42261112" },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "soe-ws", Service: "soe", Operation: "EvaluateSpeechStream", Method: http.MethodGet,
+		URL: "wss://soe.cloud.tencent.com/soe/api/1306000000", Parameters: map[string]any{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "ref_text": "hello", "voice_format": 0}, BodyFile: audioFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestID != "voice" || !bytes.Contains(result.Output, []byte(`"SuggestedScore":88.5`)) {
+		t.Fatalf("result=%#v", result)
+	}
+	if len(connection.writes) != 3 || len(connection.writes[0].data) != 1280 || len(connection.writes[1].data) != 220 || string(connection.writes[2].data) != `{"type":"end"}` {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentSOERecordingModeSendsOneAudioFrame(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "recording.pcm")
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{0x55}, 1500), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","final":1}`),
+	}}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1722321759, 0).UTC() },
+		Nonce:       func() string { return "42261112" },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "soe-ws", Service: "soe", Operation: "EvaluateSpeechRecording", Method: http.MethodGet,
+		URL: "wss://soe.cloud.tencent.com/soe/api/1306000000", Parameters: map[string]any{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "rec_mode": 1}, BodyFile: audioFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connection.writes) != 2 || len(connection.writes[0].data) != 1500 || string(connection.writes[1].data) != `{"type":"end"}` {
 		t.Fatalf("writes=%#v", connection.writes)
 	}
 }

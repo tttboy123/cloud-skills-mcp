@@ -230,6 +230,7 @@ func TestReadClassifierCannotBeDowngradedByCaller(t *testing.T) {
 		{ProviderAWS, Invocation{Service: "kms", Operation: "decrypt"}, false, true},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "DescribeInstances"}, true, false},
 		{ProviderTencent, Invocation{AuthScheme: "voice-convert-ws", Service: "vc", Operation: "ConvertVoice"}, true, false},
+		{ProviderTencent, Invocation{AuthScheme: "soe-ws", Service: "soe", Operation: "EvaluateSpeechStream"}, true, false},
 		{ProviderTencent, Invocation{AuthScheme: "tc3", Service: "other", Operation: "ConvertResource"}, false, false},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "StartInstances"}, false, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://management.azure.com/subscriptions/sub/resources?api-version=2021-04-01"}, true, false},
@@ -431,6 +432,33 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentVirtualNumberWebSocket(t *tes
 	for _, candidate := range invalid {
 		if err := validateInvocation(candidate, []string{root}); err == nil {
 			t.Fatalf("unsafe virtual-number stream accepted: %#v", candidate)
+		}
+	}
+}
+
+func TestInvocationBoundaryAllowsOnlyGuardedTencentSOEWebSocket(t *testing.T) {
+	root := t.TempDir()
+	audio := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audio, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "soe-ws", Service: "soe", Operation: "EvaluateSpeechStream", Method: http.MethodGet,
+		URL: "wss://soe.cloud.tencent.com/soe/api/1306000000", Parameters: map[string]any{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "ref_text": "hello", "voice_format": 0},
+		BodyFile: audio, ResponseFile: filepath.Join(root, "soe.ndjson"), StreamChunkBytes: 1280, StreamIntervalMS: 40,
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded SOE stream rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request, request}
+	invalid[0].URL += "?signature=caller"
+	invalid[1].Parameters = map[string]any{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "signature": "caller"}
+	invalid[2].Parameters = map[string]any{"server_engine_type": "16k_en", "eval_mode": 9, "score_coeff": 1.5}
+	invalid[3].Headers = map[string]string{"Authorization": "caller"}
+	invalid[4].Parameters = map[string]any{"server_engine_type": "16k_en", "eval_mode": 1, "score_coeff": 1.5, "rec_mode": 1}
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe SOE stream accepted: %#v", candidate)
 		}
 	}
 }

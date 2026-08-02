@@ -21,7 +21,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` HTTPS / Discovery Service | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
-| Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、实时语音翻译、音色变换、MPS 识别/翻译与 MPS TTS signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；这些 WSS 接口按官方约束使用长期 SecretId/SecretKey |
+| Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译与 MPS TTS signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；这些 WSS 接口按官方约束使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2 | BCE AK/SK、IAM/STS temporary AK/SK/session token |
 
 ## 安全边界
@@ -148,7 +148,7 @@ GCP 查询：
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
 
-Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译和 MPS 流式语音合成分别使用 `asr-ws|virtual-number-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译和 MPS 流式语音合成分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 
 Tencent ASR WebSocket 有限音频流示例：
 
@@ -165,6 +165,14 @@ Tencent 虚拟号真人判定示例：
 ```
 
 8k PCM 默认每 40ms 发送 640 字节；服务端在真人接听结果或 `final=1` 返回后停止，并以有界 NDJSON 返回/原子落盘。压缩格式可显式调整 `stream_chunk_bytes`，带签名 URL 始终留在进程内部。
+
+Tencent 新版口语评测示例：
+
+```json
+{"name":"tencent_api_read","arguments":{"auth_scheme":"soe-ws","service":"soe","operation":"EvaluateSpeechStream","method":"GET","url":"wss://soe.cloud.tencent.com/soe/api/<appid>","parameters":{"server_engine_type":"16k_en","eval_mode":1,"score_coeff":1.5,"ref_text":"hello","voice_format":0},"body_file":"/approved/audio/speech.pcm","response_file":"/approved/results/soe.ndjson"}}
+```
+
+实时 PCM 默认每 40ms 发送 1280 字节；`rec_mode=1` 时禁止自定义流控并将受控录音文件一次性发送。`server_engine_type`、`eval_mode`、`score_coeff` 和可选模式字段均按官网范围验证。评测中间结果与 `final=1` 终态以有界 NDJSON 返回，参考文本和签名不进入审计记录。
 
 Tencent 实时语音翻译示例：
 
