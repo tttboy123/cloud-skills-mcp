@@ -13,7 +13,7 @@ read-only API call and a matching sanitized audit event.
 |---|---|---|---|
 | One MCP server for AWS, Azure, Google Cloud, Alibaba Cloud, Tencent Cloud and Baidu AI Cloud | `internal/mcp/cloud/types.go`, `adapters.go`, `server.go` | Tool-contract and protocol-smoke tests enumerate all six provider prefixes | Implemented; live pending |
 | All documented resource APIs addressable without per-resource Go handlers | AWS/Aliyun/TCCLI universal service+operation adapters; Azure/GCP/Baidu guarded REST adapters; exact operator endpoint extension | Adapter command/HTTP construction tests plus provider official CLI/API references | Implemented; representative live reads pending |
-| Official AKSK/IAM identity entrypoints | AWS CLI chain, Azure DefaultAzureCredential/CLI, Google ADC/gcloud, Alibaba RAM/CLI, Tencent CAM/TCCLI, Baidu BCE AKSK/STS signing | Credential-chain and status tests; credentials absent from MCP schemas | Implemented; live identity resolution pending |
+| Official AKSK/IAM identity entrypoints | AWS CLI chain, Azure DefaultAzureCredential/CLI, Google ADC/gcloud, Alibaba RAM/CLI, Tencent CAM/TCCLI, Baidu BCE AKSK/STS signing | Credential-chain and status tests; credentials absent from MCP schemas; status distinguishes adapter availability from unverified authentication | Implemented; live identity resolution pending |
 | Credentials cannot be supplied, minted or exported through MCP | Credential headers/query/CLI flags rejected; STS/token/key/password issuance and export families hard-rejected; output redaction remains defense in depth | `TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput` and `TestInvocationBoundaryNeverIssuesOrExportsCloudCredentials` | Hermetic gate implemented |
 | Read/write and sensitive-operation boundary | Conservative read classifier; `CLOUD_SKILLS_ALLOW_MUTATIONS=1` + `force=true`; separate sensitive gate; host approval remains mandatory | Server contract, mutation-gate and protocol-smoke tests | Hermetic gate implemented |
 | Sanitized, fail-closed audit | Mode-0600 JSONL; no headers/body/response/query values; mutation pre-audit fail closed; request ID captured | Audit sink, URL sanitization, failure and live audit tests | Hermetic implemented; live audit pending |
@@ -34,5 +34,7 @@ go test ./internal/mcp/cloud -run TestLiveSixCloudReadOnly -v
 `CLOUD_SKILLS_LIVE_GCP_PROJECT` is required for the Google Cloud probe.
 `CLOUD_SKILLS_LIVE_PROVIDERS` can select a comma-separated subset while
 credentials are staged. A provider passes only when the API read succeeds and
-the test observes a matching `outcome=succeeded` audit event. The live test
-never calls a mutate tool or prints response bodies.
+the test observes a matching `outcome=succeeded` audit event. Before the call,
+the test logs only adapter availability and the non-secret credential
+source/status; `unverified` is expected for lazy official identity chains. The
+live test never calls a mutate tool or prints response bodies.

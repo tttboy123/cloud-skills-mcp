@@ -20,8 +20,11 @@ surface.
 
 The unified `cloud-skills-mcp` stdio server exposes:
 
-- `cloud_provider_status`: report local adapter, CLI and non-secret auth source
-  readiness for one provider.
+- `cloud_provider_status`: report local adapter/CLI readiness, non-secret auth
+  source type and a credential status. `available` is not proof of cloud
+  authentication; `credential_status=unverified` means the official identity
+  chain is resolved lazily by the first API call. Direct BCE signing can report
+  local credential-material presence, but only a live read proves validity.
 - `<provider>_api_discover`: read official CLI help or API discovery metadata.
 - `<provider>_api_read`: invoke an operation classified as read-only.
 - `<provider>_api_mutate`: invoke any supported operation after mutation and

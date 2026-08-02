@@ -60,6 +60,7 @@ func (adapter *CLIAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 		Provider:         adapter.config.Provider,
 		Adapter:          adapter.config.Binary,
 		CredentialSource: credentialSource(adapter.config.Provider),
+		CredentialStatus: CredentialStatusUnverified,
 	}
 	if err != nil {
 		status.Message = sdk.RedactSecret(err.Error())
@@ -70,6 +71,7 @@ func (adapter *CLIAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	if status.Version == "" {
 		status.Version = strings.TrimSpace(string(stderr))
 	}
+	status.Message = "adapter executable is available; credentials remain unverified until a provider API call succeeds"
 	return status, nil
 }
 

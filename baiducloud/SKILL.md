@@ -9,7 +9,7 @@ Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMA
 
 ## Workflow
 
-1. Call `cloud_provider_status` with `provider="baiducloud"`.
+1. Call `cloud_provider_status` with `provider="baiducloud"`; `local-material-present` confirms only local AK/SK presence, while `missing-local-material` requires operator credential injection. Neither proves cloud authentication.
 2. Call `baiducloud_api_discover(service="bcc")` or another product code to obtain the official API-center and product-doc links, then verify the exact endpoint/path.
 3. Use `baiducloud_api_read` for `GET`, `HEAD`, or `OPTIONS` only.
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the account, region, URL, method, body, and effect; then use `baiducloud_api_mutate(force=true)`.

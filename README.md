@@ -13,6 +13,8 @@
 
 provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiducloud`。
 
+`cloud_provider_status.available` 表示 adapter/CLI 或必需的本地凭证材料入口可用，不表示云端认证已经成功。`credential_status=unverified` 表示身份链会在首次 API 调用时延迟解析；百度直签 adapter 会报告 `local-material-present` 或 `missing-local-material`。只有成功的只读 live API 调用才证明凭证和 IAM 权限可用。
+
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
 | AWS | AWS CLI 任意 service/operation；Cloud Control 可作为标准资源模型 | Profile/SSO、IAM Role、Web Identity、AKSK/STS |
@@ -141,7 +143,7 @@ go build -trimpath ./cmd/cloud-skills-mcp ./cmd/tencent-cloud-mcp
 CLOUD_SKILLS_LIVE_TEST=1 go test ./internal/mcp/cloud -run TestLiveSixCloudReadOnly -v
 ```
 
-GCP live 验收需要 `CLOUD_SKILLS_LIVE_GCP_PROJECT`。各云可用 `CLOUD_SKILLS_LIVE_PROVIDERS` 选择子集。live gate 永不调用 mutate 工具，也不打印响应正文；它逐云输出审计 outcome、响应字节数和可用的 provider RequestId。
+GCP live 验收需要 `CLOUD_SKILLS_LIVE_GCP_PROJECT`。各云可用 `CLOUD_SKILLS_LIVE_PROVIDERS` 选择子集。live gate 永不调用 mutate 工具，也不打印响应正文；它逐云输出 adapter availability、credential source/status、审计 outcome、响应字节数和可用的 provider RequestId。
 
 ## 目录
 

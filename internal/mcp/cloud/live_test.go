@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -71,6 +72,14 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 			if status.IsError {
 				t.Fatalf("provider status: %s", cloudToolText(t, status))
 			}
+			providerStatus, err := parseLiveProviderStatus(cloudToolText(t, status))
+			if err != nil {
+				t.Fatalf("parse provider status: %v", err)
+			}
+			t.Logf("provider=%s adapter_available=%t credential_source=%q credential_status=%q", test.provider, providerStatus.Available, providerStatus.CredentialSource, providerStatus.CredentialStatus)
+			if !providerStatus.Available {
+				t.Fatalf("provider adapter or required local credential material is unavailable: %s", providerStatus.Message)
+			}
 			result := callCloudTool(t, c, test.tool, test.arguments(t))
 			if result.IsError {
 				t.Fatalf("live read failed: %s", cloudToolText(t, result))
@@ -94,6 +103,27 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 				t.Logf("provider=%s outcome=%s response_bytes=%d request_id=%q", test.provider, observed.Outcome, len(text), observed.RequestID)
 			}
 		})
+	}
+}
+
+func parseLiveProviderStatus(text string) (ProviderStatus, error) {
+	var status ProviderStatus
+	if err := json.Unmarshal([]byte(text), &status); err != nil {
+		return ProviderStatus{}, fmt.Errorf("decode provider status: %w", err)
+	}
+	if !isProvider(status.Provider) {
+		return ProviderStatus{}, fmt.Errorf("provider status returned unknown provider %q", status.Provider)
+	}
+	return status, nil
+}
+
+func TestParseLiveProviderStatus(t *testing.T) {
+	status, err := parseLiveProviderStatus(`{"provider":"aws","available":true,"credential_source":"profile-or-sso","credential_status":"unverified"}`)
+	if err != nil || status.Provider != ProviderAWS || !status.Available || status.CredentialStatus != CredentialStatusUnverified {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+	if _, err := parseLiveProviderStatus(`not-json`); err == nil {
+		t.Fatal("invalid provider status JSON accepted")
 	}
 }
 

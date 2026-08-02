@@ -9,7 +9,7 @@ Use the unified MCP server as a guarded Azure REST gateway. With Service Princip
 
 ## Workflow
 
-1. Call `cloud_provider_status` with `provider="azure"`.
+1. Call `cloud_provider_status` with `provider="azure"`; treat `available` as adapter readiness and `credential_status=unverified` as pending live authentication.
 2. Verify the resource-provider API version in the official reference. `azure_api_discover` explains the adapter but cannot choose an API version for you.
 3. Use `azure_api_read` for `GET`, `HEAD`, or `OPTIONS` only.
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the tenant/subscription, target URL, method, body, and effect; then use `azure_api_mutate(force=true)`.

@@ -15,6 +15,10 @@ const (
 	ProviderTencent   Provider = "tencent"
 	ProviderBaidu     Provider = "baiducloud"
 	defaultOutputSize          = 1024 * 1024
+
+	CredentialStatusUnverified           = "unverified"
+	CredentialStatusLocalMaterialPresent = "local-material-present"
+	CredentialStatusMissingLocalMaterial = "missing-local-material"
 )
 
 func AllProviders() []Provider {
@@ -41,6 +45,7 @@ type ProviderStatus struct {
 	Adapter          string   `json:"adapter,omitempty"`
 	Version          string   `json:"version,omitempty"`
 	CredentialSource string   `json:"credential_source,omitempty"`
+	CredentialStatus string   `json:"credential_status,omitempty"`
 	Message          string   `json:"message,omitempty"`
 }
 

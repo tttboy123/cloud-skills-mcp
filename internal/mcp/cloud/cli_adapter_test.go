@@ -118,7 +118,8 @@ func TestCLIAdapterStatusAndDiscoveryAreCredentialSafe(t *testing.T) {
 	runner := &fakeProcessRunner{stdout: []byte("aws-cli/2.test\n")}
 	adapter := NewCLIAdapter(CLIAdapterConfig{Provider: ProviderAWS, Binary: "aws-test", Runner: runner})
 	status, err := adapter.Status(t.Context())
-	if err != nil || !status.Available || status.Version != "aws-cli/2.test" {
+	if err != nil || !status.Available || status.Version != "aws-cli/2.test" ||
+		status.CredentialStatus != "unverified" || !strings.Contains(status.Message, "API call succeeds") {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	if _, err := adapter.Discover(t.Context(), DiscoveryRequest{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances"}); err != nil {

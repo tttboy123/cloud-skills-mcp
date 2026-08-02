@@ -9,7 +9,7 @@ Use the unified MCP gateway for every TCCLI API 3.0 product and action. The exis
 
 ## Workflow
 
-1. Call `cloud_provider_status` with `provider="tencent"`.
+1. Call `cloud_provider_status` with `provider="tencent"`; treat `available` as CLI readiness and `credential_status=unverified` as pending live authentication.
 2. Use `tencent_api_discover` with the product and action when parameters are uncertain.
 3. Use `tencent_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `tencent_api_mutate(force=true)`.

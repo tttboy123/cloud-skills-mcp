@@ -85,11 +85,14 @@ func NewBaiduRESTAdapter(config BaiduRESTConfig) *BaiduRESTAdapter {
 func (adapter *BaiduRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS", CredentialSource: credentialSource(ProviderBaidu)}
 	if _, err := adapter.config.Credentials.Credentials(ctx); err != nil {
+		status.CredentialStatus = CredentialStatusMissingLocalMaterial
 		status.Message = err.Error()
 		return status, nil
 	}
 	status.Available = true
 	status.Version = bceAuthVersionV1 + "+" + bceAuthVersionV2
+	status.CredentialStatus = CredentialStatusLocalMaterialPresent
+	status.Message = "local BCE credential material is present; validity remains unverified until a provider API call succeeds"
 	return status, nil
 }
 

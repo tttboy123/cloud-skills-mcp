@@ -74,12 +74,12 @@ func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, er
 	if adapter.config.Tokens != nil {
 		return ProviderStatus{
 			Provider: ProviderAzure, Available: true, Adapter: "Azure REST + DefaultAzureCredential",
-			Version: "azidentity", CredentialSource: credentialSource(ProviderAzure),
+			Version: "azidentity", CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 			Message: "credentials are resolved lazily through the Azure Identity chain",
 		}, nil
 	}
 	stdout, stderr, err := adapter.run(ctx, []string{"version", "--output", "json"})
-	status := ProviderStatus{Provider: ProviderAzure, Adapter: adapter.config.Binary + " rest", CredentialSource: credentialSource(ProviderAzure)}
+	status := ProviderStatus{Provider: ProviderAzure, Adapter: adapter.config.Binary + " rest", CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified}
 	if err != nil {
 		status.Message = sdk.RedactSecret(err.Error())
 		return status, nil
@@ -89,6 +89,7 @@ func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, er
 	if status.Version == "" {
 		status.Version = strings.TrimSpace(string(stderr))
 	}
+	status.Message = "Azure CLI is available; credentials remain unverified until a provider API call succeeds"
 	return status, nil
 }
 
@@ -392,7 +393,7 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 func (adapter *GCPRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
 		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST + ADC",
-		Version: "google-auth/v0.22", CredentialSource: credentialSource(ProviderGCP),
+		Version: "google-auth/v0.22", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through ADC, then authenticated gcloud identity",
 	}, nil
 }

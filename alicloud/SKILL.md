@@ -9,7 +9,7 @@ Use the unified MCP server for every operation exposed by Alibaba Cloud CLI/Open
 
 ## Workflow
 
-1. Call `cloud_provider_status` with `provider="alicloud"`.
+1. Call `cloud_provider_status` with `provider="alicloud"`; treat `available` as CLI readiness and `credential_status=unverified` as pending live authentication.
 2. Use `alicloud_api_discover` with the product code and action when parameters are uncertain.
 3. Use `alicloud_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `alicloud_api_mutate(force=true)`.

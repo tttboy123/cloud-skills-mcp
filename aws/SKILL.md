@@ -9,7 +9,7 @@ Use the unified MCP server for every documented AWS CLI service and operation. T
 
 ## Workflow
 
-1. Call `cloud_provider_status` with `provider="aws"`; report only availability and credential-source type.
+1. Call `cloud_provider_status` with `provider="aws"`; report only adapter availability and credential source/status. `unverified` is normal before a live API call and is not authentication proof.
 2. If the operation or parameters are uncertain, call `aws_api_discover` with the AWS CLI service and operation.
 3. Use `aws_api_read` only for operations classified as read-only (`describe*`, `list*`, `get*`, `head*`, `search*`, and similar).
 4. For any other operation, obtain explicit human approval for the exact account, region, resources, operation, and expected effect. Then call `aws_api_mutate` with `force=true`.

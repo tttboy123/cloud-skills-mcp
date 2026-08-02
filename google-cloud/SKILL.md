@@ -9,7 +9,7 @@ Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway
 
 ## Workflow
 
-1. Call `cloud_provider_status` with `provider="gcp"`.
+1. Call `cloud_provider_status` with `provider="gcp"`; treat `available` as adapter readiness and `credential_status=unverified` as pending live authentication.
 2. Use `gcp_api_discover(service=<discovery-name>, operation=<version>)` to read the public Google Discovery document when available; otherwise use the linked official API reference.
 3. Use `gcp_api_read` for `GET`, `HEAD`, or `OPTIONS` only.
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the project, URL, method, body, resources, and effect; then use `gcp_api_mutate(force=true)`.

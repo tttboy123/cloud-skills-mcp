@@ -15,7 +15,7 @@ func TestAzureStatusDiscoveryAndFailures(t *testing.T) {
 	runner := &fakeProcessRunner{stdout: []byte(`{"azure-cli":"test"}`)}
 	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, Env: []string{}})
 	status, err := adapter.Status(t.Context())
-	if err != nil || !status.Available || !strings.Contains(status.Version, "azure-cli") {
+	if err != nil || !status.Available || !strings.Contains(status.Version, "azure-cli") || status.CredentialStatus != "unverified" {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	runner.stdout = nil
@@ -70,7 +70,7 @@ func TestGCPStatusAndTokenFallback(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 	})})
 	status, err := adapter.Status(t.Context())
-	if err != nil || !status.Available || !strings.Contains(status.Adapter, "ADC") || runner.calls != 0 {
+	if err != nil || !status.Available || !strings.Contains(status.Adapter, "ADC") || runner.calls != 0 || status.CredentialStatus != "unverified" {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	chain := adapter.config.Tokens.(*tokenProviderChain)
@@ -162,12 +162,12 @@ func TestBCEEnvironmentCredentialAndStatus(t *testing.T) {
 	}
 	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{})
 	status, err := adapter.Status(t.Context())
-	if err != nil || !status.Available || status.Version != bceAuthVersionV1+"+"+bceAuthVersionV2 {
+	if err != nil || !status.Available || status.Version != bceAuthVersionV1+"+"+bceAuthVersionV2 || status.CredentialStatus != "local-material-present" {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	t.Setenv("BCE_ACCESS_KEY_ID", "")
 	status, err = adapter.Status(t.Context())
-	if err != nil || status.Available || !strings.Contains(status.Message, "credential unavailable") {
+	if err != nil || status.Available || !strings.Contains(status.Message, "credential unavailable") || status.CredentialStatus != "missing-local-material" {
 		t.Fatalf("missing status=%#v err=%v", status, err)
 	}
 }

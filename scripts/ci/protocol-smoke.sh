@@ -25,6 +25,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"method":"GET","url":"https://management.azure.com/subscriptions","audience":"https://attacker.example"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"baiducloud_api_read","arguments":{"method":"GET","url":"https://bts.bj.baidubce.com/v1/forms","auth_version":"v2","service":"bts"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"aws_api_mutate","arguments":{"service":"sts","operation":"assume-role","force":true}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"cloud_provider_status","arguments":{"provider":"aws"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -47,7 +48,8 @@ jq -e -s '
     (map(select(.id == 8))[0].result.isError == true) and
     (map(select(.id == 8))[0].result.content[0].text | contains("requires a valid region")) and
     (map(select(.id == 9))[0].result.isError == true) and
-    (map(select(.id == 9))[0].result.content[0].text | contains("credential issuance"))
+    (map(select(.id == 9))[0].result.content[0].text | contains("credential issuance")) and
+    ((map(select(.id == 10))[0].result.content[0].text | fromjson).credential_status == "unverified")
   elif (map(select(.id == 1))[0].result.serverInfo.version) == "0.3.0" then
     (map(select(.id == 2))[0].result.tools | length) == 15 and
     (map(select(.id == 5))[0].error.message | contains("CLOUD_SKILLS_ALLOW_MUTATIONS!=1")) and
