@@ -28,6 +28,7 @@ import (
 
 const (
 	authSchemeAWSSigV4       = "sigv4"
+	authSchemeAWSSigV4a      = "sigv4a"
 	authSchemeAlibabaACS3    = "acs3"
 	authSchemeAlibabaOSSV4   = "oss4"
 	authSchemeTencentTC3     = "tc3"
@@ -98,7 +99,7 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 
 func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4 HTTPS", Version: "sigv4",
+		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS", Version: "sigv4+sigv4a",
 		CredentialSource: credentialSource(ProviderAWS), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the AWS SDK credential chain; no cloud CLI is executed",
 	}, nil
@@ -108,15 +109,29 @@ func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]by
 	return json.Marshal(map[string]string{
 		"api_reference":  "https://docs.aws.amazon.com/index.html#lang/en_us",
 		"authentication": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
+		"sigv4a":         "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
-	if scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4); scheme != authSchemeAWSSigV4 {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be %q", authSchemeAWSSigV4)
+	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4 or sigv4a")
 	}
-	if !identifierPattern.MatchString(invocation.Service) || !identifierPattern.MatchString(invocation.Region) {
-		return InvocationResult{}, fmt.Errorf("AWS SigV4 requires valid service and region")
+	if !identifierPattern.MatchString(invocation.Service) {
+		return InvocationResult{}, fmt.Errorf("AWS signing requires a valid service")
+	}
+	var regionSet []string
+	if scheme == authSchemeAWSSigV4 {
+		if !identifierPattern.MatchString(invocation.Region) {
+			return InvocationResult{}, fmt.Errorf("AWS SigV4 requires a valid region")
+		}
+	} else {
+		var err error
+		regionSet, err = parseAWSRegionSet(invocation.RegionSet)
+		if err != nil {
+			return InvocationResult{}, err
+		}
 	}
 	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
 	if err != nil {
@@ -133,11 +148,18 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
 		return InvocationResult{}, fmt.Errorf("AWS credential provider returned incomplete AKSK material")
 	}
-	awsCredentials := aws.Credentials{
-		AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken,
+	if strings.EqualFold(invocation.Service, "s3") {
+		request.Header.Set("X-Amz-Content-Sha256", payloadHash)
 	}
-	if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, payloadHash, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now().UTC()); err != nil {
-		return InvocationResult{}, fmt.Errorf("sign AWS SigV4 request: %w", err)
+	if scheme == authSchemeAWSSigV4 {
+		awsCredentials := aws.Credentials{
+			AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken,
+		}
+		if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, payloadHash, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, fmt.Errorf("sign AWS SigV4 request: %w", err)
+		}
+	} else if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, adapter.config.Now().UTC()); err != nil {
+		return InvocationResult{}, fmt.Errorf("sign AWS SigV4a request: %w", err)
 	}
 	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, invocation, "AWS API")
 }
@@ -612,7 +634,11 @@ func canonicalHeaders(request *http.Request, include func(string) bool) (string,
 		}
 	}
 	if include("host") {
-		values["host"] = request.URL.Host
+		host := request.URL.Host
+		if request.Host != "" {
+			host = request.Host
+		}
+		values["host"] = host
 	}
 	names := make([]string, 0, len(values))
 	for name := range values {
@@ -630,7 +656,19 @@ func canonicalHeaders(request *http.Request, include func(string) bool) (string,
 }
 
 func canonicalURI(target *url.URL) string {
-	path := target.EscapedPath()
+	path := ""
+	if target.Opaque != "" {
+		opaque := target.Opaque
+		if index := strings.IndexByte(opaque, '?'); index >= 0 {
+			opaque = opaque[:index]
+		}
+		opaque = strings.TrimPrefix(opaque, "//")
+		if index := strings.IndexByte(opaque, '/'); index >= 0 {
+			path = opaque[index:]
+		}
+	} else {
+		path = target.EscapedPath()
+	}
 	if path == "" {
 		return "/"
 	}

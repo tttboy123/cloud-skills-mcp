@@ -62,10 +62,11 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithString("service", mcp.Description("Provider service/product code used by request signing.")),
 		mcp.WithString("operation", mcp.Description("Provider API operation/action used for signing and safety classification.")),
 		mcp.WithString("region", mcp.Description("Optional provider region/location.")),
+		mcp.WithString("region_set", mcp.Description("AWS SigV4a comma-separated signing region set, such as us-east-1,us-west-*; not a credential.")),
 		mcp.WithString("project", mcp.Description("Optional Google Cloud project.")),
 		mcp.WithString("subscription", mcp.Description("Optional Azure subscription.")),
 		mcp.WithString("audience", mcp.Description("Optional Azure Entra resource audience for an uncommon official data-plane endpoint. This is an application/resource identifier, never a token.")),
-		mcp.WithString("auth_scheme", mcp.Description("Optional provider HTTP authentication scheme: sigv4, acs3, oss4, tc3, cos, or the provider default.")),
+		mcp.WithString("auth_scheme", mcp.Description("Optional provider HTTP authentication scheme: sigv4, sigv4a, acs3, oss4, tc3, cos, or the provider default.")),
 		mcp.WithString("auth_version", mcp.Description("Optional Baidu BCE signing version: v1 (default) or v2. BCE v2 also requires service and region.")),
 		mcp.WithString("api_version", mcp.Description("Provider API version used by Alibaba ACS3 and Tencent TC3 common headers.")),
 		mcp.WithString("method", mcp.Description("HTTP method for the official provider API request.")),
@@ -182,7 +183,7 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 	invocation := Invocation{
 		Provider: provider, Mode: mode,
 		Service: request.GetString("service", ""), Operation: request.GetString("operation", ""),
-		Region: request.GetString("region", ""), Project: request.GetString("project", ""),
+		Region: request.GetString("region", ""), RegionSet: request.GetString("region_set", ""), Project: request.GetString("project", ""),
 		Subscription: request.GetString("subscription", ""), Audience: request.GetString("audience", ""), AuthScheme: request.GetString("auth_scheme", ""), AuthVersion: request.GetString("auth_version", ""), APIVersion: request.GetString("api_version", ""), Method: request.GetString("method", ""),
 		URL:          request.GetString("url", ""),
 		BodyFile:     request.GetString("body_file", ""),
@@ -237,7 +238,7 @@ func auditEvent(runtime Runtime, invocation Invocation, sensitive bool, outcome,
 	return AuditEvent{
 		Time: runtime.Now().UTC(), Provider: invocation.Provider, Mode: invocation.Mode,
 		Service: invocation.Service, Operation: invocation.Operation, Method: strings.ToUpper(invocation.Method),
-		URL: auditURL(invocation.URL), Region: invocation.Region, Project: invocation.Project,
+		URL: auditURL(invocation.URL), Region: invocation.Region, RegionSet: invocation.RegionSet, Project: invocation.Project,
 		Subscription: invocation.Subscription, AuthScheme: invocation.AuthScheme, AuthVersion: invocation.AuthVersion, APIVersion: invocation.APIVersion, Sensitive: sensitive, Outcome: outcome, RequestID: requestID,
 	}
 }

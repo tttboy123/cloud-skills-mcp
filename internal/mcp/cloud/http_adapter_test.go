@@ -2,15 +2,25 @@ package cloud
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"encoding/asn1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
+
+type ecdsaSignaturePair struct {
+	R *big.Int
+	S *big.Int
+}
 
 func TestSignedHTTPAdaptersExposeHTTPOnlyStatusAndOfficialDiscovery(t *testing.T) {
 	adapters := []struct {
@@ -164,6 +174,154 @@ func TestAWSSigV4AdapterSignsAndSendsHTTP(t *testing.T) {
 	})
 	if err != nil || string(result.Output) != `{"Reservations":[]}` {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAWSSigV4aDerivesOfficialAWSKeyVector(t *testing.T) {
+	privateKey, err := deriveAWSSigV4aKey("AKISORANDOMAASORANDOM", "q+jcrXGc+0zWN6uzclKVhvMmUsIfRPa4rlRandom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantX, _ := new(big.Int).SetString("15D242CEEBF8D8169FD6A8B5A746C41140414C3B07579038DA06AF89190FFFCB", 16)
+	wantY, _ := new(big.Int).SetString("515242CEDD82E94799482E4C0514B505AFCCF2C0C98D6A553BF539F424C5EC0", 16)
+	if privateKey.X.Cmp(wantX) != 0 || privateKey.Y.Cmp(wantY) != 0 {
+		t.Fatalf("public key=(%X,%X)", privateKey.X, privateKey.Y)
+	}
+}
+
+func TestAWSSigV4aMatchesOfficialAWSSDKSigningVector(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "https://dynamodb.us-east-1.amazonaws.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.URL.Opaque = "//example.org/bucket/key-._~,!@%23$%25^&*()"
+	request.Header.Set("X-Amz-Target", "prefix.Operation")
+	request.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	request.Header.Set("Content-Length", "1024")
+	request.Header.Set("X-Amz-Meta-Other-Header", "some-value=!@#$%^&* (+)")
+	request.Header.Add("X-Amz-Meta-Other-Header_With_Underscore", "some-value=!@#$%^&* (+)")
+	request.Header.Add("X-amz-Meta-Other-Header_With_Underscore", "some-value=!@#$%^&* (+)")
+	request.Header.Set("User-Agent", "ignored")
+	request.Header.Set("X-Amzn-Trace-Id", "ignored")
+	request.Header.Set("Transfer-Encoding", "ignored")
+
+	stringToSign, err := signAWSSigV4a(request, sha256Hex(nil), AWSCredentials{
+		AccessKeyID: "AKISORANDOMAASORANDOM", SecretAccessKey: "q+jcrXGc+0zWN6uzclKVhvMmUsIfRPa4rlRandom", SessionToken: "TOKEN",
+	}, "dynamodb", []string{"us-east-1"}, time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Published by the AWS SDK for Go v2 SigV4a signer test suite.
+	if got, want := sha256Hex([]byte(stringToSign)), "4ba7d0482cf4d5450cefdc067a00de1a4a715e444856fa3e1d85c35fb34d9730"; got != want {
+		t.Fatalf("string-to-sign hash=%s want=%s\n%s", got, want, stringToSign)
+	}
+}
+
+func TestAWSSigV4aSignerProducesVerifiableMultiRegionHeader(t *testing.T) {
+	now := time.Date(2022, 8, 30, 12, 36, 0, 0, time.UTC)
+	credentials := AWSCredentials{AccessKeyID: "AKISORANDOMAASORANDOM", SecretAccessKey: "q+jcrXGc+0zWN6uzclKVhvMmUsIfRPa4rlRandom", SessionToken: "session-token"}
+	request, err := http.NewRequest(http.MethodGet, "https://mrap.accesspoint.s3-global.amazonaws.com/object", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringToSign, err := signAWSSigV4a(request, sha256Hex(nil), credentials, "s3", []string{"us-east-1", "us-west-*"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Header.Get("X-Amz-Region-Set") != "us-east-1,us-west-*" || request.Header.Get("X-Amz-Date") != "20220830T123600Z" {
+		t.Fatalf("sigv4a headers=%v", request.Header)
+	}
+	authorization := request.Header.Get("Authorization")
+	prefix := "AWS4-ECDSA-P256-SHA256 Credential=AKISORANDOMAASORANDOM/20220830/s3/aws4_request, SignedHeaders="
+	if !strings.HasPrefix(authorization, prefix) || !strings.Contains(authorization, "x-amz-region-set") {
+		t.Fatalf("authorization=%q", authorization)
+	}
+	parts := strings.Split(authorization, "Signature=")
+	if len(parts) != 2 {
+		t.Fatalf("authorization signature=%q", authorization)
+	}
+	signatureBytes, err := hex.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signature ecdsaSignaturePair
+	if _, err := asn1.Unmarshal(signatureBytes, &signature); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(stringToSign))
+	privateKey, err := deriveAWSSigV4aKey(credentials.AccessKeyID, credentials.SecretAccessKey)
+	if err != nil || !ecdsa.Verify(&privateKey.PublicKey, digest[:], signature.R, signature.S) {
+		t.Fatalf("signature verification failed: %v", err)
+	}
+}
+
+func TestAWSSigV4aAdapterSignsAndSendsHTTP(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "AWS4-ECDSA-P256-SHA256 Credential=AKIDEXAMPLE/") {
+			t.Fatalf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		return httpResponse(200, `{"ok":true}`), nil
+	})
+	adapter := NewAWSRESTAdapter(AWSRESTConfig{
+		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}}, HTTP: doer,
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4a", Method: "GET", URL: "https://mrap.accesspoint.s3-global.amazonaws.com/object",
+		Service: "s3", Operation: "get-object", RegionSet: "us-east-1,us-west-*",
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAWSSigV4aPolicyValidatesSchemeRegionSetAndProtectedHeaders(t *testing.T) {
+	valid := Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4a", Service: "s3", Operation: "get-object",
+		Method: "GET", URL: "https://mrap.accesspoint.s3-global.amazonaws.com/object", RegionSet: "us-east-1, us-west-*",
+	}
+	if err := validateInvocation(valid, nil); err != nil {
+		t.Fatalf("valid SigV4a request rejected: %v", err)
+	}
+	for _, mutate := range []func(*Invocation){
+		func(request *Invocation) { request.RegionSet = "" },
+		func(request *Invocation) { request.RegionSet = "us-east-1,../../bad" },
+		func(request *Invocation) { request.Headers = map[string]string{"X-Amz-Region-Set": "*"} },
+		func(request *Invocation) { request.Headers = map[string]string{"X-Amz-Content-Sha256": sha256Hex(nil)} },
+	} {
+		request := valid
+		mutate(&request)
+		if err := validateInvocation(request, nil); err == nil {
+			t.Fatalf("unsafe SigV4a request accepted: %#v", request)
+		}
+	}
+	valid.AuthScheme = "sigv4"
+	valid.Region = "us-east-1"
+	if err := validateInvocation(valid, nil); err == nil || !strings.Contains(err.Error(), "region_set") {
+		t.Fatalf("SigV4 region_set error=%v", err)
+	}
+	valid.Provider = ProviderAzure
+	valid.AuthScheme = ""
+	valid.RegionSet = ""
+	valid.Region = ""
+	valid.Service = "management"
+	valid.Operation = "get-resource"
+	valid.URL = "https://management.azure.com/subscriptions/example?api-version=2024-01-01"
+	if err := validateInvocation(valid, nil); err != nil {
+		t.Fatalf("Azure baseline rejected: %v", err)
+	}
+	valid.RegionSet = "*"
+	if err := validateInvocation(valid, nil); err == nil || !strings.Contains(err.Error(), "region_set") {
+		t.Fatalf("non-AWS region_set error=%v", err)
+	}
+}
+
+func TestParseAWSRegionSetNormalizesDeduplicatesAndBounds(t *testing.T) {
+	regions, err := parseAWSRegionSet("US-EAST-1, us-west-*,US-EAST-1")
+	if err != nil || strings.Join(regions, ",") != "us-east-1,us-west-*" {
+		t.Fatalf("regions=%v err=%v", regions, err)
+	}
+	if _, err := parseAWSRegionSet(strings.Repeat("us-east-1,", 16) + "us-west-2"); err == nil {
+		t.Fatal("accepted more than 16 region_set entries")
 	}
 }
 

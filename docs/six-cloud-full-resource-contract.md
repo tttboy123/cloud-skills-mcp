@@ -44,7 +44,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
-| AWS | Direct HTTPS with AWS SigV4 | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
+| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated HTTPS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
 | Alibaba Cloud | Direct ACS3 OpenAPI HTTPS plus OSS4 object data-plane HTTPS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env |
@@ -70,6 +70,9 @@ remain available through the guarded resource gateway.
   acquisition happen in-process before direct HTTPS requests.
 - Provider auth scheme, service/action names, API versions, HTTP methods, URLs,
   headers, query values, body size and response size are bounded.
+- AWS SigV4a derives the documented ECDSA P-256 key from the same
+  operator-owned AKSK/IAM chain and requires a validated `region_set`; it never
+  exposes the derived private key and does not enable presigned URLs.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.

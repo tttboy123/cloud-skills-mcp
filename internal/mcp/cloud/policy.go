@@ -15,6 +15,7 @@ import (
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 var azureApplicationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:/\.default)?$`)
 var endpointLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var awsRegionSetEntryPattern = regexp.MustCompile(`^(?:\*|[a-z0-9][a-z0-9*-]{0,62})$`)
 
 const (
 	maxRequestPayloadBytes         = 1024 * 1024
@@ -85,11 +86,19 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if !identifierPattern.MatchString(request.Operation) {
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
-		if !identifierPattern.MatchString(request.Region) {
+		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
+		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a {
+			return fmt.Errorf("AWS auth_scheme must be sigv4 or sigv4a")
+		}
+		if scheme == authSchemeAWSSigV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("AWS SigV4 requires a valid region")
 		}
-		if scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4); scheme != authSchemeAWSSigV4 {
-			return fmt.Errorf("AWS auth_scheme must be sigv4")
+		if scheme == authSchemeAWSSigV4a {
+			if _, err := parseAWSRegionSet(request.RegionSet); err != nil {
+				return err
+			}
+		} else if request.RegionSet != "" {
+			return fmt.Errorf("region_set is supported only by AWS SigV4a")
 		}
 	case ProviderAlicloud:
 		if !identifierPattern.MatchString(request.Service) || !identifierPattern.MatchString(request.Operation) {
@@ -116,6 +125,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if scheme == authSchemeTencentTC3 && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Tencent Cloud TC3 requires a valid api_version")
 		}
+	}
+	if request.Provider != ProviderAWS && request.RegionSet != "" {
+		return fmt.Errorf("region_set is supported only by AWS SigV4a")
 	}
 	for name, value := range map[string]string{
 		"region": request.Region, "project": request.Project, "subscription": request.Subscription,
@@ -215,7 +227,7 @@ func isProtectedHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "authorization", "proxy-authorization", "host",
 		"x-api-key", "api-key", "cookie", "set-cookie", "x-http-method-override", "x-method-override",
-		"x-amz-date", "x-amz-security-token",
+		"x-amz-date", "x-amz-security-token", "x-amz-region-set", "x-amz-content-sha256",
 		"x-acs-action", "x-acs-version", "x-acs-date", "x-acs-signature-nonce", "x-acs-content-sha256", "x-acs-security-token",
 		"x-oss-date", "x-oss-content-sha256", "x-oss-security-token",
 		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",
@@ -224,6 +236,26 @@ func isProtectedHeader(name string) bool {
 	default:
 		return false
 	}
+}
+
+func parseAWSRegionSet(value string) ([]string, error) {
+	parts := strings.Split(value, ",")
+	if strings.TrimSpace(value) == "" || len(parts) > 16 {
+		return nil, fmt.Errorf("AWS SigV4a requires 1 to 16 region_set entries")
+	}
+	regions := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		region := strings.ToLower(strings.TrimSpace(part))
+		if !awsRegionSetEntryPattern.MatchString(region) || strings.Contains(region, "**") {
+			return nil, fmt.Errorf("invalid AWS SigV4a region_set entry %q", part)
+		}
+		if !seen[region] {
+			seen[region] = true
+			regions = append(regions, region)
+		}
+	}
+	return regions, nil
 }
 
 func isCredentialIssuanceInvocation(request Invocation) bool {

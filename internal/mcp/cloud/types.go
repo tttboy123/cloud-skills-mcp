@@ -61,6 +61,7 @@ type Invocation struct {
 	Service      string
 	Operation    string
 	Region       string
+	RegionSet    string
 	Project      string
 	Subscription string
 	Audience     string
@@ -98,6 +99,7 @@ type AuditEvent struct {
 	Method       string         `json:"method,omitempty"`
 	URL          string         `json:"url,omitempty"`
 	Region       string         `json:"region,omitempty"`
+	RegionSet    string         `json:"region_set,omitempty"`
 	Project      string         `json:"project,omitempty"`
 	Subscription string         `json:"subscription,omitempty"`
 	AuthVersion  string         `json:"auth_version,omitempty"`

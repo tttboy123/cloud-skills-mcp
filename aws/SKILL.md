@@ -1,11 +1,11 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 HTTPS requests in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS requests in cloud-skills-mcp. Use for AWS, EC2, S3, S3 Multi-Region Access Points, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, or any documented AWS API.
 ---
 
 # AWS Cloud
 
-Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs the request in-process with AWS SigV4, and never executes AWS CLI.
+Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs the request in-process with AWS SigV4 or SigV4a, and never executes AWS CLI.
 
 ## Workflow
 
@@ -18,10 +18,11 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default).
+- `auth_scheme`: `sigv4` (default) or `sigv4a` when the official endpoint requires multi-region signing.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
+- `region_set`: required only for SigV4a, as a comma-separated official region set such as `us-east-1,us-west-*`. It is not a token or credential.
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
 - `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root.

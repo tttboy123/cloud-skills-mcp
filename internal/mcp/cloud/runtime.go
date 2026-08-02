@@ -117,7 +117,7 @@ Credentials are loaded only through each provider's official environment,
 profile, IAM, ADC, service-principal or STS chain; credentials are never returned
 in MCP results or written to audit logs.
 
-AWS:       AWS SDK profile/SSO/web identity/IAM role/AKSK or STS
+AWS:       SigV4/SigV4a with AWS SDK profile/SSO/web identity/IAM role/AKSK or STS
 Azure:     non-CLI EnvironmentCredential/workload identity/managed identity
 GCP:       Google Auth Application Default Credentials only
 Alibaba:   credentials-go RAM/OIDC/ECS role/ALIBABA_CLOUD_* AKSK or STS
