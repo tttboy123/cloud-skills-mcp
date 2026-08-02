@@ -36,7 +36,20 @@ func classifyRead(provider Provider, request Invocation) bool {
 		return false
 	}
 	switch provider {
-	case ProviderAzure, ProviderGCP, ProviderBaidu:
+	case ProviderGCP:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeGCPGRPC {
+			action := strings.ToLower(strings.TrimSpace(request.Operation))
+			for _, prefix := range []string{
+				"describe", "list", "get", "head", "search", "query", "check", "show", "read", "inspect", "lookup", "count", "enumerate", "recognize", "streamingrecognize", "transcribe", "translate", "synthesize",
+			} {
+				if strings.HasPrefix(action, prefix) {
+					return true
+				}
+			}
+			return false
+		}
+		fallthrough
+	case ProviderAzure, ProviderBaidu:
 		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
 		case "GET", "HEAD", "OPTIONS":
 			return true
@@ -94,8 +107,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	awsScheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
+	gcpScheme := normalizedAuthScheme(request.AuthScheme, "")
 	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
+	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	if awsWebSocketScheme {
 		if err := validateAWSTranscribeWebSocketInvocation(request); err != nil {
 			return err
@@ -143,12 +158,20 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				return err
 			}
 		}
+	} else if gcpGRPCScheme {
+		if err := validateGCPGRPCInvocation(request, allowedEndpointHosts); err != nil {
+			return err
+		}
 	} else {
 		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
 		}
 	}
 	switch request.Provider {
+	case ProviderGCP:
+		if gcpScheme != "" && gcpScheme != authSchemeGCPGRPC {
+			return fmt.Errorf("Google Cloud auth_scheme must be grpc or omitted for REST")
+		}
 	case ProviderAWS:
 		if !identifierPattern.MatchString(request.Service) {
 			return fmt.Errorf("invalid service %q", request.Service)
@@ -379,9 +402,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsWebSocketScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsWebSocketScheme || gcpGRPCScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
-		return fmt.Errorf("stream transport controls require a supported WebSocket auth_scheme")
+		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}
 	if (request.StreamUserID != "" || request.StreamFormat != 0) && !(request.Provider == ProviderTencent && tencentScheme == authSchemeTencentMPSWS) {
 		return fmt.Errorf("stream_user_id and stream_format are supported only by Tencent MPS WebSocket")
