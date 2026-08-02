@@ -22,6 +22,8 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"method":"GET","url":"https://evil.example/v1/projects"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"tencent_cvm_start_instance","arguments":{"instance_id":"ins-12345678","force":true}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"tencent_cdb_list_instances","arguments":{"offset":0,"limit":2001}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"method":"GET","url":"https://management.azure.com/subscriptions","audience":"https://attacker.example"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"baiducloud_api_read","arguments":{"method":"GET","url":"https://bts.bj.baidubce.com/v1/forms","auth_version":"v2","service":"bts"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -30,12 +32,19 @@ jq -e -s '
     ([map(select(.id == 2))[0].result.tools[] |
       select(.name | endswith("_api_mutate")) |
       (.inputSchema.required | index("force") != null)] | all) and
+    ([map(select(.id == 2))[0].result.tools[] |
+      select(.name | test("_api_(read|mutate)$")) |
+      (.inputSchema.properties | has("body_file") and has("audience") and has("auth_version"))] | all) and
     (["aws","azure","gcp","alicloud","tencent","baiducloud"] -
       [map(select(.id == 2))[0].result.tools[].name | select(endswith("_api_read")) | sub("_api_read$"; "")]) == [] and
     (map(select(.id == 3))[0].result.isError == true) and
     (map(select(.id == 3))[0].result.content[0].text | contains("CLOUD_SKILLS_ALLOW_MUTATIONS")) and
     (map(select(.id == 4))[0].result.isError == true) and
-    (map(select(.id == 4))[0].result.content[0].text | contains("endpoint allowlist"))
+    (map(select(.id == 4))[0].result.content[0].text | contains("endpoint allowlist")) and
+    (map(select(.id == 7))[0].result.isError == true) and
+    (map(select(.id == 7))[0].result.content[0].text | contains("identity allowlist")) and
+    (map(select(.id == 8))[0].result.isError == true) and
+    (map(select(.id == 8))[0].result.content[0].text | contains("requires a valid region"))
   elif (map(select(.id == 1))[0].result.serverInfo.version) == "0.3.0" then
     (map(select(.id == 2))[0].result.tools | length) == 15 and
     (map(select(.id == 5))[0].error.message | contains("CLOUD_SKILLS_ALLOW_MUTATIONS!=1")) and

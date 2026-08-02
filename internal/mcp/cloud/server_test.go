@@ -117,6 +117,12 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 			if _, ok := tool.InputSchema.Properties["body_file"]; !ok {
 				t.Errorf("%s must expose guarded REST body_file", tool.Name)
 			}
+			if _, ok := tool.InputSchema.Properties["audience"]; !ok {
+				t.Errorf("%s must expose guarded Azure data-plane audience", tool.Name)
+			}
+			if _, ok := tool.InputSchema.Properties["auth_version"]; !ok {
+				t.Errorf("%s must expose guarded Baidu signing version", tool.Name)
+			}
 		}
 		if tool.Annotations.ReadOnlyHint == nil || *tool.Annotations.ReadOnlyHint == mutating {
 			t.Errorf("%s readOnly annotation mismatch", tool.Name)
@@ -277,7 +283,13 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 	for _, request := range []Invocation{
 		{Provider: ProviderAWS, Service: "ec2;curl", Operation: "describe-instances"},
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--endpoint-url", "https://evil.example"}},
+		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--profile", "higher-privilege"}},
+		{Provider: ProviderTencent, Service: "cvm", Operation: "DescribeInstances", Arguments: []string{"--debug"}},
+		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Region: "--endpoint-url"},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Subscription: "--resource"},
+		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Project: "project\nInjected: value"},
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"file:///etc/passwd"}},
+		{Provider: ProviderAWS, Service: "lambda", Operation: "update-function-code", Arguments: []string{"--zip-file=fileb:///etc/passwd"}},
 		{Provider: ProviderAWS, Service: "ec2", Operation: "describe-instances", Arguments: []string{"--cli-input-json", `{}`}},
 		{Provider: ProviderAzure, Method: "GET", URL: "http://management.azure.com/subscriptions/x"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions/x", Arguments: []string{"--url", "https://evil.example"}},
@@ -288,11 +300,49 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 		{Provider: ProviderGCP, Method: "POST", URL: "https://compute.googleapis.com/v1/projects", Body: map[string]any{"data": strings.Repeat("x", maxRequestPayloadBytes)}},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://bcc.bj.baidubce.com.evil.example/v2/instance"},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://bcc.bj.baidubce.com/v2/instance", Headers: map[string]string{"X-API-Key": "credential"}},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Headers: map[string]string{"X-HTTP-Method-Override": "DELETE"}},
 		{Provider: ProviderGCP, Method: "POST", URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", Body: map[string]any{"x": 1}, BodyFile: "/tmp/payload"},
 		{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file:///etc/passwd"}},
+		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Audience: "https://management.azure.com"},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Audience: "https://attacker.example"},
+		{Provider: ProviderAWS, Service: "sts", Operation: "get-caller-identity", AuthVersion: "v2"},
+		{Provider: ProviderBaidu, Method: "GET", URL: "https://bts.bj.baidubce.com/v1/forms", AuthVersion: "v3"},
+		{Provider: ProviderBaidu, Method: "GET", URL: "https://bts.bj.baidubce.com/v1/forms", AuthVersion: "v2", Service: "bts"},
 	} {
 		if err := validateInvocation(request, nil); err == nil {
 			t.Errorf("accepted unsafe request: %#v", request)
+		}
+	}
+}
+
+func TestInvocationBoundaryAllowsOfficialAzureAndBaiduDataPlaneEndpoints(t *testing.T) {
+	requests := []Invocation{
+		{Provider: ProviderAzure, Method: "GET", URL: "https://store.azconfig.io/kv?api-version=2026-04-01"},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://workspace.azuredatabricks.net/api/2.0/clusters/list", Audience: "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://management.chinacloudapi.cn/subscriptions?api-version=2020-01-01"},
+		{Provider: ProviderAzure, Method: "GET", URL: "https://management.usgovcloudapi.net/subscriptions?api-version=2020-01-01"},
+		{Provider: ProviderBaidu, Method: "GET", URL: "https://bucket.bj.bcebos.com/object"},
+		{Provider: ProviderBaidu, Method: "GET", URL: "https://bts.bj.baidubce.com/v1/forms", AuthVersion: "v2", Service: "bts", Region: "bj"},
+	}
+	for _, request := range requests {
+		if err := validateInvocation(request, nil); err != nil {
+			t.Errorf("official data-plane endpoint rejected: %#v: %v", request, err)
+		}
+	}
+}
+
+func TestOperatorCanAllowOnlyAnExactAdditionalProviderEndpointHost(t *testing.T) {
+	request := Invocation{Provider: ProviderAzure, Method: "GET", URL: "https://new-api.example.microsoft/v1/resources", Audience: "https://management.azure.com"}
+	if err := validateInvocationWithEndpointHosts(request, nil, []string{"new-api.example.microsoft"}); err != nil {
+		t.Fatalf("exact operator-approved endpoint rejected: %v", err)
+	}
+	for _, rawURL := range []string{
+		"https://child.new-api.example.microsoft/v1/resources",
+		"https://new-api.example.microsoft.evil.example/v1/resources",
+	} {
+		request.URL = rawURL
+		if err := validateInvocationWithEndpointHosts(request, nil, []string{"new-api.example.microsoft"}); err == nil {
+			t.Fatalf("non-exact endpoint accepted: %s", rawURL)
 		}
 	}
 }

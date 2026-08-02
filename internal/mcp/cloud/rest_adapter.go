@@ -35,6 +35,7 @@ type AzureRESTConfig struct {
 	Tokens       AzureTokenProvider
 	HTTP         HTTPDoer
 	MaxBodyBytes int64
+	AllowedHosts []string
 }
 
 type AzureRESTAdapter struct {
@@ -110,7 +111,7 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 
 func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
 	if adapter.config.Tokens != nil {
-		scope, err := azureScopeForURL(request.URL)
+		scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 		if err != nil {
 			return InvocationResult{}, err
 		}
@@ -125,6 +126,13 @@ func (adapter *AzureRESTAdapter) invokeCLI(ctx context.Context, request Invocati
 	args := []string{"rest", "--method", strings.ToLower(request.Method), "--url", request.URL}
 	if request.Subscription != "" {
 		args = append(args, "--subscription", request.Subscription)
+	}
+	if request.Audience != "" {
+		audience, err := normalizeAzureAudience(request.Audience)
+		if err != nil {
+			return InvocationResult{}, err
+		}
+		args = append(args, "--resource", audience)
 	}
 	headerNames := make([]string, 0, len(request.Headers))
 	for name := range request.Headers {
@@ -243,8 +251,23 @@ func azureDefaultCredentialRequested(environment []string) bool {
 }
 
 func azureScopeForURL(rawURL string) (string, error) {
-	if err := validateRESTTarget(ProviderAzure, http.MethodGet, rawURL); err != nil {
+	return azureScopeForInvocation(rawURL, "")
+}
+
+func azureScopeForInvocation(rawURL, explicitAudience string) (string, error) {
+	return azureScopeForInvocationWithEndpointHosts(rawURL, explicitAudience, nil)
+}
+
+func azureScopeForInvocationWithEndpointHosts(rawURL, explicitAudience string, allowedEndpointHosts []string) (string, error) {
+	if err := validateRESTTargetWithEndpointHosts(ProviderAzure, http.MethodGet, rawURL, allowedEndpointHosts); err != nil {
 		return "", err
+	}
+	if explicitAudience != "" {
+		audience, err := normalizeAzureAudience(explicitAudience)
+		if err != nil {
+			return "", err
+		}
+		return audience + "/.default", nil
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -254,8 +277,34 @@ func azureScopeForURL(rawURL string) (string, error) {
 	switch {
 	case host == "management.azure.com":
 		return "https://management.azure.com/.default", nil
+	case host == "management.chinacloudapi.cn":
+		return "https://management.chinacloudapi.cn/.default", nil
+	case host == "management.usgovcloudapi.net":
+		return "https://management.usgovcloudapi.net/.default", nil
+	case host == "management.microsoftazure.de":
+		return "https://management.microsoftazure.de/.default", nil
 	case host == "graph.microsoft.com":
 		return "https://graph.microsoft.com/.default", nil
+	case strings.HasSuffix(host, ".azconfig.io"):
+		return "https://appconfig.azure.com/.default", nil
+	case strings.HasSuffix(host, ".search.windows.net"):
+		return "https://search.azure.com/.default", nil
+	case strings.HasSuffix(host, ".azuredatabricks.net"):
+		return "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default", nil
+	case strings.HasSuffix(host, ".grafana.azure.com"):
+		return "https://dashboard.azure.com/.default", nil
+	case strings.HasSuffix(host, ".webpubsub.azure.com"):
+		return "https://webpubsub.azure.com/.default", nil
+	case strings.HasSuffix(host, ".service.signalr.net"):
+		return "https://signalr.azure.com/.default", nil
+	case strings.HasSuffix(host, ".digitaltwins.azure.net"):
+		return "https://digitaltwins.azure.net/.default", nil
+	case strings.HasSuffix(host, ".dev.azuresynapse.net"):
+		return "https://dev.azuresynapse.net/.default", nil
+	case host == "api.loganalytics.io" || strings.HasSuffix(host, ".api.loganalytics.io"):
+		return "https://api.loganalytics.io/.default", nil
+	case strings.HasSuffix(host, ".azurecr.io"):
+		return "https://containerregistry.azure.net/.default", nil
 	case hasAnySuffix(host, ".blob.core.windows.net", ".dfs.core.windows.net", ".queue.core.windows.net", ".table.core.windows.net"):
 		return "https://storage.azure.com/.default", nil
 	case host == "vault.azure.net" || strings.HasSuffix(host, ".vault.azure.net"):

@@ -65,6 +65,18 @@ injected by the operator through the official provider chain.
 - REST data-plane uploads use `body_file`, never embed file content in MCP
   context, accept regular files only, and are capped at 64 MiB per request;
   provider multipart or resumable APIs cover larger objects.
+- Azure uncommon data-plane endpoints can use a first-class, validated
+  `audience` identifier. The value is never a credential: the adapter derives
+  the `.default` scope internally or passes it only to `az rest --resource`.
+- Baidu endpoint validation includes both the general `*.baidubce.com` service
+  plane and the official BOS `*.bcebos.com` object-storage plane.
+- Baidu calls use `bce-auth-v1` by default and can select guarded
+  `auth_version=v2` with required service/region fields for APIs that mandate
+  the region- and service-scoped v2 signature.
+- New official Azure, GCP, or Baidu endpoint exceptions are operator policy,
+  never model input. `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` accepts
+  comma-separated exact DNS hostnames only; schemes, ports, paths, IPs, and
+  wildcard/subdomain inheritance are not accepted.
 - CLI JSON request bodies use mode-0600 temporary files and are removed after
   the call.
 - Responses are capped and credential-shaped fields are redacted before they

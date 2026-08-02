@@ -130,18 +130,61 @@ func TestAzureRESTAdapterUsesDefaultCredentialTokenWithoutCLIExposure(t *testing
 
 func TestAzureRESTAdapterMapsOfficialDataPlaneScopes(t *testing.T) {
 	tests := map[string]string{
-		"https://graph.microsoft.com/v1.0/users":                        "https://graph.microsoft.com/.default",
-		"https://account.blob.core.windows.net/container":               "https://storage.azure.com/.default",
-		"https://vault.vault.azure.net/secrets/name?api-version=7.4":    "https://vault.azure.net/.default",
-		"https://server.database.windows.net/management/health":         "https://database.windows.net/.default",
-		"https://namespace.servicebus.windows.net/queue/messages/head":  "https://servicebus.azure.net/.default",
-		"https://monitor.azure.com/subscriptions/sub/providers/metrics": "https://monitor.azure.com/.default",
+		"https://graph.microsoft.com/v1.0/users":                                    "https://graph.microsoft.com/.default",
+		"https://account.blob.core.windows.net/container":                           "https://storage.azure.com/.default",
+		"https://vault.vault.azure.net/secrets/name?api-version=7.4":                "https://vault.azure.net/.default",
+		"https://server.database.windows.net/management/health":                     "https://database.windows.net/.default",
+		"https://namespace.servicebus.windows.net/queue/messages/head":              "https://servicebus.azure.net/.default",
+		"https://monitor.azure.com/subscriptions/sub/providers/metrics":             "https://monitor.azure.com/.default",
+		"https://store.azconfig.io/kv?api-version=2026-04-01":                       "https://appconfig.azure.com/.default",
+		"https://service.search.windows.net/indexes?api-version=2025-09-01":         "https://search.azure.com/.default",
+		"https://workspace.azuredatabricks.net/api/2.0/clusters/list":               "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default",
+		"https://management.chinacloudapi.cn/subscriptions?api-version=2020-01-01":  "https://management.chinacloudapi.cn/.default",
+		"https://management.usgovcloudapi.net/subscriptions?api-version=2020-01-01": "https://management.usgovcloudapi.net/.default",
 	}
 	for rawURL, want := range tests {
 		got, err := azureScopeForURL(rawURL)
 		if err != nil || got != want {
 			t.Errorf("url=%s scope=%q want=%q err=%v", rawURL, got, want, err)
 		}
+	}
+}
+
+func TestAzureRESTAdapterPassesExplicitAudienceOnlyAsInternalAuthConfiguration(t *testing.T) {
+	runner := &fakeProcessRunner{stdout: []byte(`{"value":[]}`)}
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{Binary: "az-test", Runner: runner, Env: []string{}})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAzure,
+		Method:   "GET",
+		URL:      "https://workspace.azuredatabricks.net/api/2.0/clusters/list",
+		Audience: "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"rest", "--method", "get", "--url", "https://workspace.azuredatabricks.net/api/2.0/clusters/list",
+		"--resource", "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d", "--output", "json",
+	}
+	if len(runner.calls) != 1 || strings.Join(runner.calls[0].args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("calls=%#v", runner.calls)
+	}
+}
+
+func TestAzureRESTAdapterUsesOperatorApprovedExactEndpointWithInternalToken(t *testing.T) {
+	tokens := &staticAzureTokenProvider{token: "azure-private-token"}
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "new-api.example.microsoft" || request.Header.Get("Authorization") != "Bearer azure-private-token" {
+			t.Fatalf("request=%s authorization=%q", request.URL, request.Header.Get("Authorization"))
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	})
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{Tokens: tokens, HTTP: doer, AllowedHosts: []string{"new-api.example.microsoft"}})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAzure, Method: "GET", URL: "https://new-api.example.microsoft/v1/resources", Audience: "https://management.azure.com",
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` || tokens.scope != "https://management.azure.com/.default" {
+		t.Fatalf("result=%#v scope=%q err=%v", result, tokens.scope, err)
 	}
 }
 

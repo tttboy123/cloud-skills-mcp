@@ -77,7 +77,7 @@
 | **AWS** | `aws` / aws-sdk-go-v2 | us-east-1 | `aws` | `AWS_ACCESS_KEY_ID` | EC2/S3/RDS/VPC/SecretsMgr/EKS/Lambda/CloudFront |
 | **Azure** | `az` / azure-sdk-for-go | eastus | `azure` | `AZURE_SUBSCRIPTION_ID` | VM/Blob/SQL/VNet/KeyVault/AKS/Functions/CDN |
 | **GCP** | `gcloud` / cloud.google.com/go | us-central1 | `gcp` | `GOOGLE_APPLICATION_CREDENTIALS` | GCE/GCS/CloudSQL/VPC/SecretMgr/GKE/CloudRun/CloudCDN |
-| **Aliyun** | `aliyun` / aliyun-cli | cn-hangzhou | `alicloud` | `ALIBABACLOUD_ACCESS_KEY_ID` | ECS/OSS/RDS/VPC/KMS/SLB/FC/CDN |
+| **Aliyun** | `aliyun` / aliyun-cli | cn-hangzhou | `alicloud` | `ALIBABA_CLOUD_ACCESS_KEY_ID` | ECS/OSS/RDS/VPC/KMS/SLB/FC/CDN |
 | **Tencent** | `tccli` / tencentcloud-cli | ap-shanghai | `tencent-cloud` | `TENCENTCLOUD_SECRET_ID` | CVM/Lighthouse/CDB/COS/CKMS/SCF/CDN |
 | **Baidu BCE** | `bcecmd` / bce-sdk-go | cn-bj | `baiducloud` | `BCE_ACCESS_KEY_ID` | BCC/BOS/RDS/VPC/KMS/BCC/CCC/CFC/CDN |
 

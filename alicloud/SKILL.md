@@ -28,6 +28,6 @@ Example read: `alicloud_api_read(service="ecs", operation="DescribeInstances", r
 
 ## Credentials
 
-Use an Alibaba Cloud CLI profile, RAM role/STS configuration, or standard `ALIBABACLOUD_ACCESS_KEY_ID` / `ALIBABACLOUD_ACCESS_KEY_SECRET` environment variables in the MCP server process. Never put credentials in MCP arguments.
+Use an Alibaba Cloud CLI profile, RAM role/STS configuration, or the current official `ALIBABA_CLOUD_ACCESS_KEY_ID` / `ALIBABA_CLOUD_ACCESS_KEY_SECRET` environment variables in the MCP server process. Temporary credentials also use `ALIBABA_CLOUD_SECURITY_TOKEN`. Never put credentials in MCP arguments.
 
 Read [references/official-docs.md](references/official-docs.md) when profile type, parameter shape, or action name needs verification.

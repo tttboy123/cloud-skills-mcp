@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	bceAuthVersion = "bce-auth-v1"
-	bceExpiry      = 1800
+	bceAuthVersionV1 = "bce-auth-v1"
+	bceAuthVersionV2 = "bce-auth-v2"
+	bceExpiry        = 1800
 )
 
 type BCECredentials struct {
@@ -88,7 +89,7 @@ func (adapter *BaiduRESTAdapter) Status(ctx context.Context) (ProviderStatus, er
 		return status, nil
 	}
 	status.Available = true
-	status.Version = bceAuthVersion
+	status.Version = bceAuthVersionV1 + "+" + bceAuthVersionV2
 	return status, nil
 }
 
@@ -131,7 +132,17 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	if credentials.SessionToken != "" {
 		request.Header.Set("x-bce-security-token", credentials.SessionToken)
 	}
-	authorization, err := signBCERequest(request, credentials, adapter.config.Now().UTC(), bceExpiry)
+	timestamp := adapter.config.Now().UTC()
+	var authorization string
+	switch invocation.AuthVersion {
+	case "", "v1":
+		authorization, err = signBCERequest(request, credentials, timestamp, bceExpiry)
+	case "v2":
+		request.Header.Set("x-bce-date", timestamp.Format("2006-01-02T15:04:05Z"))
+		authorization, err = signBCEV2Request(request, credentials, timestamp, invocation.Region, invocation.Service)
+	default:
+		err = fmt.Errorf("unsupported Baidu BCE auth version %q", invocation.AuthVersion)
+	}
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -158,7 +169,35 @@ func signBCERequest(request *http.Request, credentials BCECredentials, timestamp
 		return "", fmt.Errorf("Baidu BCE signature expiry must be positive")
 	}
 	signDate := timestamp.UTC().Format("2006-01-02T15:04:05Z")
-	prefix := fmt.Sprintf("%s/%s/%s/%d", bceAuthVersion, credentials.AccessKeyID, signDate, expiry)
+	prefix := fmt.Sprintf("%s/%s/%s/%d", bceAuthVersionV1, credentials.AccessKeyID, signDate, expiry)
+	signingKey := hmacSHA256Hex(credentials.SecretAccessKey, prefix)
+	canonicalHeaders, signedHeaders := canonicalBCEHeaders(request)
+	canonicalRequest := strings.Join([]string{
+		strings.ToUpper(request.Method),
+		canonicalBCEPath(request.URL.Path),
+		canonicalBCEQuery(request.URL.Query()),
+		canonicalHeaders,
+	}, "\n")
+	signature := hmacSHA256Hex(signingKey, canonicalRequest)
+	return prefix + "/" + strings.Join(signedHeaders, ";") + "/" + signature, nil
+}
+
+func signBCEV2Request(request *http.Request, credentials BCECredentials, timestamp time.Time, region, service string) (string, error) {
+	if request == nil || request.URL == nil {
+		return "", fmt.Errorf("Baidu BCE request is required")
+	}
+	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
+		return "", fmt.Errorf("Baidu BCE AK/SK is required")
+	}
+	region = strings.ToLower(strings.TrimSpace(region))
+	service = strings.ToLower(strings.TrimSpace(service))
+	if !identifierPattern.MatchString(region) || !identifierPattern.MatchString(service) {
+		return "", fmt.Errorf("Baidu BCE v2 requires valid region and service")
+	}
+	if request.Header.Get("x-bce-date") == "" {
+		request.Header.Set("x-bce-date", timestamp.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	prefix := fmt.Sprintf("%s/%s/%s/%s/%s", bceAuthVersionV2, credentials.AccessKeyID, timestamp.UTC().Format("20060102"), region, service)
 	signingKey := hmacSHA256Hex(credentials.SecretAccessKey, prefix)
 	canonicalHeaders, signedHeaders := canonicalBCEHeaders(request)
 	canonicalRequest := strings.Join([]string{

@@ -14,6 +14,7 @@ func TestDefaultRuntimeLoadsOnlySafetyConfiguration(t *testing.T) {
 	t.Setenv("CLOUD_SKILLS_ALLOW_SENSITIVE", "1")
 	t.Setenv("CLOUD_SKILLS_MAX_OUTPUT_BYTES", "4096")
 	t.Setenv("CLOUD_SKILLS_ALLOWED_FILE_ROOTS", strings.Join([]string{"/tmp/one", "/tmp/two"}, string(os.PathListSeparator)))
+	t.Setenv("CLOUD_SKILLS_AZURE_ALLOWED_ENDPOINT_HOSTS", "new-api.example.microsoft,*.evil.example,127.0.0.1,new-api.example.microsoft")
 	t.Setenv("CLOUD_SKILLS_AUDIT_LOG", filepath.Join(t.TempDir(), "audit", "events.jsonl"))
 	runtime := DefaultRuntime()
 	if !runtime.AllowMutations || !runtime.AllowSensitive || runtime.MaxOutputBytes != 4096 {
@@ -21,6 +22,9 @@ func TestDefaultRuntimeLoadsOnlySafetyConfiguration(t *testing.T) {
 	}
 	if strings.Join(runtime.AllowedFileRoots, ",") != "/tmp/one,/tmp/two" || runtime.Audit == nil {
 		t.Fatalf("roots/audit not configured: %#v", runtime.AllowedFileRoots)
+	}
+	if got := runtime.AllowedEndpointHosts[ProviderAzure]; len(got) != 1 || got[0] != "new-api.example.microsoft" {
+		t.Fatalf("allowed Azure endpoint hosts=%v", got)
 	}
 	if len(runtime.Adapters) != len(AllProviders()) {
 		t.Fatalf("adapters=%d", len(runtime.Adapters))

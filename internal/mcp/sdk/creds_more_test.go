@@ -35,6 +35,27 @@ func TestRegistryHelpers(t *testing.T) {
 	}
 }
 
+func TestAlibabaCredentialEnvironmentUsesCurrentOfficialNamesBeforeLegacyAliases(t *testing.T) {
+	cfg := registry[CloudAlicloud]
+	if len(cfg.EnvAKID) < 2 || cfg.EnvAKID[0] != "ALIBABA_CLOUD_ACCESS_KEY_ID" ||
+		len(cfg.EnvSecret) < 2 || cfg.EnvSecret[0] != "ALIBABA_CLOUD_ACCESS_KEY_SECRET" ||
+		len(cfg.EnvToken) < 2 || cfg.EnvToken[0] != "ALIBABA_CLOUD_SECURITY_TOKEN" ||
+		len(cfg.EnvRegion) < 2 || cfg.EnvRegion[0] != "ALIBABA_CLOUD_REGION_ID" {
+		t.Fatalf("Alibaba credential environment is stale: %#v", cfg)
+	}
+	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "current-id")
+	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "current-secret")
+	t.Setenv("ALIBABA_CLOUD_SECURITY_TOKEN", "current-token")
+	t.Setenv("ALIBABA_CLOUD_REGION_ID", "cn-shanghai")
+	t.Setenv("ALIBABACLOUD_ACCESS_KEY_ID", "legacy-id")
+	t.Setenv("ALIBABACLOUD_ACCESS_KEY_SECRET", "legacy-secret")
+	creds, ok := loadFromEnv(cfg)
+	if !ok || creds.AccessKeyID != "current-id" || creds.AccessKeySecret != "current-secret" ||
+		creds.SecurityToken != "current-token" || creds.Region != "cn-shanghai" {
+		t.Fatalf("current Alibaba environment not preferred: %#v ok=%v", creds, ok)
+	}
+}
+
 func TestLoadCredsFromEnvironmentAndUnknownCloud(t *testing.T) {
 	const testCloud Cloud = "test-cloud"
 	registry[testCloud] = CloudConfig{

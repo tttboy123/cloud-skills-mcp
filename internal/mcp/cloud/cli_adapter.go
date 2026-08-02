@@ -249,13 +249,13 @@ func alicloudParameterArgs(parameters map[string]any) ([]string, error) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	args := make([]string, 0, len(keys)*2)
+	args := make([]string, 0, len(keys))
 	for _, key := range keys {
 		value, err := cliParameterValue(parameters[key])
 		if err != nil {
 			return nil, fmt.Errorf("encode Alibaba Cloud parameter %q: %w", key, err)
 		}
-		args = append(args, "--"+key, value)
+		args = append(args, "--"+key+"="+value)
 	}
 	return args, nil
 }
@@ -350,8 +350,9 @@ func credentialSource(provider Provider) string {
 			{name: "adc-file", vars: []string{"GOOGLE_APPLICATION_CREDENTIALS"}},
 		},
 		ProviderAlicloud: {
-			{name: "environment-aksk", vars: []string{"ALIBABACLOUD_ACCESS_KEY_ID", "ALIBABACLOUD_ACCESS_KEY_SECRET"}},
-			{name: "profile", vars: []string{"ALIBABACLOUD_PROFILE"}},
+			{name: "environment-aksk", vars: []string{"ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_CLOUD_ACCESS_KEY_SECRET"}},
+			{name: "profile", vars: []string{"ALIBABA_CLOUD_PROFILE"}},
+			{name: "legacy-environment-aksk", vars: []string{"ALIBABACLOUD_ACCESS_KEY_ID", "ALIBABACLOUD_ACCESS_KEY_SECRET"}},
 		},
 		ProviderTencent: {
 			{name: "environment-aksk", vars: []string{"TENCENTCLOUD_SECRET_ID", "TENCENTCLOUD_SECRET_KEY"}},

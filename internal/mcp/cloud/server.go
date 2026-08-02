@@ -64,6 +64,8 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithString("region", mcp.Description("Optional provider region/location.")),
 		mcp.WithString("project", mcp.Description("Optional Google Cloud project.")),
 		mcp.WithString("subscription", mcp.Description("Optional Azure subscription.")),
+		mcp.WithString("audience", mcp.Description("Optional Azure Entra resource audience for an uncommon official data-plane endpoint. This is an application/resource identifier, never a token.")),
+		mcp.WithString("auth_version", mcp.Description("Optional Baidu BCE signing version: v1 (default) or v2. BCE v2 also requires service and region.")),
 		mcp.WithString("method", mcp.Description("HTTP method for Azure, Google Cloud or Baidu AI Cloud REST calls.")),
 		mcp.WithString("url", mcp.Description("Official HTTPS API URL for Azure, Google Cloud or Baidu AI Cloud.")),
 		mcp.WithObject("parameters", mcp.Description("Structured provider API parameters."), mcp.AdditionalProperties(true)),
@@ -132,7 +134,7 @@ func makeInvokeHandler(runtime Runtime, provider Provider, mode InvocationMode) 
 		if err != nil {
 			return sdk.WrapError(string(provider)+" invoke", err), nil
 		}
-		if err := validateInvocation(invocation, runtime.AllowedFileRoots); err != nil {
+		if err := validateInvocationWithEndpointHosts(invocation, runtime.AllowedFileRoots, runtime.AllowedEndpointHosts[provider]); err != nil {
 			return sdk.WrapError(string(provider)+" invoke", err), nil
 		}
 		sensitive := isSensitiveInvocation(invocation)
@@ -172,7 +174,7 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 		Provider: provider, Mode: mode,
 		Service: request.GetString("service", ""), Operation: request.GetString("operation", ""),
 		Region: request.GetString("region", ""), Project: request.GetString("project", ""),
-		Subscription: request.GetString("subscription", ""), Method: request.GetString("method", ""),
+		Subscription: request.GetString("subscription", ""), Audience: request.GetString("audience", ""), AuthVersion: request.GetString("auth_version", ""), Method: request.GetString("method", ""),
 		URL: request.GetString("url", ""), Arguments: request.GetStringSlice("arguments", nil),
 		BodyFile: request.GetString("body_file", ""),
 	}
@@ -226,7 +228,7 @@ func auditEvent(runtime Runtime, invocation Invocation, sensitive bool, outcome,
 		Time: runtime.Now().UTC(), Provider: invocation.Provider, Mode: invocation.Mode,
 		Service: invocation.Service, Operation: invocation.Operation, Method: strings.ToUpper(invocation.Method),
 		URL: auditURL(invocation.URL), Region: invocation.Region, Project: invocation.Project,
-		Subscription: invocation.Subscription, Sensitive: sensitive, Outcome: outcome, RequestID: requestID,
+		Subscription: invocation.Subscription, AuthVersion: invocation.AuthVersion, Sensitive: sensitive, Outcome: outcome, RequestID: requestID,
 	}
 }
 

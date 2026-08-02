@@ -83,6 +83,6 @@
 ## 凭证优先级
 
 1. 命令行参数: `--secret-id xxx --secret-key yyy`
-2. 环境变量: `TENCENTCLOUD_SECRETID` / `TENCENTCLOUD_SECRETKEY`
+2. 环境变量: `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY`（临时凭证另加 `TENCENTCLOUD_TOKEN`）
 3. 本文件 ~/.tencentcloud/credentials (CLI 默认, 我们不用, 走 Keychain)
 4. **本 skill 走 macOS Keychain** (setup-keychain.sh)

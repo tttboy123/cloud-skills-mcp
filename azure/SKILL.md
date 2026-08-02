@@ -20,12 +20,17 @@ Use the unified MCP server as a guarded Azure REST gateway. With Service Princip
 
 - `method` and `url`: exact documented Azure REST request. Hosts are restricted to official Azure/Microsoft domains.
 - `subscription`: optional subscription passed to Azure CLI.
+- `audience`: optional Microsoft Entra resource/application audience for an uncommon official data-plane endpoint. Supply the documented audience, not a token; the server derives the `.default` scope internally and passes it only to `az rest --resource` on CLI fallback.
 - `headers`: non-credential headers such as `If-Match`.
 - `body`: JSON-compatible request body.
 - `body_file`: binary/media request body under an operator-approved `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` directory. Do not combine it with `body`; use provider multipart/chunk APIs above 64 MiB.
 - `arguments`: optional safe `az rest` arguments; authentication and endpoint override flags are rejected.
 
 Example read: `azure_api_read(method="GET", url="https://management.azure.com/subscriptions/<id>/resources?api-version=2021-04-01", subscription="<id>")`.
+
+Common ARM, Graph, Storage, Key Vault, SQL, Service Bus, Monitor, App Configuration, Search, Databricks, Grafana, Web PubSub, SignalR, Digital Twins, Synapse, Log Analytics, and ACR endpoints have built-in audience routing. Use the endpoint's official documentation for an explicit `audience` value.
+
+Public Azure, Azure operated by 21Vianet, Azure US Government, and legacy Germany endpoint suffixes are validated. Configure the matching Azure cloud/authority in the official Azure CLI or Azure Identity environment before calling a sovereign endpoint.
 
 ## Credentials
 

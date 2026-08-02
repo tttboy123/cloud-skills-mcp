@@ -36,6 +36,22 @@ func TestBCESignerMatchesOfficialReferenceVector(t *testing.T) {
 	}
 }
 
+func TestBCEV2SignerIncludesDateRegionServiceAndRequiredHeaders(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://bts.bj.baidubce.com/v1/forms?limit=10", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := time.Date(2015, 4, 27, 8, 23, 49, 0, time.UTC)
+	authorization, err := signBCEV2Request(request, BCECredentials{AccessKeyID: "my_ak", SecretAccessKey: "my_sk"}, timestamp, "bj", "bts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "bce-auth-v2/my_ak/20150427/bj/bts/host;x-bce-date/c63d91fe40c53a7ae539f8fcb2baeecd75b9f26fb20631afdf851c4a13b9601d"
+	if authorization != want || request.Header.Get("x-bce-date") != "2015-04-27T08:23:49Z" {
+		t.Fatalf("authorization=%q date=%q", authorization, request.Header.Get("x-bce-date"))
+	}
+}
+
 func TestBaiduRESTAdapterSignsWithAKSKAndSTSTokenInternally(t *testing.T) {
 	credentials := BCECredentials{AccessKeyID: "bce-ak", SecretAccessKey: "bce-secret", SessionToken: "temporary-token"}
 	doer := doerFunc(func(request *http.Request) (*http.Response, error) {

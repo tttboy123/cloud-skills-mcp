@@ -28,6 +28,6 @@ Example read: `tencent_api_read(service="cvm", operation="DescribeInstances", re
 
 ## Credentials
 
-Use a TCCLI profile, CAM role/temporary credentials, or `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Never pass credentials in MCP inputs.
+Use a TCCLI profile, CAM role/temporary credentials, or `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Temporary CAM/STS credentials also use `TENCENTCLOUD_TOKEN`. Never pass credentials in MCP inputs.
 
 Read [references/official-docs.md](references/official-docs.md) for TCCLI product coverage, generic parameters, and credential configuration. Use the legacy scripts only when a workflow specifically requires their additional guardrails.

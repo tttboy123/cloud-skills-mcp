@@ -58,6 +58,8 @@ type Invocation struct {
 	Region       string
 	Project      string
 	Subscription string
+	Audience     string
+	AuthVersion  string
 	Method       string
 	URL          string
 	Parameters   map[string]any
@@ -89,6 +91,7 @@ type AuditEvent struct {
 	Region       string         `json:"region,omitempty"`
 	Project      string         `json:"project,omitempty"`
 	Subscription string         `json:"subscription,omitempty"`
+	AuthVersion  string         `json:"auth_version,omitempty"`
 	Sensitive    bool           `json:"sensitive"`
 	Outcome      string         `json:"outcome"`
 	RequestID    string         `json:"request_id,omitempty"`
@@ -97,18 +100,19 @@ type AuditEvent struct {
 type AuditSink func(context.Context, AuditEvent) error
 
 type Runtime struct {
-	Adapters         map[Provider]Adapter
-	AllowMutations   bool
-	AllowSensitive   bool
-	AllowedFileRoots []string
-	MaxOutputBytes   int
-	Audit            AuditSink
-	Now              func() time.Time
+	Adapters             map[Provider]Adapter
+	AllowMutations       bool
+	AllowSensitive       bool
+	AllowedFileRoots     []string
+	AllowedEndpointHosts map[Provider][]string
+	MaxOutputBytes       int
+	Audit                AuditSink
+	Now                  func() time.Time
 }
 
 func (runtime Runtime) normalized() Runtime {
 	if runtime.Adapters == nil {
-		runtime.Adapters = DefaultAdapters()
+		runtime.Adapters = DefaultAdaptersWithEndpointHosts(runtime.AllowedEndpointHosts)
 	}
 	if runtime.MaxOutputBytes <= 0 {
 		runtime.MaxOutputBytes = defaultOutputSize

@@ -2,6 +2,7 @@
 
 - Alibaba Cloud CLI overview and product coverage: https://www.alibabacloud.com/help/en/cli/what-is-alibaba-cloud-cli
 - Configure credentials: https://www.alibabacloud.com/help/en/cli/configure-credentials/
+- Current CLI environment variables: https://www.alibabacloud.com/help/en/cli/environment-variables
 - Command-line parameters: https://www.alibabacloud.com/help/en/cli/understanding-command-line-parameters
 - OpenAPI Explorer: https://api.aliyun.com/
 - OpenAPI MCP Server guide: https://help.aliyun.com/en/openapi/user-guide/openapi-mcp-server-guide

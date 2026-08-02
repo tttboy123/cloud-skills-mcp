@@ -3,6 +3,7 @@ package cloud
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 )
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+var azureApplicationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:/\.default)?$`)
+var endpointLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 const (
 	maxRequestPayloadBytes = 1024 * 1024
@@ -31,6 +34,7 @@ var forbiddenFlags = map[string]struct{}{
 	"--security-token": {}, "--authorization": {}, "--password": {}, "--client-secret": {},
 	"--url": {}, "--method": {}, "--body": {}, "--headers": {}, "--subscription": {},
 	"--resource": {}, "--resource-type": {}, "--skip-authorization-header": {}, "--cli-input-json": {},
+	"--profile": {}, "--config-file": {}, "--credentials-file": {}, "--debug": {}, "--verbose": {}, "--trace": {},
 }
 
 func classifyRead(provider Provider, request Invocation) bool {
@@ -69,6 +73,10 @@ func isSensitiveInvocation(request Invocation) bool {
 }
 
 func validateInvocation(request Invocation, allowedFileRoots []string) error {
+	return validateInvocationWithEndpointHosts(request, allowedFileRoots, nil)
+}
+
+func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, allowedEndpointHosts []string) error {
 	if !isProvider(request.Provider) {
 		return fmt.Errorf("unsupported provider %q", request.Provider)
 	}
@@ -81,8 +89,39 @@ func validateInvocation(request Invocation, allowedFileRoots []string) error {
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
 	case ProviderAzure, ProviderGCP, ProviderBaidu:
-		if err := validateRESTTarget(request.Provider, request.Method, request.URL); err != nil {
+		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
+		}
+	}
+	for name, value := range map[string]string{
+		"region": request.Region, "project": request.Project, "subscription": request.Subscription,
+	} {
+		if err := validateContextValue(name, value); err != nil {
+			return err
+		}
+	}
+	if request.Audience != "" {
+		if request.Provider != ProviderAzure {
+			return fmt.Errorf("audience is supported only by Azure")
+		}
+		if _, err := normalizeAzureAudience(request.Audience); err != nil {
+			return err
+		}
+	}
+	if request.AuthVersion != "" {
+		if request.Provider != ProviderBaidu {
+			return fmt.Errorf("auth_version is supported only by Baidu AI Cloud")
+		}
+		if request.AuthVersion != "v1" && request.AuthVersion != "v2" {
+			return fmt.Errorf("Baidu auth_version must be v1 or v2")
+		}
+	}
+	if request.Provider == ProviderBaidu && request.AuthVersion == "v2" {
+		if !identifierPattern.MatchString(request.Service) {
+			return fmt.Errorf("Baidu BCE v2 requires a valid service")
+		}
+		if !identifierPattern.MatchString(request.Region) {
+			return fmt.Errorf("Baidu BCE v2 requires a valid region")
 		}
 	}
 	if len(request.Arguments) > 128 {
@@ -125,8 +164,9 @@ func validateInvocation(request Invocation, allowedFileRoots []string) error {
 	for name := range request.Headers {
 		lower := strings.ToLower(strings.TrimSpace(name))
 		if lower == "authorization" || lower == "proxy-authorization" || lower == "x-bce-security-token" ||
-			lower == "x-api-key" || lower == "api-key" || lower == "cookie" || lower == "set-cookie" {
-			return fmt.Errorf("caller-supplied credential header %q is forbidden", name)
+			lower == "x-api-key" || lower == "api-key" || lower == "cookie" || lower == "set-cookie" ||
+			lower == "x-http-method-override" || lower == "x-method-override" {
+			return fmt.Errorf("caller-supplied protected header %q is forbidden", name)
 		}
 		if !validHeaderName(name) {
 			return fmt.Errorf("invalid HTTP header name %q", name)
@@ -192,12 +232,28 @@ func validateArgument(argument string, allowedFileRoots []string) error {
 	if _, forbidden := forbiddenFlags[flag]; forbidden {
 		return fmt.Errorf("CLI flag %q is forbidden", flag)
 	}
+	fileValue := argument
+	if index := strings.IndexByte(argument, '='); index >= 0 {
+		fileValue = argument[index+1:]
+	}
 	for _, prefix := range []string{"file://", "fileb://", "@"} {
-		if strings.HasPrefix(argument, prefix) {
-			path := strings.TrimPrefix(argument, prefix)
-			if !pathAllowed(path, allowedFileRoots) {
-				return fmt.Errorf("local file reference is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
-			}
+		if strings.HasPrefix(fileValue, prefix) && !pathAllowed(strings.TrimPrefix(fileValue, prefix), allowedFileRoots) {
+			return fmt.Errorf("local file reference is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
+		}
+	}
+	return nil
+}
+
+func validateContextValue(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 256 || strings.HasPrefix(value, "-") || strings.TrimSpace(value) != value {
+		return fmt.Errorf("invalid %s", name)
+	}
+	for _, character := range value {
+		if character == 0 || unicode.IsControl(character) {
+			return fmt.Errorf("invalid %s", name)
 		}
 	}
 	return nil
@@ -233,6 +289,10 @@ func pathAllowed(path string, roots []string) bool {
 }
 
 func validateRESTTarget(provider Provider, method, rawURL string) error {
+	return validateRESTTargetWithEndpointHosts(provider, method, rawURL, nil)
+}
+
+func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL string, allowedEndpointHosts []string) error {
 	switch strings.ToUpper(strings.TrimSpace(method)) {
 	case "GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE":
 	default:
@@ -258,16 +318,70 @@ func validateRESTTarget(provider Provider, method, rawURL string) error {
 	switch provider {
 	case ProviderAzure:
 		allowed = host == "management.azure.com" || host == "graph.microsoft.com" || host == "api.loganalytics.io" ||
-			hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".azurecr.io", ".loganalytics.io", ".azureedge.net", ".trafficmanager.net")
+			hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".azurecr.io", ".loganalytics.io", ".azureedge.net", ".trafficmanager.net",
+				".azconfig.io", ".azuredatabricks.net", ".azure-api.net", ".azuresynapse.net", ".azureml.ms", ".service.signalr.net",
+				".chinacloudapi.cn", ".azure.cn", ".windowsazure.cn", ".usgovcloudapi.net", ".microsoftazure.us", ".azure.us", ".microsoftazure.de")
 	case ProviderGCP:
 		allowed = host == "googleapis.com" || strings.HasSuffix(host, ".googleapis.com")
 	case ProviderBaidu:
-		allowed = host == "baidubce.com" || strings.HasSuffix(host, ".baidubce.com")
+		allowed = host == "baidubce.com" || strings.HasSuffix(host, ".baidubce.com") ||
+			host == "bcebos.com" || strings.HasSuffix(host, ".bcebos.com")
+	}
+	if !allowed {
+		for _, candidate := range allowedEndpointHosts {
+			if validAdditionalEndpointHost(candidate) && host == strings.ToLower(candidate) {
+				allowed = true
+				break
+			}
+		}
 	}
 	if !allowed {
 		return fmt.Errorf("URL host %q is outside the provider endpoint allowlist", host)
 	}
 	return nil
+}
+
+func validAdditionalEndpointHost(host string) bool {
+	if len(host) > 253 || net.ParseIP(host) != nil || !strings.Contains(host, ".") || strings.Contains(host, "..") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !endpointLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeAzureAudience(raw string) (string, error) {
+	audience := strings.TrimSpace(raw)
+	if len(audience) == 0 || len(audience) > 2048 {
+		return "", fmt.Errorf("Azure audience length must be between 1 and 2048 bytes")
+	}
+	if azureApplicationIDPattern.MatchString(audience) {
+		return strings.TrimSuffix(audience, "/.default"), nil
+	}
+	parsed, err := url.Parse(audience)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid Azure audience %q", raw)
+	}
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		return "", fmt.Errorf("Azure audience port must be 443")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	allowed := host == "graph.microsoft.com" ||
+		hasAnySuffix(host, ".azure.com", ".azure.net", ".windows.net", ".microsoft.com", ".loganalytics.io", ".azconfig.io", ".azureml.ms", ".azuredatabricks.net",
+			".chinacloudapi.cn", ".azure.cn", ".windowsazure.cn", ".usgovcloudapi.net", ".microsoftazure.us", ".azure.us", ".microsoftazure.de")
+	if !allowed {
+		return "", fmt.Errorf("Azure audience host %q is outside the Microsoft identity allowlist", host)
+	}
+	path := strings.TrimSuffix(parsed.Path, "/.default")
+	if strings.Contains(path, "..") {
+		return "", fmt.Errorf("invalid Azure audience path")
+	}
+	parsed.RawPath = ""
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/.default")
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 func validHeaderName(name string) bool {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -58,7 +59,7 @@ func TestUniversalCLIAdaptersBuildOfficialCommands(t *testing.T) {
 			provider: ProviderAlicloud,
 			binary:   "aliyun-test",
 			request:  Invocation{Provider: ProviderAlicloud, Service: "ecs", Operation: "DescribeInstances", Region: "cn-hangzhou", Parameters: map[string]any{"PageSize": 25, "Tags": []string{"prod"}}},
-			want:     []string{"ecs", "DescribeInstances", "--region", "cn-hangzhou", "--PageSize", "25", "--Tags", `["prod"]`},
+			want:     []string{"ecs", "DescribeInstances", "--region", "cn-hangzhou", "--PageSize=25", `--Tags=["prod"]`},
 		},
 	}
 	for _, test := range tests {
@@ -137,6 +138,25 @@ func TestCLIAdapterStatusAndDiscoveryAreCredentialSafe(t *testing.T) {
 		if strings.Contains(joined, "configure") || strings.Contains(joined, "credential") || strings.Contains(joined, "access-token") {
 			t.Fatalf("credential command invoked: %s", joined)
 		}
+	}
+}
+
+func TestAlibabaCredentialStatusRecognizesCurrentOfficialEnvironment(t *testing.T) {
+	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "id")
+	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "secret")
+	if got := credentialSource(ProviderAlicloud); got != "environment-aksk" {
+		t.Fatalf("credential source=%q", got)
+	}
+}
+
+func TestAlibabaParametersCannotBecomeNewCLIFlags(t *testing.T) {
+	args, err := alicloudParameterArgs(map[string]any{"Name": "--endpoint=https://evil.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--Name=--endpoint=https://evil.example"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args=%#v", args)
 	}
 }
 

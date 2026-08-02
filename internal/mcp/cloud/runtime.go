@@ -12,12 +12,18 @@ import (
 )
 
 func DefaultRuntime() Runtime {
+	allowedEndpointHosts := map[Provider][]string{
+		ProviderAzure: parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_AZURE_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderGCP:   parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_GCP_ALLOWED_ENDPOINT_HOSTS")),
+		ProviderBaidu: parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_BAIDU_ALLOWED_ENDPOINT_HOSTS")),
+	}
 	runtime := Runtime{
-		Adapters:         DefaultAdapters(),
-		AllowMutations:   os.Getenv("CLOUD_SKILLS_ALLOW_MUTATIONS") == "1",
-		AllowSensitive:   os.Getenv("CLOUD_SKILLS_ALLOW_SENSITIVE") == "1",
-		AllowedFileRoots: filepath.SplitList(os.Getenv("CLOUD_SKILLS_ALLOWED_FILE_ROOTS")),
-		MaxOutputBytes:   defaultOutputSize,
+		Adapters:             DefaultAdaptersWithEndpointHosts(allowedEndpointHosts),
+		AllowMutations:       os.Getenv("CLOUD_SKILLS_ALLOW_MUTATIONS") == "1",
+		AllowSensitive:       os.Getenv("CLOUD_SKILLS_ALLOW_SENSITIVE") == "1",
+		AllowedFileRoots:     filepath.SplitList(os.Getenv("CLOUD_SKILLS_ALLOWED_FILE_ROOTS")),
+		AllowedEndpointHosts: allowedEndpointHosts,
+		MaxOutputBytes:       defaultOutputSize,
 	}
 	if value := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_MAX_OUTPUT_BYTES")); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
@@ -28,6 +34,20 @@ func DefaultRuntime() Runtime {
 		runtime.Audit = FileAuditSink(path)
 	}
 	return runtime
+}
+
+func parseAllowedEndpointHosts(raw string) []string {
+	result := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, item := range strings.Split(raw, ",") {
+		host := strings.ToLower(strings.TrimSpace(item))
+		if !validAdditionalEndpointHost(host) || seen[host] {
+			continue
+		}
+		seen[host] = true
+		result = append(result, host)
+	}
+	return result
 }
 
 func FileAuditSink(path string) AuditSink {
@@ -91,7 +111,7 @@ in MCP results or written to audit logs.
 AWS:       AWS profile/SSO/web identity/AKSK through AWS CLI
 Azure:     DefaultAzureCredential (service principal/workload/managed identity) or az login
 GCP:       Google Auth Application Default Credentials or gcloud identity fallback
-Alibaba:   Alibaba Cloud CLI profile/RAM/AKSK
+Alibaba:   Alibaba Cloud CLI profile/RAM/ALIBABA_CLOUD_* AKSK or STS
 Tencent:   TCCLI profile/CAM/AKSK
 Baidu:     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY, optional BCE_SESSION_TOKEN
 `
