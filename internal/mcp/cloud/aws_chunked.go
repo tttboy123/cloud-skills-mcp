@@ -1,9 +1,14 @@
 package cloud
 
 import (
+	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"hash/crc32"
+	"hash/crc64"
 	"io"
 	"math"
 	"net/http"
@@ -15,11 +20,21 @@ import (
 )
 
 const (
-	awsPayloadModeChunked    = "aws-chunked"
-	awsSigV4StreamingPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
-	awsSigV4ChunkAlgorithm   = "AWS4-HMAC-SHA256-PAYLOAD"
-	defaultAWSChunkSize      = 64 * 1024
+	awsPayloadModeChunked           = "aws-chunked"
+	awsSigV4StreamingPayload        = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+	awsSigV4StreamingPayloadTrailer = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+	awsSigV4ChunkAlgorithm          = "AWS4-HMAC-SHA256-PAYLOAD"
+	awsSigV4TrailerAlgorithm        = "AWS4-HMAC-SHA256-TRAILER"
+	defaultAWSChunkSize             = 64 * 1024
+	awsCRC64NVMEPolynomial          = 0x9a6c9329ac4bc9b5
 )
+
+const awsPayloadModeChunkedTrailer = "aws-chunked-trailer"
+
+type awsTrailerChecksum struct {
+	header string
+	hash   hash.Hash
+}
 
 func configureAWSSigV4ChunkedRequest(request *http.Request, chunkSize int) error {
 	if request == nil || request.Body == nil || request.ContentLength < 0 {
@@ -41,6 +56,52 @@ func configureAWSSigV4ChunkedRequest(request *http.Request, chunkSize int) error
 	request.ContentLength = encodedLength
 	request.Header.Set("Content-Length", strconv.FormatInt(encodedLength, 10))
 	return nil
+}
+
+func configureAWSSigV4ChunkedTrailerRequest(request *http.Request, chunkSize int, algorithm string) (int64, *awsTrailerChecksum, error) {
+	checksum, err := newAWSTrailerChecksum(algorithm)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := configureAWSSigV4ChunkedRequest(request, chunkSize); err != nil {
+		return 0, nil, err
+	}
+	encodedLength := request.ContentLength
+	checksumValueLength := base64.StdEncoding.EncodedLen(checksum.hash.Size())
+	trailerLength := int64(len(checksum.header) + 1 + checksumValueLength + 2 + len("x-amz-trailer-signature:") + 64 + 2)
+	if encodedLength > math.MaxInt64-trailerLength {
+		return 0, nil, fmt.Errorf("AWS SigV4 aws-chunked trailer length overflows int64")
+	}
+	encodedLength += trailerLength
+	request.Header.Set("X-Amz-Content-Sha256", awsSigV4StreamingPayloadTrailer)
+	request.Header.Set("X-Amz-Trailer", checksum.header)
+	// The official S3 trailer vector signs x-amz-trailer but does not include
+	// Content-Length in the seed signature. Add the known wire length after signing.
+	request.Header.Del("Content-Length")
+	request.ContentLength = -1
+	return encodedLength, checksum, nil
+}
+
+func newAWSTrailerChecksum(algorithm string) (*awsTrailerChecksum, error) {
+	switch strings.ToLower(strings.TrimSpace(algorithm)) {
+	case "crc32":
+		return &awsTrailerChecksum{header: "x-amz-checksum-crc32", hash: crc32.NewIEEE()}, nil
+	case "crc32c":
+		return &awsTrailerChecksum{header: "x-amz-checksum-crc32c", hash: crc32.New(crc32.MakeTable(crc32.Castagnoli))}, nil
+	case "crc64nvme":
+		return &awsTrailerChecksum{header: "x-amz-checksum-crc64nvme", hash: crc64.New(crc64.MakeTable(awsCRC64NVMEPolynomial))}, nil
+	case "sha1":
+		return &awsTrailerChecksum{header: "x-amz-checksum-sha1", hash: sha1.New()}, nil
+	case "sha256":
+		return &awsTrailerChecksum{header: "x-amz-checksum-sha256", hash: sha256.New()}, nil
+	default:
+		return nil, fmt.Errorf("unsupported S3 trailer checksum_algorithm %q", algorithm)
+	}
+}
+
+func isSupportedAWSTrailerChecksum(algorithm string) bool {
+	_, err := newAWSTrailerChecksum(algorithm)
+	return err == nil
 }
 
 func headerTokenContains(value, expected string) bool {
@@ -103,6 +164,12 @@ func newAWSSigV4ChunkedReader(source io.ReadCloser, decodedLength int64, credent
 	}
 }
 
+func newAWSSigV4ChunkedTrailerReader(source io.ReadCloser, decodedLength int64, credentials aws.Credentials, service, region string, signingTime time.Time, seed []byte, chunkSize int, checksum *awsTrailerChecksum) io.ReadCloser {
+	reader := newAWSSigV4ChunkedReader(source, decodedLength, credentials, service, region, signingTime, seed, chunkSize).(*awsSigV4ChunkedReader)
+	reader.trailerChecksum = checksum
+	return reader
+}
+
 func deriveAWSSigV4SigningKey(secretAccessKey, region, service string, signingTime time.Time) []byte {
 	dateKey := hmacBytes(sha256.New, []byte("AWS4"+secretAccessKey), []byte(signingTime.UTC().Format("20060102")))
 	regionKey := hmacBytes(sha256.New, dateKey, []byte(strings.ToLower(region)))
@@ -120,6 +187,7 @@ type awsSigV4ChunkedReader struct {
 	remaining         int64
 	pending           []byte
 	done              bool
+	trailerChecksum   *awsTrailerChecksum
 }
 
 func (reader *awsSigV4ChunkedReader) Read(target []byte) (int, error) {
@@ -159,6 +227,9 @@ func (reader *awsSigV4ChunkedReader) loadNextChunk() error {
 			return fmt.Errorf("read AWS SigV4 aws-chunked body: decoded body is shorter than declared: %w", err)
 		}
 		reader.remaining -= int64(read)
+		if reader.trailerChecksum != nil {
+			_, _ = reader.trailerChecksum.hash.Write(chunk)
+		}
 	} else {
 		probe := make([]byte, 1)
 		probeRead, err := reader.source.Read(probe)
@@ -176,9 +247,27 @@ func (reader *awsSigV4ChunkedReader) loadNextChunk() error {
 	reader.pending = append(reader.pending, chunk...)
 	reader.pending = append(reader.pending, '\r', '\n')
 	if read == 0 {
+		if reader.trailerChecksum != nil {
+			reader.appendSignedTrailer()
+		}
 		reader.done = true
 	}
 	return nil
+}
+
+func (reader *awsSigV4ChunkedReader) appendSignedTrailer() {
+	checksumValue := base64.StdEncoding.EncodeToString(reader.trailerChecksum.hash.Sum(nil))
+	checksumLineForSigning := reader.trailerChecksum.header + ":" + checksumValue + "\n"
+	stringToSign := strings.Join([]string{
+		awsSigV4TrailerAlgorithm,
+		reader.amzDate,
+		reader.scope,
+		hex.EncodeToString(reader.previousSignature),
+		sha256Hex([]byte(checksumLineForSigning)),
+	}, "\n")
+	signature := hmacHex(sha256.New, reader.signingKey, []byte(stringToSign))
+	reader.pending = append(reader.pending, reader.trailerChecksum.header+":"+checksumValue+"\r\n"...)
+	reader.pending = append(reader.pending, "x-amz-trailer-signature:"+signature+"\r\n"...)
 }
 
 func (reader *awsSigV4ChunkedReader) signChunk(chunk []byte) string {

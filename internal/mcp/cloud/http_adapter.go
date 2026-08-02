@@ -150,6 +150,8 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 	}
 	payloadMode := strings.ToLower(strings.TrimSpace(invocation.PayloadMode))
 	decodedContentLength := request.ContentLength
+	var trailerEncodedLength int64
+	var trailerChecksum *awsTrailerChecksum
 	if payloadMode == awsPayloadModeChunked {
 		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
 			return InvocationResult{}, fmt.Errorf("aws-chunked requires AWS SigV4, service s3, and method PUT")
@@ -158,6 +160,16 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			return InvocationResult{}, err
 		}
 		payloadHash = awsSigV4StreamingPayload
+	} else if payloadMode == awsPayloadModeChunkedTrailer {
+		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
+			return InvocationResult{}, fmt.Errorf("aws-chunked-trailer requires AWS SigV4, service s3, and method PUT")
+		}
+		var err error
+		trailerEncodedLength, trailerChecksum, err = configureAWSSigV4ChunkedTrailerRequest(request, defaultAWSChunkSize, invocation.ChecksumAlgorithm)
+		if err != nil {
+			return InvocationResult{}, err
+		}
+		payloadHash = awsSigV4StreamingPayloadTrailer
 	} else if payloadMode == awsPayloadModeEventStream {
 		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Method, http.MethodPost) {
 			return InvocationResult{}, fmt.Errorf("aws-eventstream requires AWS SigV4 and method POST")
@@ -186,6 +198,15 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 				return InvocationResult{}, err
 			}
 			request.Body = newAWSSigV4ChunkedReader(request.Body, decodedContentLength, awsCredentials, "s3", strings.ToLower(invocation.Region), signingTime, seed, defaultAWSChunkSize)
+			request.GetBody = nil
+		} else if payloadMode == awsPayloadModeChunkedTrailer {
+			seed, err := awsSeedSignature(request.Header.Get("Authorization"))
+			if err != nil {
+				return InvocationResult{}, err
+			}
+			request.ContentLength = trailerEncodedLength
+			request.Header.Set("Content-Length", strconv.FormatInt(trailerEncodedLength, 10))
+			request.Body = newAWSSigV4ChunkedTrailerReader(request.Body, decodedContentLength, awsCredentials, "s3", strings.ToLower(invocation.Region), signingTime, seed, defaultAWSChunkSize, trailerChecksum)
 			request.GetBody = nil
 		} else if payloadMode == awsPayloadModeEventStream {
 			seed, err := awsSeedSignature(request.Header.Get("Authorization"))

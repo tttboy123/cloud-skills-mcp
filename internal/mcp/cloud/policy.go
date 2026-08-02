@@ -132,7 +132,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	if payloadMode != "" {
-		if request.Provider != ProviderAWS || (payloadMode != awsPayloadModeChunked && payloadMode != awsPayloadModeEventStream) {
+		if request.Provider != ProviderAWS || (payloadMode != awsPayloadModeChunked && payloadMode != awsPayloadModeChunkedTrailer && payloadMode != awsPayloadModeEventStream) {
 			return fmt.Errorf("unsupported payload_mode %q", request.PayloadMode)
 		}
 		if normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) != authSchemeAWSSigV4 {
@@ -141,12 +141,20 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if request.Body == nil && request.BodyFile == "" {
 			return fmt.Errorf("%s requires a request body", payloadMode)
 		}
-		if payloadMode == awsPayloadModeChunked && (!strings.EqualFold(request.Service, "s3") || !strings.EqualFold(request.Method, http.MethodPut)) {
-			return fmt.Errorf("aws-chunked requires service s3 and method PUT")
+		if (payloadMode == awsPayloadModeChunked || payloadMode == awsPayloadModeChunkedTrailer) && (!strings.EqualFold(request.Service, "s3") || !strings.EqualFold(request.Method, http.MethodPut)) {
+			return fmt.Errorf("%s requires service s3 and method PUT", payloadMode)
 		}
 		if payloadMode == awsPayloadModeEventStream && !strings.EqualFold(request.Method, http.MethodPost) {
 			return fmt.Errorf("aws-eventstream requires method POST")
 		}
+	}
+	checksumAlgorithm := strings.ToLower(strings.TrimSpace(request.ChecksumAlgorithm))
+	if payloadMode == awsPayloadModeChunkedTrailer {
+		if !isSupportedAWSTrailerChecksum(checksumAlgorithm) {
+			return fmt.Errorf("aws-chunked-trailer requires checksum_algorithm crc32, crc32c, crc64nvme, sha1, or sha256")
+		}
+	} else if checksumAlgorithm != "" {
+		return fmt.Errorf("checksum_algorithm is supported only by aws-chunked-trailer")
 	}
 	for name, value := range map[string]string{
 		"region": request.Region, "project": request.Project, "subscription": request.Subscription,
@@ -246,7 +254,8 @@ func isProtectedHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "authorization", "proxy-authorization", "host", "content-length", "transfer-encoding",
 		"x-api-key", "api-key", "cookie", "set-cookie", "x-http-method-override", "x-method-override",
-		"x-amz-date", "x-amz-security-token", "x-amz-region-set", "x-amz-content-sha256", "x-amz-decoded-content-length", "x-amz-trailer",
+		"x-amz-date", "x-amz-security-token", "x-amz-region-set", "x-amz-content-sha256", "x-amz-decoded-content-length", "x-amz-trailer", "x-amz-trailer-signature",
+		"x-amz-checksum-crc32", "x-amz-checksum-crc32c", "x-amz-checksum-crc64nvme", "x-amz-checksum-sha1", "x-amz-checksum-sha256",
 		"x-acs-action", "x-acs-version", "x-acs-date", "x-acs-signature-nonce", "x-acs-content-sha256", "x-acs-security-token",
 		"x-oss-date", "x-oss-content-sha256", "x-oss-security-token",
 		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",

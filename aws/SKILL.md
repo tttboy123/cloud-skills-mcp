@@ -24,6 +24,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
 - `region_set`: required only for SigV4a, as a comma-separated official region set such as `us-east-1,us-west-*`. It is not a token or credential.
 - `payload_mode`: use `aws-chunked` only for SigV4 S3 `PutObject` or `UploadPart` streaming bodies. The server creates the 64 KiB chunk framing and chained signatures.
+- `payload_mode=aws-chunked-trailer`: for SigV4 S3 streaming uploads with a signed trailing checksum. Set `checksum_algorithm` to `crc32`, `crc32c`, `crc64nvme`, `sha1`, or `sha256`; the server computes the value and callers must not supply checksum or signing headers.
 - `payload_mode=aws-eventstream`: for a finite SigV4 HTTP request whose `body_file` contains consecutive CRC-valid unsigned Amazon EventStream frames. The server validates the 24 MiB per-frame bound, adds signing envelopes and a terminal frame. This is not an interactive WebSocket transport.
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
@@ -33,6 +34,8 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="describe-instances", region="us-east-1", method="POST", url="https://ec2.us-east-1.amazonaws.com/", headers={"Content-Type":"application/x-www-form-urlencoded"}, body="Action=DescribeInstances&Version=2016-11-15&MaxResults=20")`.
 
 Example streaming upload: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-chunked", service="s3", operation="put-object", region="us-east-1", method="PUT", url="https://bucket.s3.us-east-1.amazonaws.com/object", body_file="/approved/uploads/object.bin", force=true)`.
+
+Example signed checksum upload: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-chunked-trailer", checksum_algorithm="crc64nvme", service="s3", operation="put-object", region="us-east-1", method="PUT", url="https://bucket.s3.us-east-1.amazonaws.com/object", body_file="/approved/uploads/object.bin", force=true)`.
 
 Example finite event stream: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-eventstream", service="transcribestreaming", operation="start-stream-transcription", region="us-east-1", method="POST", url="https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", body_file="/approved/streams/audio.events", response_file="/approved/streams/transcript.events", force=true)`.
 

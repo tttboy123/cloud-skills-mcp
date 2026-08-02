@@ -56,26 +56,27 @@ type DiscoveryRequest struct {
 }
 
 type Invocation struct {
-	Provider     Provider
-	Mode         InvocationMode
-	Service      string
-	Operation    string
-	Region       string
-	RegionSet    string
-	Project      string
-	Subscription string
-	Audience     string
-	AuthScheme   string
-	AuthVersion  string
-	APIVersion   string
-	PayloadMode  string
-	Method       string
-	URL          string
-	Parameters   map[string]any
-	Headers      map[string]string
-	Body         any
-	BodyFile     string
-	ResponseFile string
+	Provider          Provider
+	Mode              InvocationMode
+	Service           string
+	Operation         string
+	Region            string
+	RegionSet         string
+	Project           string
+	Subscription      string
+	Audience          string
+	AuthScheme        string
+	AuthVersion       string
+	APIVersion        string
+	PayloadMode       string
+	ChecksumAlgorithm string
+	Method            string
+	URL               string
+	Parameters        map[string]any
+	Headers           map[string]string
+	Body              any
+	BodyFile          string
+	ResponseFile      string
 	// MaxResponseFileBytes is runtime policy, not caller-controlled MCP input.
 	MaxResponseFileBytes int64
 }
@@ -92,24 +93,25 @@ type Adapter interface {
 }
 
 type AuditEvent struct {
-	Time         time.Time      `json:"time"`
-	Provider     Provider       `json:"provider"`
-	Mode         InvocationMode `json:"mode"`
-	Service      string         `json:"service,omitempty"`
-	Operation    string         `json:"operation,omitempty"`
-	Method       string         `json:"method,omitempty"`
-	URL          string         `json:"url,omitempty"`
-	Region       string         `json:"region,omitempty"`
-	RegionSet    string         `json:"region_set,omitempty"`
-	Project      string         `json:"project,omitempty"`
-	Subscription string         `json:"subscription,omitempty"`
-	AuthVersion  string         `json:"auth_version,omitempty"`
-	AuthScheme   string         `json:"auth_scheme,omitempty"`
-	APIVersion   string         `json:"api_version,omitempty"`
-	PayloadMode  string         `json:"payload_mode,omitempty"`
-	Sensitive    bool           `json:"sensitive"`
-	Outcome      string         `json:"outcome"`
-	RequestID    string         `json:"request_id,omitempty"`
+	Time              time.Time      `json:"time"`
+	Provider          Provider       `json:"provider"`
+	Mode              InvocationMode `json:"mode"`
+	Service           string         `json:"service,omitempty"`
+	Operation         string         `json:"operation,omitempty"`
+	Method            string         `json:"method,omitempty"`
+	URL               string         `json:"url,omitempty"`
+	Region            string         `json:"region,omitempty"`
+	RegionSet         string         `json:"region_set,omitempty"`
+	Project           string         `json:"project,omitempty"`
+	Subscription      string         `json:"subscription,omitempty"`
+	AuthVersion       string         `json:"auth_version,omitempty"`
+	AuthScheme        string         `json:"auth_scheme,omitempty"`
+	APIVersion        string         `json:"api_version,omitempty"`
+	PayloadMode       string         `json:"payload_mode,omitempty"`
+	ChecksumAlgorithm string         `json:"checksum_algorithm,omitempty"`
+	Sensitive         bool           `json:"sensitive"`
+	Outcome           string         `json:"outcome"`
+	RequestID         string         `json:"request_id,omitempty"`
 }
 
 type AuditSink func(context.Context, AuditEvent) error

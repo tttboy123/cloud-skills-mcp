@@ -77,6 +77,10 @@ remain available through the guarded resource gateway.
   generate `aws-chunked` framing, content lengths, seed and chained chunk
   signatures in-process; callers cannot provide signing or transfer-length
   headers.
+- AWS SigV4 S3 signed-trailer uploads compute CRC32, CRC32C, CRC64NVME, SHA-1,
+  or SHA-256 over the decoded payload while streaming, then generate the
+  checksum and trailer signatures in-process. Callers select only the
+  algorithm and cannot provide checksum values or trailer headers.
 - Finite AWS SigV4 HTTP EventStream requests accept only bounded, CRC-valid
   unsigned frames, then use the official SDK stream signer to create dated,
   chained signing envelopes and a terminal frame. Interactive WebSocket

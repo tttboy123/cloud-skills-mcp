@@ -122,6 +122,12 @@ S3 `PutObject`/`UploadPart` 的 SigV4 流式上传使用 `payload_mode=aws-chunk
 {"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-chunked","service":"s3","operation":"put-object","region":"us-east-1","method":"PUT","url":"https://<bucket>.s3.us-east-1.amazonaws.com/object","body_file":"/approved/uploads/object.bin","force":true}}
 ```
 
+需要 S3 签名尾随校验和时使用 `payload_mode=aws-chunked-trailer`，并从 `crc32`、`crc32c`、`crc64nvme`、`sha1`、`sha256` 中选择 `checksum_algorithm`。校验和值由服务端在流式读取时计算，调用方不能提交或覆盖它；`crc64nvme` 是当前 S3 的默认完整性算法：
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-chunked-trailer","checksum_algorithm":"crc64nvme","service":"s3","operation":"put-object","region":"us-east-1","method":"PUT","url":"https://<bucket>.s3.us-east-1.amazonaws.com/object","body_file":"/approved/uploads/object.bin","force":true}}
+```
+
 需要 SigV4 EventStream 请求签名的有限 HTTP 流使用 `payload_mode=aws-eventstream`。`body_file` 是一个或多个连续的、CRC 有效但尚未添加签名外层的 Amazon EventStream 帧；服务端验证单帧边界后添加 `:date`、链式 `:chunk-signature` 和终止帧。交互式 WebSocket 会话不属于这个有限 HTTP 请求模式。
 
 ```json

@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/asn1"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -443,6 +444,123 @@ func TestAWSSigV4ChunkedHelpersRejectMalformedInputAndPreserveEncoding(t *testin
 	empty, err := awsChunkedEncodedLength(0, defaultAWSChunkSize)
 	if err != nil || empty != 86 {
 		t.Fatalf("empty encoded length=%d err=%v", empty, err)
+	}
+}
+
+func TestAWSSigV4ChunkedTrailerMatchesOfficialS3Vector(t *testing.T) {
+	now := time.Date(2013, 5, 24, 0, 0, 0, 0, time.UTC)
+	request, err := http.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", strings.NewReader(strings.Repeat("a", 65*1024)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Amz-Storage-Class", "REDUCED_REDUNDANCY")
+	encodedLength, checksum, err := configureAWSSigV4ChunkedTrailerRequest(request, defaultAWSChunkSize, "crc32c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := aws.Credentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
+	if err := awsv4.NewSigner().SignHTTP(t.Context(), credentials, request, awsSigV4StreamingPayloadTrailer, "s3", "us-east-1", now); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := awsSeedSignature(request.Header.Get("Authorization"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := hex.EncodeToString(seed), "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"; got != want {
+		t.Fatalf("seed signature=%s want=%s authorization=%s", got, want, request.Header.Get("Authorization"))
+	}
+	request.ContentLength = encodedLength
+	request.Header.Set("Content-Length", fmt.Sprintf("%d", encodedLength))
+	request.Body = newAWSSigV4ChunkedTrailerReader(request.Body, 65*1024, credentials, "s3", "us-east-1", now, seed, defaultAWSChunkSize, checksum)
+	encoded, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, signature := range []string{
+		"b474d8862b1487a5145d686f57f013e54db672cee1c953b3010fb58501ef5aa2",
+		"1c1344b170168f8e65b41376b44b20fe354e373826ccbbe2c1d40a8cae51e5c7",
+		"2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992",
+		"d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435",
+	} {
+		if !bytes.Contains(encoded, []byte(signature)) {
+			t.Fatalf("official trailer vector signature %s missing", signature)
+		}
+	}
+	if !bytes.Contains(encoded, []byte("x-amz-checksum-crc32c:sOO8/Q==\r\n")) {
+		t.Fatalf("official CRC32C trailer missing: %q", encoded[len(encoded)-160:])
+	}
+	if got := int64(len(encoded)); got != encodedLength || got != 66946 {
+		t.Fatalf("encoded length=%d configured=%d want=66946", got, encodedLength)
+	}
+}
+
+func TestAWSSigV4ChunkedTrailerAdapterComputesChecksum(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.Header.Get("X-Amz-Content-Sha256") != awsSigV4StreamingPayloadTrailer || request.Header.Get("X-Amz-Trailer") != "x-amz-checksum-sha256" {
+			t.Fatalf("trailer headers=%v", request.Header)
+		}
+		if !bytes.Contains(body, []byte("x-amz-checksum-sha256:")) || !bytes.Contains(body, []byte("x-amz-trailer-signature:")) {
+			t.Fatalf("trailer body=%q", body)
+		}
+		return httpResponse(200, `{"ok":true}`), nil
+	})
+	adapter := NewAWSRESTAdapter(AWSRESTConfig{
+		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}}, HTTP: doer,
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4", PayloadMode: "aws-chunked-trailer", ChecksumAlgorithm: "sha256", Method: "PUT",
+		URL: "https://bucket.s3.us-east-1.amazonaws.com/object", Service: "s3", Operation: "put-object", Region: "us-east-1", Body: "payload",
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAWSTrailerChecksumMatchesOfficialCRC64NVMEVector(t *testing.T) {
+	checksum, err := newAWSTrailerChecksum("crc64nvme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checksum.hash.Write([]byte("123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := base64.StdEncoding.EncodeToString(checksum.hash.Sum(nil)), "rosUhgp5mIg="; got != want {
+		t.Fatalf("CRC64NVME checksum=%s want=%s", got, want)
+	}
+	if checksum.header != "x-amz-checksum-crc64nvme" {
+		t.Fatalf("CRC64NVME header=%s", checksum.header)
+	}
+}
+
+func TestAWSSigV4ChunkedTrailerPolicyRequiresSupportedChecksum(t *testing.T) {
+	valid := Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4", PayloadMode: "aws-chunked-trailer", ChecksumAlgorithm: "crc64nvme",
+		Service: "s3", Operation: "put-object", Method: "PUT", URL: "https://bucket.s3.us-east-1.amazonaws.com/object", Region: "us-east-1", Body: "payload",
+	}
+	if err := validateInvocation(valid, nil); err != nil {
+		t.Fatalf("valid aws-chunked-trailer request rejected: %v", err)
+	}
+	for _, mutate := range []func(*Invocation){
+		func(request *Invocation) { request.ChecksumAlgorithm = "" },
+		func(request *Invocation) { request.ChecksumAlgorithm = "md5" },
+		func(request *Invocation) {
+			request.Headers = map[string]string{"X-Amz-Checksum-CRC64NVME": "caller-value"}
+		},
+		func(request *Invocation) {
+			request.Headers = map[string]string{"X-Amz-Trailer-Signature": strings.Repeat("0", 64)}
+		},
+		func(request *Invocation) { request.PayloadMode = "aws-chunked" },
+		func(request *Invocation) { request.AuthScheme = "sigv4a"; request.RegionSet = "*" },
+	} {
+		request := valid
+		mutate(&request)
+		if err := validateInvocation(request, nil); err == nil {
+			t.Fatalf("unsafe trailer request accepted: %#v", request)
+		}
 	}
 }
 
