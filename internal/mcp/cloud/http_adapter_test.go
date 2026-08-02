@@ -927,6 +927,73 @@ func TestAlibabaRPCV2RejectsDuplicateAndControlledParameters(t *testing.T) {
 	}
 }
 
+func TestAlibabaROAV2MatchesOfficialCanonicalFormula(t *testing.T) {
+	body := `{"CategoryName":"test","CategoryType":"UNSTRUCTURED"}`
+	request, err := http.NewRequest(http.MethodPost, "https://bailian.cn-beijing.aliyuncs.com/llm-p2e4XXXXXXXXsvtn/datacenter/category", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	if err := signAlibabaROAV2(request, AlibabaCredentials{
+		AccessKeyID: "testid", AccessKeySecret: "testsecret",
+	}, "2023-12-29", time.Date(2025, 4, 16, 3, 44, 46, 0, time.UTC), "ef34aae7-7bd2-413d-a541-680cd2c48538"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Content-MD5"), "q2qaEcR4P47+Z7CUzHRTBw=="; got != want {
+		t.Fatalf("Content-MD5=%q want=%q", got, want)
+	}
+	if got, want := request.Header.Get("Authorization"), "acs testid:AYFXm52Ok0J/NswY03XdQFe/mgc="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+	for name, want := range map[string]string{
+		"Date": "Wed, 16 Apr 2025 03:44:46 GMT", "X-Acs-Signature-Method": "HMAC-SHA1",
+		"X-Acs-Signature-Nonce": "ef34aae7-7bd2-413d-a541-680cd2c48538", "X-Acs-Signature-Version": "1.0", "X-Acs-Version": "2023-12-29",
+	} {
+		if got := request.Header.Get(name); got != want {
+			t.Fatalf("%s=%q want=%q", name, got, want)
+		}
+	}
+}
+
+func TestAlibabaROAV2CanonicalResourceSortsQueryNames(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://example.aliyuncs.com/resources?z=last&empty=&a=first", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonicalAlibabaROAResource(request.URL), "/resources?a=first&empty&z=last"; got != want {
+		t.Fatalf("canonical resource=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaROAV2AdapterInjectsSTSAndCallsPDS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "123.api.aliyunpds.com" || request.Header.Get("X-Acs-Security-Token") != "ram-token" {
+			t.Fatalf("request=%s headers=%v", request.URL, request.Header)
+		}
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "acs aliyun-ak:") {
+			t.Fatalf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		return httpResponse(200, `{"items":[]}`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{
+			AccessKeyID: "aliyun-ak", AccessKeySecret: "aliyun-secret", SecurityToken: "ram-token",
+		}},
+		HTTP:  doer,
+		Now:   func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+		Nonce: func() string { return "roa-nonce" },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "roa", Service: "pds", Operation: "ListDrives",
+		APIVersion: "v2", Method: http.MethodPost, URL: "https://123.api.aliyunpds.com/v2/drive/list",
+		Body: map[string]any{"limit": 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {

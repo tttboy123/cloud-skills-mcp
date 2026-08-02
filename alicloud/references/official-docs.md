@@ -2,7 +2,9 @@
 
 - V3 OpenAPI HTTP structure and ACS3 signature: https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature
 - Legacy RPC V2 request structure, query/form parameter positions, HMAC-SHA1 algorithm, and fixed signature vector: https://www.alibabacloud.com/help/en/sdk/product-overview/rpc-mechanism
+- Legacy ROA V2 header/resource/body HMAC-SHA1 signature mechanism: https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism
 - Current BaaS HMAC-SHA1 common parameters and NAS STS `SecurityToken` parameter: https://www.alibabacloud.com/help/en/blockchain-as-a-service/latest/common-parameters and https://www.alibabacloud.com/help/en/nas/common-parameters
+- PDS AccessKey ROA endpoint and STS `x-acs-security-token` canonical-header behavior: https://www.alibabacloud.com/help/en/pds/drive-and-photo-service-dev/user-guide/call-api-operations-by-using-an-accesskey-pair
 - OSS V4 Authorization signature: https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4
 - Simple Log Service v1 request signature: https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures
 - Simple Log Service v1/v4 authentication selection and region requirement: https://www.alibabacloud.com/help/en/sls/developer-reference/initializing-the-sls-python-sdk
@@ -18,4 +20,4 @@
 - OpenAPI MCP Server guide: https://help.aliyun.com/en/openapi/user-guide/openapi-mcp-server-guide
 - OSS GetObject and Range download: https://www.alibabacloud.com/help/en/oss/developer-reference/getobject
 
-The universal adapter signs current general OpenAPI requests with ACS3, product APIs that still document legacy RPC V2 with HMAC-SHA1, OSS data-plane requests with OSS4, SLS data-plane requests with v1 or v4, MNS requests with its service-specific HMAC-SHA1 protocol, and Tablestore protobuf data-plane requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.
+The universal adapter signs current general OpenAPI requests with ACS3, product APIs that still document legacy RPC or ROA V2 with HMAC-SHA1, OSS data-plane requests with OSS4, SLS data-plane requests with v1 or v4, MNS requests with its service-specific HMAC-SHA1 protocol, and Tablestore protobuf data-plane requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.

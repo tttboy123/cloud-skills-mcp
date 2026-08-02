@@ -398,6 +398,7 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "ots", Service: "ots", Operation: "ListTable", Method: "POST", URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable"},
 		{Provider: ProviderAlicloud, AuthScheme: "ots4", Service: "ots", Operation: "ListTable", Region: "cn-hangzhou", Method: "POST", URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable"},
 		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/"},
+		{Provider: ProviderAlicloud, AuthScheme: "roa", Service: "pds", Operation: "ListDrives", APIVersion: "v2", Method: "POST", URL: "https://123.api.aliyunpds.com/v2/drive/list"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -425,6 +426,16 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	rpc.Method = "PUT"
 	if err := validateInvocation(rpc, nil); err == nil || !strings.Contains(err.Error(), "GET or POST") {
 		t.Fatalf("RPC invalid method error=%v", err)
+	}
+	roa := requests[6]
+	roa.APIVersion = ""
+	if err := validateInvocation(roa, nil); err == nil || !strings.Contains(err.Error(), "api_version") {
+		t.Fatalf("ROA missing api_version error=%v", err)
+	}
+	roa = requests[6]
+	roa.Headers = map[string]string{"Date": "Wed, 16 Apr 2025 03:44:46 GMT"}
+	if err := validateInvocation(roa, nil); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("ROA caller Date error=%v", err)
 	}
 }
 

@@ -1,16 +1,16 @@
 ---
 name: alicloud
-description: Operate or inspect Alibaba Cloud resources through ACS3, RPC V2, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, or a documented Alibaba Cloud API.
+description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
 ---
 
 # Alibaba Cloud
 
-Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI requests with ACS3-HMAC-SHA256, product APIs that still document legacy RPC V2 with query/form HMAC-SHA1, OSS data-plane requests with OSS4-HMAC-SHA256, Simple Log Service requests with SLS v1 or v4, Simple Message Queue requests with MNS HMAC-SHA1, and Tablestore protobuf requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.
+Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI requests with ACS3-HMAC-SHA256, product APIs that still document legacy RPC V2 with query/form HMAC-SHA1, legacy ROA V2 resource requests with `acs` HMAC-SHA1 headers, OSS data-plane requests with OSS4-HMAC-SHA256, Simple Log Service requests with SLS v1 or v4, Simple Message Queue requests with MNS HMAC-SHA1, and Tablestore protobuf requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.
 
 ## Workflow
 
 1. Call `cloud_provider_status` with `provider="alicloud"`; treat `available` as HTTP adapter readiness and `credential_status=unverified` as pending live authentication.
-2. Use `alicloud_api_discover` for official OpenAPI/ACS3/RPC/OSS4/SLS/MNS/OTS references, then verify method, endpoint, action, version, query, headers, and body in the product API metadata.
+2. Use `alicloud_api_discover` for official OpenAPI/ACS3/RPC/ROA/OSS4/SLS/MNS/OTS references, then verify method, endpoint, action, version, query, headers, and body in the product API metadata.
 3. Use `alicloud_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `alicloud_api_mutate(force=true)`.
 5. Secret-resource operations require the separate sensitive gate. STS role/session credentials, login profiles, AccessKey creation, and other credential issuance/export actions are never exposed by the gateway.
@@ -18,10 +18,10 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 
 ## MCP arguments
 
-- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc` only when the product metadata still requires legacy RPC V2 HMAC-SHA1; `oss4` for OSS; `sls` for SLS signature v1; `sls4` for SLS signature v4; `mns` for Simple Message Queue (formerly MNS); `ots` or `ots4` for Tablestore data management.
+- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc` or `roa` only when the product metadata still requires the matching legacy V2 HMAC-SHA1 style; `oss4` for OSS; `sls` for SLS signature v1; `sls4` for SLS signature v4; `mns` for Simple Message Queue (formerly MNS); `ots` or `ots4` for Tablestore data management.
 - `service`: product/signing code, such as `ecs`, `rds`, `vpc`, `ram`, or `oss`.
 - `operation`: exact action name used by ACS3 headers and read/write classification.
-- `api_version`: required for ACS3 and RPC, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
+- `api_version`: required for ACS3, RPC, and ROA, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
 - `region`: required by OSS4, SLS4, and OTS4 and recommended as operation context.
 - `method` and `url`: exact official Alibaba Cloud HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` or `body_file` for request payloads.
@@ -30,6 +30,8 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 Example read: `alicloud_api_read(auth_scheme="acs3", service="ecs", operation="DescribeInstances", api_version="2014-05-26", region="cn-hangzhou", method="POST", url="https://ecs.cn-hangzhou.aliyuncs.com/", parameters={"RegionId":"cn-hangzhou","PageSize":20})`.
 
 Legacy RPC example: `alicloud_api_read(auth_scheme="rpc", service="baas", operation="DescribeFabricOrganization", api_version="2018-12-21", method="GET", url="https://baas.aliyuncs.com/", parameters={"Format":"JSON","OrganizationId":"..."})`. The adapter adds `Action`, `Version`, timestamp, nonce, AK ID, optional RAM `SecurityToken`, and signature; optional `Format` remains caller-selected because documented defaults differ by product. For operations whose metadata puts parameters in `formData`, pass an `application/x-www-form-urlencoded` body; those fields are included in the signature without being copied into the URL. RPC accepts only the documented root path and GET or POST, and repeated parameter names are rejected.
+
+Legacy ROA example: `alicloud_api_read(auth_scheme="roa", service="pds", operation="ListDrives", api_version="v2", method="POST", url="https://<domain-id>.api.aliyunpds.com/v2/drive/list", body={"limit":20})`. The adapter signs the exact path/query and body, derives `Content-MD5`, and internally adds Date, nonce, version, optional RAM `x-acs-security-token`, and `Authorization`. Do not provide those controlled headers. ROA supports the documented GET, POST, PUT, and DELETE methods.
 
 SLS example: `alicloud_api_read(auth_scheme="sls4", service="sls", operation="ListLogstores", region="cn-hangzhou", method="GET", url="https://<project>.cn-hangzhou.log.aliyuncs.com/logstores")`. For protobuf log ingestion, pass the encoded body through `body_file` and its documented non-auth headers such as `Content-Type` and `x-log-bodyrawsize`; signing headers are server-controlled.
 

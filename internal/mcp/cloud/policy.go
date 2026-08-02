@@ -107,10 +107,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, oss4, sls, sls4, mns, ots, or ots4")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, oss4, sls, sls4, mns, ots, or ots4")
 		}
-		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2) && !apiVersionPattern.MatchString(request.APIVersion) {
+		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2 || scheme == authSchemeAlibabaROAV2) && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
 		}
 		if scheme == authSchemeAlibabaRPCV2 {
@@ -132,6 +132,18 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				}
 			}
 		}
+		if scheme == authSchemeAlibabaROAV2 {
+			switch strings.ToUpper(strings.TrimSpace(request.Method)) {
+			case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
+			default:
+				return fmt.Errorf("Alibaba Cloud ROA V2 requires method GET, POST, PUT, or DELETE")
+			}
+			for name := range request.Headers {
+				if isAlibabaROAV2ControlledHeader(name) {
+					return fmt.Errorf("caller-supplied protected Alibaba Cloud ROA V2 header %q is forbidden", name)
+				}
+			}
+		}
 		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
 		}
@@ -144,7 +156,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if (scheme == authSchemeAlibabaOTS || scheme == authSchemeAlibabaOTSV4) && !strings.EqualFold(request.Method, http.MethodPost) {
 			return fmt.Errorf("Alibaba Cloud OTS requires method POST")
 		}
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud requires a valid api_version when provided")
 		}
 	case ProviderTencent:
@@ -517,7 +529,8 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 	case ProviderAlicloud:
 		allowed = host == "aliyuncs.com" || strings.HasSuffix(host, ".aliyuncs.com") ||
 			host == "aliyuncs.com.cn" || strings.HasSuffix(host, ".aliyuncs.com.cn") ||
-			host == "alibabacloud.com" || strings.HasSuffix(host, ".alibabacloud.com")
+			host == "alibabacloud.com" || strings.HasSuffix(host, ".alibabacloud.com") ||
+			host == "aliyunpds.com" || strings.HasSuffix(host, ".aliyunpds.com")
 	case ProviderTencent:
 		allowed = host == "tencentcloudapi.com" || strings.HasSuffix(host, ".tencentcloudapi.com") ||
 			host == "myqcloud.com" || strings.HasSuffix(host, ".myqcloud.com") ||
@@ -556,6 +569,15 @@ func isCredentialQueryParameter(name string) bool {
 func isAlibabaRPCV2ControlledParameter(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "accesskeyid", "action", "signature", "signaturemethod", "signaturenonce", "signatureversion", "securitytoken", "timestamp", "version":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAlibabaROAV2ControlledHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "content-md5", "date", "x-acs-security-token", "x-acs-signature-method", "x-acs-signature-nonce", "x-acs-signature-version", "x-acs-version":
 		return true
 	default:
 		return false
