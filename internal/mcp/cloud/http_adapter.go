@@ -3,9 +3,11 @@ package cloud
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -31,6 +33,9 @@ const (
 	authSchemeAWSSigV4a      = "sigv4a"
 	authSchemeAlibabaACS3    = "acs3"
 	authSchemeAlibabaOSSV4   = "oss4"
+	authSchemeAlibabaSLS     = "sls"
+	authSchemeAlibabaSLSV4   = "sls4"
+	authSchemeAlibabaMNS     = "mns"
 	authSchemeTencentTC3     = "tc3"
 	authSchemeTencentCOS     = "cos"
 	defaultHTTPClientTimeout = 60 * time.Second
@@ -306,7 +311,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+oss4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+oss4+sls+sls4+mns",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -317,13 +322,19 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"api_reference":  "https://api.aliyun.com/",
 		"acs3_signature": "https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
+		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
+		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
 	})
 }
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3 or oss4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, or mns")
+	}
+	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
+		invocation.Headers = cloneStringMap(invocation.Headers)
+		invocation.Headers["Content-Type"] = "application/xml"
 	}
 	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
 	if err != nil {
@@ -347,6 +358,18 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeAlibabaOSSV4:
 		if err := signAlibabaOSSV4(request, credentials, invocation.Region, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaSLS:
+		if err := signAlibabaSLSV1(request, credentials, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaSLSV4:
+		if err := signAlibabaSLSV4(request, payloadHash, credentials, invocation.Region, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaMNS:
+		if err := signAlibabaMNS(request, credentials, invocation.APIVersion, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	}
@@ -681,6 +704,258 @@ func signAlibabaOSSV4(request *http.Request, credentials AlibabaCredentials, reg
 	authorization += ",Signature=" + signature
 	request.Header.Set("Authorization", authorization)
 	return nil
+}
+
+func signAlibabaSLSV1(request *http.Request, credentials AlibabaCredentials, apiVersion string, now time.Time) error {
+	if apiVersion == "" {
+		apiVersion = "0.6.0"
+	}
+	request.Header.Set("X-Log-Apiversion", apiVersion)
+	request.Header.Set("X-Log-Signaturemethod", "hmac-sha1")
+	if request.Header.Get("Date") == "" {
+		request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	}
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Acs-Security-Token", credentials.SecurityToken)
+	}
+	contentMD5, hasBody, err := requestBodyMD5(request, false)
+	if err != nil {
+		return fmt.Errorf("hash Alibaba SLS request body: %w", err)
+	}
+	if hasBody {
+		request.Header.Set("Content-MD5", contentMD5)
+	}
+	canonicalHeaders := canonicalPrefixedHeaders(request.Header, "x-log-", "x-acs-")
+	canonicalResource := canonicalAlibabaSLSResource(request.URL)
+	stringToSign := strings.Join([]string{
+		request.Method,
+		request.Header.Get("Content-MD5"),
+		request.Header.Get("Content-Type"),
+		request.Header.Get("Date"),
+	}, "\n") + "\n" + canonicalHeaders + "\n" + canonicalResource
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("Authorization", "LOG "+credentials.AccessKeyID+":"+signature)
+	return nil
+}
+
+func signAlibabaSLSV4(request *http.Request, payloadHash string, credentials AlibabaCredentials, region, apiVersion string, now time.Time) error {
+	if !identifierPattern.MatchString(region) {
+		return fmt.Errorf("Alibaba Cloud SLS4 requires a valid region")
+	}
+	if request.Header.Get("X-Log-Date") == "" {
+		request.Header.Set("X-Log-Date", now.UTC().Format("20060102T150405Z"))
+	}
+	dateTime := request.Header.Get("X-Log-Date")
+	if len(dateTime) < 8 {
+		return fmt.Errorf("Alibaba Cloud SLS4 requires a valid x-log-date")
+	}
+	if apiVersion != "" {
+		request.Header.Set("X-Log-Apiversion", apiVersion)
+	}
+	request.Header.Set("X-Log-Content-Sha256", payloadHash)
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Acs-Security-Token", credentials.SecurityToken)
+	}
+	canonicalHeaders, signedHeaders := canonicalAlibabaSLSV4Headers(request)
+	canonicalRequest := strings.Join([]string{
+		request.Method,
+		canonicalURI(request.URL),
+		canonicalAlibabaSLSV4Query(request.URL),
+		canonicalHeaders,
+		signedHeaders,
+		payloadHash,
+	}, "\n")
+	date := dateTime[:8]
+	scope := date + "/" + strings.ToLower(region) + "/sls/aliyun_v4_request"
+	stringToSign := "SLS4-HMAC-SHA256\n" + dateTime + "\n" + scope + "\n" + sha256Hex([]byte(canonicalRequest))
+	dateKey := hmacBytes(sha256.New, []byte("aliyun_v4"+credentials.AccessKeySecret), []byte(date))
+	regionKey := hmacBytes(sha256.New, dateKey, []byte(strings.ToLower(region)))
+	serviceKey := hmacBytes(sha256.New, regionKey, []byte("sls"))
+	signingKey := hmacBytes(sha256.New, serviceKey, []byte("aliyun_v4_request"))
+	signature := hmacHex(sha256.New, signingKey, []byte(stringToSign))
+	request.Header.Set("Authorization", "SLS4-HMAC-SHA256 Credential="+credentials.AccessKeyID+"/"+scope+",Signature="+signature)
+	return nil
+}
+
+func signAlibabaMNS(request *http.Request, credentials AlibabaCredentials, apiVersion string, now time.Time) error {
+	if apiVersion == "" {
+		apiVersion = "2015-06-06"
+	}
+	request.Header.Set("X-Mns-Version", apiVersion)
+	if request.Header.Get("Date") == "" {
+		request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	}
+	if credentials.SecurityToken != "" {
+		request.Header.Set("Security-Token", credentials.SecurityToken)
+	}
+	contentMD5, hasBody, err := requestBodyMD5(request, true)
+	if err != nil {
+		return fmt.Errorf("hash Alibaba MNS request body: %w", err)
+	}
+	if hasBody {
+		request.Header.Set("Content-MD5", contentMD5)
+	}
+	date := request.Header.Get("Date")
+	if request.Header.Get("X-Mns-Date") != "" {
+		date = request.Header.Get("X-Mns-Date")
+	}
+	canonicalHeaders := canonicalPrefixedHeaders(request.Header, "x-mns-")
+	resource := canonicalURI(request.URL)
+	if request.URL.RawQuery != "" {
+		resource += "?" + request.URL.RawQuery
+	}
+	stringToSign := strings.Join([]string{
+		request.Method,
+		request.Header.Get("Content-MD5"),
+		request.Header.Get("Content-Type"),
+		date,
+	}, "\n") + "\n" + canonicalHeaders + "\n" + resource
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("Authorization", "MNS "+credentials.AccessKeyID+":"+signature)
+	return nil
+}
+
+func requestBodyMD5(request *http.Request, mnsEncoding bool) (string, bool, error) {
+	if request.Body == nil || request.Body == http.NoBody {
+		return "", false, nil
+	}
+	if request.GetBody == nil {
+		return "", false, fmt.Errorf("signed HTTP body is not replayable")
+	}
+	body, err := request.GetBody()
+	if err != nil {
+		return "", false, err
+	}
+	defer body.Close()
+	digest := md5.New()
+	if _, err := io.Copy(digest, body); err != nil {
+		return "", false, err
+	}
+	if mnsEncoding {
+		hexDigest := hex.EncodeToString(digest.Sum(nil))
+		return base64.StdEncoding.EncodeToString([]byte(hexDigest)), true, nil
+	}
+	return strings.ToUpper(hex.EncodeToString(digest.Sum(nil))), true, nil
+}
+
+func canonicalPrefixedHeaders(headers http.Header, prefixes ...string) string {
+	values := make(map[string]string)
+	for name, entries := range headers {
+		lower := strings.ToLower(strings.TrimSpace(name))
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(lower, prefix) {
+				values[lower] = strings.TrimSpace(strings.Join(entries, ","))
+				break
+			}
+		}
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		lines = append(lines, name+":"+values[name])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func canonicalAlibabaSLSResource(target *url.URL) string {
+	resource := canonicalURI(target)
+	if target.RawQuery == "" {
+		return resource
+	}
+	values := target.Query()
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var query strings.Builder
+	for index, name := range names {
+		if index > 0 {
+			query.WriteByte('&')
+		}
+		for _, value := range values[name] {
+			query.WriteString(name)
+			query.WriteByte('=')
+			query.WriteString(value)
+		}
+	}
+	return resource + "?" + query.String()
+}
+
+func canonicalAlibabaSLSV4Headers(request *http.Request) (string, string) {
+	values := make(map[string]string)
+	for name, entries := range request.Header {
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "x-log-meta-") {
+			continue
+		}
+		if strings.HasPrefix(lower, "x-log-") || strings.HasPrefix(lower, "x-acs-") || lower == "content-type" {
+			values[lower] = strings.Join(entries, ",")
+		}
+	}
+	if request.URL.Host != "" || request.Host != "" {
+		host := request.URL.Host
+		if request.Host != "" {
+			host = request.Host
+		}
+		values["host"] = host
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var canonical strings.Builder
+	for _, name := range names {
+		canonical.WriteString(name)
+		canonical.WriteByte(':')
+		canonical.WriteString(values[name])
+		canonical.WriteByte('\n')
+	}
+	return canonical.String(), strings.Join(names, ";")
+}
+
+func canonicalAlibabaSLSV4Query(target *url.URL) string {
+	values := target.Query()
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		value := ""
+		if len(values[name]) > 0 {
+			value = strings.ReplaceAll(url.QueryEscape(values[name][0]), "+", "%20")
+		}
+		if value == "" {
+			parts = append(parts, name)
+		} else {
+			parts = append(parts, name+"="+value)
+		}
+	}
+	return strings.Join(parts, "&")
+}
+
+func hasHeader(headers map[string]string, name string) bool {
+	for candidate := range headers {
+		if strings.EqualFold(candidate, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values)+1)
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func signTencentCOS(request *http.Request, credentials TencentCredentials, now time.Time) error {

@@ -317,6 +317,8 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Headers: map[string]string{"X-HTTP-Method-Override": "DELETE"}},
 		{Provider: ProviderGCP, Method: "POST", URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", Body: map[string]any{"x": 1}, BodyFile: "/tmp/payload"},
 		{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file:///etc/passwd"}},
+		{Provider: ProviderAlicloud, AuthScheme: "sls", Service: "sls", Operation: "ListLogstores", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", Headers: map[string]string{"X-Log-Date": "20260803T010203Z"}},
+		{Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "ListQueues", Method: "GET", URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues", Headers: map[string]string{"Security-Token": "credential"}},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Audience: "https://management.azure.com"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Audience: "https://attacker.example"},
 		{Provider: ProviderAWS, Service: "sts", Operation: "get-caller-identity", AuthVersion: "v2"},
@@ -383,6 +385,23 @@ func TestInvocationBoundaryAllowsOfficialAzureAndBaiduDataPlaneEndpoints(t *test
 		if err := validateInvocation(request, nil); err != nil {
 			t.Errorf("official data-plane endpoint rejected: %#v: %v", request, err)
 		}
+	}
+}
+
+func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testing.T) {
+	requests := []Invocation{
+		{Provider: ProviderAlicloud, AuthScheme: "sls", Service: "sls", Operation: "ListLogstores", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores"},
+		{Provider: ProviderAlicloud, AuthScheme: "sls4", Service: "sls", Operation: "ListLogstores", Region: "cn-hangzhou", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores"},
+		{Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "ListQueues", Method: "GET", URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues"},
+	}
+	for _, request := range requests {
+		if err := validateInvocation(request, nil); err != nil {
+			t.Errorf("auth_scheme=%s rejected: %v", request.AuthScheme, err)
+		}
+	}
+	requests[1].Region = ""
+	if err := validateInvocation(requests[1], nil); err == nil || !strings.Contains(err.Error(), "region") {
+		t.Fatalf("SLS4 missing region error=%v", err)
 	}
 }
 

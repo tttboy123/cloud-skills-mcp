@@ -840,6 +840,166 @@ func TestAlibabaACS3MatchesOfficialFixedVector(t *testing.T) {
 	}
 }
 
+func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Date", "Mon, 3 Jan 2010 08:33:47 GMT")
+	request.Header.Set("x-log-bodyrawsize", "0")
+	if err := signAlibabaSLSV1(request, AlibabaCredentials{
+		AccessKeyID: "mockAccessKeyID", AccessKeySecret: "mockAccessKeySecret",
+	}, "0.6.0", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "LOG mockAccessKeyID:Rwm6cTKzoti4HWoe+GKcb6Kv07E="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaSLSV4MatchesOfficialSDKVector(t *testing.T) {
+	body := "adasd= -asd zcas"
+	request, err := http.NewRequest(http.MethodPost, "/logstores", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("x-log-date", "20220808T032330Z")
+	if err := signAlibabaSLSV4(request, sha256Hex([]byte(body)), AlibabaCredentials{
+		AccessKeyID: "acsddda21dsd", AccessKeySecret: "zxasdasdasw2",
+	}, "cn-shanghai", "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "SLS4-HMAC-SHA256 Credential=acsddda21dsd/20220808/cn-shanghai/sls/aliyun_v4_request,Signature=8a10a5e723cb2e75964816de660b2c16a58af8bc0261f7f0722d832468c76ce8"
+	if got := request.Header.Get("Authorization"); got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaMNSMatchesOfficialCanonicalizationFormula(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPut, "/queues/examplequeue?metaOverride=true", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "text/xml")
+	request.Header.Set("Date", "Wed, 08 Mar 2012 12:00:00 GMT")
+	if err := signAlibabaMNS(request, AlibabaCredentials{
+		AccessKeyID: "test-ak", AccessKeySecret: "test-secret",
+	}, "2015-06-06", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "MNS test-ak:Y6SD1lHAB+0Yco7zX0WcrNFXMJk="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaProductSpecificSignersInjectSTSAndSendHTTPS(t *testing.T) {
+	tests := []struct {
+		scheme string
+		region string
+		url    string
+		prefix string
+		token  string
+	}{
+		{scheme: "sls", url: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", prefix: "LOG aliyun-ak:", token: "X-Acs-Security-Token"},
+		{scheme: "sls4", region: "cn-hangzhou", url: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", prefix: "SLS4-HMAC-SHA256 Credential=aliyun-ak/", token: "X-Acs-Security-Token"},
+		{scheme: "mns", url: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues", prefix: "MNS aliyun-ak:", token: "Security-Token"},
+	}
+	for _, test := range tests {
+		t.Run(test.scheme, func(t *testing.T) {
+			doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+				if got := request.Header.Get("Authorization"); !strings.HasPrefix(got, test.prefix) {
+					t.Fatalf("authorization=%q", got)
+				}
+				if got := request.Header.Get(test.token); got != "ram-token" {
+					t.Fatalf("%s=%q", test.token, got)
+				}
+				return httpResponse(200, `{}`), nil
+			})
+			adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+				Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{
+					AccessKeyID: "aliyun-ak", AccessKeySecret: "aliyun-secret", SecurityToken: "ram-token",
+				}},
+				HTTP: doer,
+				Now:  func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+			})
+			_, err := adapter.Invoke(t.Context(), Invocation{
+				Provider: ProviderAlicloud, AuthScheme: test.scheme, Service: test.scheme, Operation: "ListResources",
+				APIVersion: "0.6.0", Region: test.region, Method: http.MethodGet, URL: test.url,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAlibabaProductSpecificBodiesAndQueriesFollowOfficialCanonicalization(t *testing.T) {
+	slsRequest, err := http.NewRequest(http.MethodPost, "/logstores?size=10&offset=1&tag=b&tag=a", strings.NewReader("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	slsRequest.Header.Set("Content-Type", "application/json")
+	slsRequest.Header.Set("Date", "Mon, 09 Nov 2015 06:03:03 GMT")
+	if err := signAlibabaSLSV1(slsRequest, AlibabaCredentials{
+		AccessKeyID: "ak", AccessKeySecret: "secret",
+	}, "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := slsRequest.Header.Get("Content-MD5"), "5D41402ABC4B2A76B9719D911017C592"; got != want {
+		t.Fatalf("SLS Content-MD5=%q want=%q", got, want)
+	}
+	if got, want := canonicalAlibabaSLSResource(slsRequest.URL), "/logstores?offset=1&size=10&tag=btag=a"; got != want {
+		t.Fatalf("SLS canonical resource=%q want=%q", got, want)
+	}
+	queryURL, err := url.Parse("/logstores?a=&x=a+b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonicalAlibabaSLSV4Query(queryURL), "a&x=a%20b"; got != want {
+		t.Fatalf("SLS4 canonical query=%q want=%q", got, want)
+	}
+
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if got := request.Header.Get("Content-Type"); got != "application/xml" {
+			t.Fatalf("MNS Content-Type=%q", got)
+		}
+		if got, want := request.Header.Get("Content-MD5"), "YzA5ZjA5MTUzNzY5NDgyMTA0ZjEyNWVlYTc5YjExYzE="; got != want {
+			t.Fatalf("MNS Content-MD5=%q want=%q", got, want)
+		}
+		return httpResponse(200, `<Queues/>`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "secret"}},
+		HTTP:        doer,
+		Now:         func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+	})
+	if _, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "CreateQueue",
+		Method: http.MethodPut, URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues/demo", Body: "<Queue/>",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAlibabaProductSpecificSignerRejectsUnreplayableBodyAndInvalidSLS4Date(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "/logstores", io.NopCloser(strings.NewReader("body")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.GetBody = nil
+	if _, _, err := requestBodyMD5(request, false); err == nil {
+		t.Fatal("accepted unreplayable body")
+	}
+	request, err = http.NewRequest(http.MethodGet, "/logstores", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Log-Date", "short")
+	if err := signAlibabaSLSV4(request, sha256Hex(nil), AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "secret"}, "cn-hangzhou", "", time.Time{}); err == nil {
+		t.Fatal("accepted invalid SLS4 date")
+	}
+}
+
 func TestTencentTC3AdapterMatchesOfficialSignatureExample(t *testing.T) {
 	now := time.Unix(1551113065, 0).UTC()
 	doer := doerFunc(func(request *http.Request) (*http.Response, error) {

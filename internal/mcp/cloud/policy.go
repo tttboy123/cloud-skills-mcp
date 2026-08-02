@@ -106,14 +106,20 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3 or oss4")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, or mns")
 		}
 		if scheme == authSchemeAlibabaACS3 && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud ACS3 requires a valid api_version")
 		}
 		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
+		}
+		if scheme == authSchemeAlibabaSLSV4 && !identifierPattern.MatchString(request.Region) {
+			return fmt.Errorf("Alibaba Cloud SLS4 requires a valid region")
+		}
+		if scheme != authSchemeAlibabaACS3 && request.APIVersion != "" && !identifierPattern.MatchString(request.APIVersion) {
+			return fmt.Errorf("Alibaba Cloud requires a valid api_version when provided")
 		}
 	case ProviderTencent:
 		if !identifierPattern.MatchString(request.Service) || !identifierPattern.MatchString(request.Operation) {
@@ -262,6 +268,8 @@ func isProtectedHeader(name string) bool {
 		"x-amz-checksum-crc32", "x-amz-checksum-crc32c", "x-amz-checksum-crc64nvme", "x-amz-checksum-sha1", "x-amz-checksum-sha256",
 		"x-acs-action", "x-acs-version", "x-acs-date", "x-acs-signature-nonce", "x-acs-content-sha256", "x-acs-security-token",
 		"x-oss-date", "x-oss-content-sha256", "x-oss-security-token",
+		"x-log-apiversion", "x-log-signaturemethod", "x-log-date", "x-log-content-sha256",
+		"x-mns-version", "x-mns-date", "security-token",
 		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",
 		"x-cos-security-token", "x-bce-date", "x-bce-security-token", "x-goog-user-project":
 		return true
@@ -510,7 +518,7 @@ func isCredentialQueryParameter(name string) bool {
 	case "access_token", "oauth_token", "authorization", "sig", "signature",
 		"x-amz-credential", "x-amz-signature", "x-amz-security-token",
 		"x-goog-signature", "x-bce-security-token", "sharedaccesssignature",
-		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token":
+		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token", "security-token":
 		return true
 	default:
 		return false
