@@ -32,6 +32,7 @@ const (
 	authSchemeAWSSigV4       = "sigv4"
 	authSchemeAWSSigV4a      = "sigv4a"
 	authSchemeAlibabaACS3    = "acs3"
+	authSchemeAlibabaRPCV2   = "rpc"
 	authSchemeAlibabaOSSV4   = "oss4"
 	authSchemeAlibabaSLS     = "sls"
 	authSchemeAlibabaSLSV4   = "sls4"
@@ -313,7 +314,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+oss4+sls+sls4+mns+ots+ots4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -323,6 +324,7 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 	return json.Marshal(map[string]string{
 		"api_reference":  "https://api.aliyun.com/",
 		"acs3_signature": "https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature",
+		"rpc_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/rpc-mechanism",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
@@ -332,8 +334,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, mns, ots, or ots4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -347,6 +349,11 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 	if err := validateRESTTargetWithEndpointHosts(ProviderAlicloud, request.Method, request.URL.String(), adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
 	}
+	if scheme == authSchemeAlibabaRPCV2 {
+		if err := validateAlibabaRPCV2Request(request); err != nil {
+			return InvocationResult{}, err
+		}
+	}
 	credentials, err := adapter.config.Credentials.Credentials(ctx)
 	if err != nil {
 		return InvocationResult{}, err
@@ -357,6 +364,10 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 	switch scheme {
 	case authSchemeAlibabaACS3:
 		if err := signAlibabaACS3(request, payloadHash, credentials, invocation, adapter.config.Now().UTC(), adapter.config.Nonce()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaRPCV2:
+		if err := signAlibabaRPCV2(request, credentials, invocation, adapter.config.Now().UTC(), adapter.config.Nonce()); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeAlibabaOSSV4:
@@ -646,6 +657,152 @@ func signAlibabaACS3(request *http.Request, payloadHash string, credentials Alib
 	signature := hmacHex(sha256.New, []byte(credentials.AccessKeySecret), []byte("ACS3-HMAC-SHA256\n"+hashedCanonical))
 	request.Header.Set("Authorization", "ACS3-HMAC-SHA256 Credential="+credentials.AccessKeyID+",SignedHeaders="+signedHeaders+",Signature="+signature)
 	return nil
+}
+
+func signAlibabaRPCV2(request *http.Request, credentials AlibabaCredentials, invocation Invocation, now time.Time, nonce string) error {
+	if !identifierPattern.MatchString(invocation.Operation) || !apiVersionPattern.MatchString(invocation.APIVersion) {
+		return fmt.Errorf("Alibaba Cloud RPC V2 requires valid operation and api_version")
+	}
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud RPC V2 requires complete AKSK material")
+	}
+	parameters, err := alibabaRPCV2SigningParameters(request)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"AccessKeyId", "Action", "SignatureMethod", "SignatureNonce", "SignatureVersion", "Timestamp", "Version"} {
+		if hasCaseInsensitiveMapKey(parameters, name) {
+			return fmt.Errorf("caller-supplied Alibaba Cloud RPC V2 signing parameter %q is forbidden", name)
+		}
+	}
+	if hasCaseInsensitiveMapKey(parameters, "Signature") || hasCaseInsensitiveMapKey(parameters, "SecurityToken") {
+		return fmt.Errorf("caller-supplied Alibaba Cloud RPC V2 credential or signature parameter is forbidden")
+	}
+	parameters["AccessKeyId"] = credentials.AccessKeyID
+	parameters["Action"] = invocation.Operation
+	parameters["SignatureMethod"] = "HMAC-SHA1"
+	parameters["SignatureNonce"] = nonce
+	parameters["SignatureVersion"] = "1.0"
+	parameters["Timestamp"] = now.UTC().Format("2006-01-02T15:04:05Z")
+	parameters["Version"] = invocation.APIVersion
+	if credentials.SecurityToken != "" {
+		parameters["SecurityToken"] = credentials.SecurityToken
+	}
+	canonical := canonicalAlibabaRPCV2Parameters(parameters)
+	stringToSign := request.Method + "&%2F&" + uriEncode(canonical, true)
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret+"&"), []byte(stringToSign)))
+
+	queryParameters := request.URL.Query()
+	queryParameters.Set("AccessKeyId", credentials.AccessKeyID)
+	queryParameters.Set("Action", invocation.Operation)
+	queryParameters.Set("SignatureMethod", "HMAC-SHA1")
+	queryParameters.Set("SignatureNonce", nonce)
+	queryParameters.Set("SignatureVersion", "1.0")
+	queryParameters.Set("Timestamp", now.UTC().Format("2006-01-02T15:04:05Z"))
+	queryParameters.Set("Version", invocation.APIVersion)
+	if credentials.SecurityToken != "" {
+		queryParameters.Set("SecurityToken", credentials.SecurityToken)
+	}
+	queryParameters.Set("Signature", signature)
+	request.URL.RawQuery = canonicalAlibabaRPCV2Values(queryParameters)
+	return nil
+}
+
+func validateAlibabaRPCV2Request(request *http.Request) error {
+	if request == nil || request.URL == nil {
+		return fmt.Errorf("Alibaba Cloud RPC V2 request is missing")
+	}
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		return fmt.Errorf("Alibaba Cloud RPC V2 requires method GET or POST")
+	}
+	if path := request.URL.EscapedPath(); path != "" && path != "/" {
+		return fmt.Errorf("Alibaba Cloud RPC V2 requires the root request path")
+	}
+	parameters, err := alibabaRPCV2SigningParameters(request)
+	if err != nil {
+		return err
+	}
+	for name := range parameters {
+		if isAlibabaRPCV2ControlledParameter(name) {
+			return fmt.Errorf("caller-supplied Alibaba Cloud RPC V2 signing parameter %q is forbidden", name)
+		}
+	}
+	return nil
+}
+
+func alibabaRPCV2SigningParameters(request *http.Request) (map[string]string, error) {
+	parameters := make(map[string]string)
+	for name, values := range request.URL.Query() {
+		if len(values) != 1 {
+			return nil, fmt.Errorf("Alibaba Cloud RPC V2 parameter %q must have exactly one value", name)
+		}
+		parameters[name] = values[0]
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]))
+	if contentType != "application/x-www-form-urlencoded" || request.Body == nil {
+		return parameters, nil
+	}
+	if request.GetBody == nil {
+		return nil, fmt.Errorf("Alibaba Cloud RPC V2 form body is not replayable")
+	}
+	body, err := request.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("read Alibaba Cloud RPC V2 form body: %w", err)
+	}
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, maxRequestPayloadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Alibaba Cloud RPC V2 form body: %w", err)
+	}
+	if len(data) > maxRequestPayloadBytes {
+		return nil, fmt.Errorf("Alibaba Cloud RPC V2 form body exceeds %d bytes", maxRequestPayloadBytes)
+	}
+	form, err := url.ParseQuery(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse Alibaba Cloud RPC V2 form body: %w", err)
+	}
+	for name, values := range form {
+		if len(values) != 1 {
+			return nil, fmt.Errorf("Alibaba Cloud RPC V2 form parameter %q must have exactly one value", name)
+		}
+		if _, present := parameters[name]; present {
+			return nil, fmt.Errorf("Alibaba Cloud RPC V2 parameter %q appears in both query and form body", name)
+		}
+		parameters[name] = values[0]
+	}
+	return parameters, nil
+}
+
+func canonicalAlibabaRPCV2Parameters(parameters map[string]string) string {
+	names := make([]string, 0, len(parameters))
+	for name := range parameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, uriEncode(name, true)+"="+uriEncode(parameters[name], true))
+	}
+	return strings.Join(parts, "&")
+}
+
+func canonicalAlibabaRPCV2Values(values url.Values) string {
+	parameters := make(map[string]string, len(values))
+	for name, entries := range values {
+		if len(entries) > 0 {
+			parameters[name] = entries[0]
+		}
+	}
+	return canonicalAlibabaRPCV2Parameters(parameters)
+}
+
+func hasCaseInsensitiveMapKey(values map[string]string, name string) bool {
+	for candidate := range values {
+		if strings.EqualFold(candidate, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func signTencentTC3(request *http.Request, payloadHash string, credentials TencentCredentials, invocation Invocation, now time.Time) error {

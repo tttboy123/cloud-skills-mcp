@@ -107,11 +107,30 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, oss4, sls, sls4, mns, ots, or ots4")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, oss4, sls, sls4, mns, ots, or ots4")
 		}
-		if scheme == authSchemeAlibabaACS3 && !apiVersionPattern.MatchString(request.APIVersion) {
-			return fmt.Errorf("Alibaba Cloud ACS3 requires a valid api_version")
+		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2) && !apiVersionPattern.MatchString(request.APIVersion) {
+			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
+		}
+		if scheme == authSchemeAlibabaRPCV2 {
+			if !strings.EqualFold(request.Method, http.MethodGet) && !strings.EqualFold(request.Method, http.MethodPost) {
+				return fmt.Errorf("Alibaba Cloud RPC V2 requires method GET or POST")
+			}
+			parsed, err := url.Parse(request.URL)
+			if err != nil || (parsed.EscapedPath() != "" && parsed.EscapedPath() != "/") {
+				return fmt.Errorf("Alibaba Cloud RPC V2 requires the root request path")
+			}
+			for name := range parsed.Query() {
+				if isAlibabaRPCV2ControlledParameter(name) {
+					return fmt.Errorf("caller-supplied Alibaba Cloud RPC V2 signing parameter %q is forbidden", name)
+				}
+			}
+			for name := range request.Parameters {
+				if isAlibabaRPCV2ControlledParameter(name) {
+					return fmt.Errorf("caller-supplied Alibaba Cloud RPC V2 signing parameter %q is forbidden", name)
+				}
+			}
 		}
 		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("Alibaba Cloud OSS4 requires a valid region")
@@ -125,7 +144,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if (scheme == authSchemeAlibabaOTS || scheme == authSchemeAlibabaOTSV4) && !strings.EqualFold(request.Method, http.MethodPost) {
 			return fmt.Errorf("Alibaba Cloud OTS requires method POST")
 		}
-		if scheme != authSchemeAlibabaACS3 && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud requires a valid api_version when provided")
 		}
 	case ProviderTencent:
@@ -524,10 +543,19 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 
 func isCredentialQueryParameter(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "access_token", "oauth_token", "authorization", "sig", "signature",
+	case "access_token", "oauth_token", "authorization", "sig", "signature", "accesskeyid", "securitytoken",
 		"x-amz-credential", "x-amz-signature", "x-amz-security-token",
 		"x-goog-signature", "x-bce-security-token", "sharedaccesssignature",
 		"q-signature", "q-ak", "x-cos-security-token", "x-acs-security-token", "x-oss-security-token", "security-token", "x-ots-ststoken":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAlibabaRPCV2ControlledParameter(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "accesskeyid", "action", "signature", "signaturemethod", "signaturenonce", "signatureversion", "securitytoken", "timestamp", "version":
 		return true
 	default:
 		return false

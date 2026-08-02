@@ -319,6 +319,8 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 		{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file:///etc/passwd"}},
 		{Provider: ProviderAlicloud, AuthScheme: "sls", Service: "sls", Operation: "ListLogstores", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", Headers: map[string]string{"X-Log-Date": "20260803T010203Z"}},
 		{Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "ListQueues", Method: "GET", URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues", Headers: map[string]string{"Security-Token": "credential"}},
+		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/?SignatureNonce=caller"},
+		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/", Parameters: map[string]any{"Action": "CallerOverride"}},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Audience: "https://management.azure.com"},
 		{Provider: ProviderAzure, Method: "GET", URL: "https://management.azure.com/subscriptions", Audience: "https://attacker.example"},
 		{Provider: ProviderAWS, Service: "sts", Operation: "get-caller-identity", AuthVersion: "v2"},
@@ -395,6 +397,7 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "ListQueues", Method: "GET", URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues"},
 		{Provider: ProviderAlicloud, AuthScheme: "ots", Service: "ots", Operation: "ListTable", Method: "POST", URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable"},
 		{Provider: ProviderAlicloud, AuthScheme: "ots4", Service: "ots", Operation: "ListTable", Region: "cn-hangzhou", Method: "POST", URL: "https://demo.cn-hangzhou.ots.aliyuncs.com/ListTable"},
+		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -412,6 +415,16 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	requests[3].Method = "GET"
 	if err := validateInvocation(requests[3], nil); err == nil || !strings.Contains(err.Error(), "POST") {
 		t.Fatalf("OTS non-POST error=%v", err)
+	}
+	rpc := requests[5]
+	rpc.APIVersion = ""
+	if err := validateInvocation(rpc, nil); err == nil || !strings.Contains(err.Error(), "api_version") {
+		t.Fatalf("RPC missing api_version error=%v", err)
+	}
+	rpc = requests[5]
+	rpc.Method = "PUT"
+	if err := validateInvocation(rpc, nil); err == nil || !strings.Contains(err.Error(), "GET or POST") {
+		t.Fatalf("RPC invalid method error=%v", err)
 	}
 }
 

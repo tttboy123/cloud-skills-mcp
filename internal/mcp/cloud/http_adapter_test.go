@@ -840,6 +840,93 @@ func TestAlibabaACS3MatchesOfficialFixedVector(t *testing.T) {
 	}
 }
 
+func TestAlibabaRPCV2MatchesOfficialFixedVector(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://ecs.cn-beijing.aliyuncs.com/?Format=JSON&RegionId=cn-beijing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := Invocation{Operation: "DescribeDedicatedHosts", APIVersion: "2014-05-26"}
+	now := time.Date(2023, 3, 13, 8, 34, 30, 0, time.UTC)
+	if err := signAlibabaRPCV2(request, AlibabaCredentials{
+		AccessKeyID: "testid", AccessKeySecret: "testsecret",
+	}, invocation, now, "edb2b34af0af9a6d14deaf7c1a5315eb"); err != nil {
+		t.Fatal(err)
+	}
+	query := request.URL.Query()
+	if got, want := query.Get("Signature"), "9NaGiOspFP5UPcwX8Iwt2YJXXuk="; got != want {
+		t.Fatalf("RPC V2 signature=%q want=%q", got, want)
+	}
+	for name, want := range map[string]string{
+		"AccessKeyId": "testid", "Action": "DescribeDedicatedHosts", "Format": "JSON",
+		"SignatureMethod": "HMAC-SHA1", "SignatureNonce": "edb2b34af0af9a6d14deaf7c1a5315eb",
+		"SignatureVersion": "1.0", "Timestamp": "2023-03-13T08:34:30Z", "Version": "2014-05-26",
+	} {
+		if got := query.Get(name); got != want {
+			t.Fatalf("%s=%q want=%q", name, got, want)
+		}
+	}
+}
+
+func TestAlibabaRPCV2AdapterSignsFormBodyAndInjectsSTS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		query := request.URL.Query()
+		for name, want := range map[string]string{
+			"AccessKeyId": "aliyun-ak", "Action": "TranslateGeneral", "Version": "2018-10-12",
+			"SecurityToken": "ram-token", "SignatureMethod": "HMAC-SHA1", "SignatureVersion": "1.0",
+		} {
+			if got := query.Get(name); got != want {
+				t.Fatalf("%s=%q want=%q", name, got, want)
+			}
+		}
+		if got, want := query.Get("Signature"), "4XSGq7W8KVsFh1OtbHyY+g9rJj4="; got != want {
+			t.Fatalf("RPC V2 form signature=%q want=%q", got, want)
+		}
+		if query.Has("Scene") || query.Has("SourceText") {
+			t.Fatalf("form parameters were duplicated into query: %s", request.URL.RawQuery)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil || string(body) != "Scene=general&SourceText=Hello%20world" {
+			t.Fatalf("body=%q err=%v", body, err)
+		}
+		return httpResponse(200, `{"RequestId":"rpc-request-id"}`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{
+			AccessKeyID: "aliyun-ak", AccessKeySecret: "aliyun-secret", SecurityToken: "ram-token",
+		}},
+		HTTP:  doer,
+		Now:   func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+		Nonce: func() string { return "rpc-nonce" },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "alimt", Operation: "TranslateGeneral",
+		APIVersion: "2018-10-12", Method: http.MethodPost, URL: "https://mt.aliyuncs.com/",
+		Headers: map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
+		Body:    "Scene=general&SourceText=Hello%20world",
+	})
+	if err != nil || result.RequestID != "rpc-request-id" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAlibabaRPCV2RejectsDuplicateAndControlledParameters(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://ecs.cn-beijing.aliyuncs.com/?RegionId=a&RegionId=b",
+		"https://ecs.cn-beijing.aliyuncs.com/?SignatureNonce=caller",
+	} {
+		request, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = signAlibabaRPCV2(request, AlibabaCredentials{
+			AccessKeyID: "ak", AccessKeySecret: "secret",
+		}, Invocation{Operation: "DescribeInstances", APIVersion: "2014-05-26"}, time.Now(), "nonce")
+		if err == nil {
+			t.Fatalf("accepted unsafe RPC V2 URL %q", rawURL)
+		}
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {
