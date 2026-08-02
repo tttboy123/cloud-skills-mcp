@@ -1,6 +1,6 @@
 interface:
   display_name: "Alibaba Cloud"
-  short_description: "Operate every Alibaba OpenAPI through guarded MCP calls"
+  short_description: "Operate Alibaba APIs and NLS through guarded MCP calls"
   default_prompt: "Use $alicloud to inspect or operate Alibaba Cloud resources safely."
 dependencies:
   tools:

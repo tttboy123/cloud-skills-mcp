@@ -78,6 +78,12 @@ func classifyRead(provider Provider, request Invocation) bool {
 		}
 	case ProviderAWS, ProviderAlicloud, ProviderTencent:
 		action := strings.ToLower(strings.TrimSpace(request.Operation))
+		if provider == ProviderAlicloud && normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3) == authSchemeAlibabaNLSWS {
+			switch action {
+			case "speechtranscriber", "speechrecognizer", "flowingspeechsynthesizer", "speechsynthesizer", "speechlongsynthesizer":
+				return true
+			}
+		}
 		if provider == ProviderAWS && normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) == authSchemeAWSTranscribeWS {
 			switch action {
 			case "startstreamtranscriptionwebsocket", "startmedicalstreamtranscriptionwebsocket", "startcallanalyticsstreamtranscriptionwebsocket":
@@ -126,15 +132,21 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
 	}
 	awsScheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
+	alibabaScheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
 	gcpScheme := normalizedAuthScheme(request.AuthScheme, "")
 	azureScheme := normalizedAuthScheme(request.AuthScheme, "")
 	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
+	alibabaNLSWebSocketScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSWS
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	if awsWebSocketScheme {
 		if err := validateAWSTranscribeWebSocketInvocation(request); err != nil {
+			return err
+		}
+	} else if alibabaNLSWebSocketScheme {
+		if err := validateAlibabaNLSWebSocketInvocation(request); err != nil {
 			return err
 		}
 	} else if tencentWebSocketScheme {
@@ -227,9 +239,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if !identifierPattern.MatchString(request.Service) || !identifierPattern.MatchString(request.Operation) {
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
-		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, ots, or ots4")
+		scheme := alibabaScheme
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 && scheme != authSchemeAlibabaNLSWS {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, ots, ots4, or nls-ws")
 		}
 		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2 || scheme == authSchemeAlibabaROAV2) && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
@@ -342,7 +354,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if (scheme == authSchemeAlibabaOTS || scheme == authSchemeAlibabaOTSV4) && !strings.EqualFold(request.Method, http.MethodPost) {
 			return fmt.Errorf("Alibaba Cloud OTS requires method POST")
 		}
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaNLSWS && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud requires a valid api_version when provided")
 		}
 	case ProviderTencent:
@@ -432,7 +444,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsWebSocketScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}
@@ -508,7 +520,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
-	if request.Body != nil && request.BodyFile != "" && !awsWebSocketScheme {
+	if request.Body != nil && request.BodyFile != "" && !awsWebSocketScheme && !alibabaNLSWebSocketScheme {
 		return fmt.Errorf("body and body_file are mutually exclusive")
 	}
 	if request.BodyFile != "" {

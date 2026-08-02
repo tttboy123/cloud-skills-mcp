@@ -120,7 +120,7 @@ in MCP results or written to audit logs.
 AWS:       SigV4/SigV4a, S3 aws-chunked with signed trailers, and finite SigV4 HTTP EventStream with AWS SDK profile/SSO/web identity/IAM role/AKSK or STS
 Azure:     non-CLI EnvironmentCredential/workload identity/managed identity
 GCP:       Google Auth Application Default Credentials only
-Alibaba:   credentials-go RAM/OIDC/ECS role/ALIBABA_CLOUD_* AKSK or STS
+Alibaba:   credentials-go RAM/OIDC/ECS role/ALIBABA_CLOUD_* AKSK or STS; NLS token stays internal
 Tencent:   TENCENTCLOUD_* AKSK or CAM temporary credentials
 Baidu:     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY, optional BCE_SESSION_TOKEN
 

@@ -47,7 +47,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime Entra-authenticated WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated REST plus raw framed-protobuf gRPC over HTTP/2 against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
-| Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env |
+| Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
 | Baidu AI Cloud | BCE signed HTTPS request against validated `baidubce.com` endpoints | BCE AK/SK or IAM/STS temporary AK/SK/session token |
 
@@ -90,6 +90,12 @@ remain available through the guarded resource gateway.
   sessions remain a separate transport family.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
+- Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a
+  non-secret project AppKey. The server signs the fixed HTTPS RPC V2
+  `CreateToken` request internally, validates and caches the temporary token,
+  generates all task/message IDs, enforces start/stream/stop/completed order,
+  and never returns or audits the token. Public `CreateToken` calls remain
+  prohibited by the credential-issuance boundary.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an

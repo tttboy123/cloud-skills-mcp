@@ -1,11 +1,11 @@
 ---
 name: alicloud
-description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS, Function Compute FC, OSS V1/V4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, MaxCompute, Function Compute, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
+description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS, Function Compute FC, OSS V1/V4, SLS, MNS, OTS signed HTTPS, or Intelligent Speech Interaction NLS WebSocket in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, MaxCompute, Function Compute, OSS, SLS, MNS, Tablestore, NLS speech recognition or synthesis, RDS, VPC, RAM, ACK, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
 ---
 
 # Alibaba Cloud
 
-Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI with ACS3, legacy RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS V2/V4, Function Compute FC, OSS, SLS, MNS, and Tablestore protocols. It never executes Alibaba Cloud CLI.
+Use the unified MCP server for Alibaba Cloud HTTP APIs and guarded NLS WebSocket tasks. The gateway signs general OpenAPI with ACS3, legacy RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS V2/V4, Function Compute FC, OSS, SLS, MNS, and Tablestore protocols. For NLS it mints and caches the documented temporary token internally from the same RAM AKSK/STS chain, then follows the provider command/event sequence. It never executes Alibaba Cloud CLI.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 
 ## MCP arguments
 
-- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `odps4` for current MaxCompute project/data/Tunnel APIs and `odps` for their legacy V2 signature; `fc` for classic Function Compute resources and old `/2016-08-15/proxy/...` triggers, `fc3` for current `fcapp.run` HTTP triggers, and `fc-custom` for signature-enabled custom domains; `oss4` (recommended) or `oss` (V1) for OSS Header-signed operations; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
+- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `odps4` for current MaxCompute project/data/Tunnel APIs and `odps` for their legacy V2 signature; `fc` for classic Function Compute resources and old `/2016-08-15/proxy/...` triggers, `fc3` for current `fcapp.run` HTTP triggers, and `fc-custom` for signature-enabled custom domains; `oss4` (recommended) or `oss` (V1) for OSS Header-signed operations; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore; `nls-ws` for the official Intelligent Speech Interaction WebSocket gateway.
 - `service`: product/signing code, such as `ecs`, `rds`, `vpc`, `ram`, or `oss`.
 - `operation`: exact action name used by ACS3 headers and read/write classification.
 - `api_version`: required for ACS3, RPC, and ROA, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
@@ -53,8 +53,12 @@ MNS example: `alicloud_api_read(auth_scheme="mns", service="mns", operation="Lis
 
 Tablestore data management is protobuf over direct HTTP, not ACS3. Encode the exact operation request with Alibaba's published `.proto` definitions, pass it through `body_file`, and call the operation path with POST, for example `alicloud_api_read(auth_scheme="ots4", service="ots", operation="ListTable", region="cn-hangzhou", method="POST", url="https://<instance>.cn-hangzhou.ots.aliyuncs.com/ListTable", body_file="<approved-root>/ListTableRequest.pb", response_file="<approved-root>/ListTableResponse.pb")`. The adapter derives the instance from the first official endpoint label and internally sets the body MD5, OTS headers, V4 derived key, AK ID, signature, and STS token. Decode the response with the matching official response message definition.
 
+NLS WebSocket recognition uses `service="nls"`, `method="GET"`, an official public `wss://nls-gateway[-<region>].aliyuncs.com/ws/v1` endpoint, `parameters={"appkey":"<project-appkey>"}`, and `auth_scheme="nls-ws"`. AppKey identifies the NLS project and is not an authentication secret. Use operation `SpeechTranscriber` for long real-time recognition or `SpeechRecognizer` for a short sentence, put the official start payload in `body`, the finite audio in `body_file`, and NDJSON events in `response_file`. Example: `alicloud_api_read(auth_scheme="nls-ws", service="nls", operation="SpeechTranscriber", method="GET", url="wss://nls-gateway-ap-southeast-1.aliyuncs.com/ws/v1", parameters={"appkey":"<project-appkey>"}, body={"format":"pcm","sample_rate":16000,"enable_intermediate_result":true}, body_file="<approved-root>/audio.pcm", response_file="<approved-root>/transcript.ndjson")`. The adapter creates all 32-character task/message IDs, waits for `TranscriptionStarted`, paces audio, sends `StopTranscription`, and publishes only after `TranscriptionCompleted`.
+
+For streaming text synthesis use operation `FlowingSpeechSynthesizer` and `body={"start":{...},"texts":[...]}`. For single or long-text synthesis use `SpeechSynthesizer` or `SpeechLongSynthesizer` and put the documented start payload, including `text`, directly in `body`. Binary audio is atomically written to `response_file`; the MCP result also contains bounded provider events. Example: `alicloud_api_read(auth_scheme="nls-ws", service="nls", operation="FlowingSpeechSynthesizer", method="GET", url="wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1", parameters={"appkey":"<project-appkey>"}, body={"start":{"voice":"xiaoyun","format":"mp3","sample_rate":16000},"texts":["第一段。","第二段。"]}, response_file="<approved-root>/speech.mp3")`. Never pass `token`, `X-NLS-Token`, AKSK, or caller-generated protocol headers; public `CreateToken` remains blocked even though the NLS adapter calls it internally.
+
 ## Credentials
 
-Use the official credentials-go chain: RAM/OIDC/ECS role, STS, or `ALIBABA_CLOUD_ACCESS_KEY_ID` / `ALIBABA_CLOUD_ACCESS_KEY_SECRET`. Temporary credentials also use `ALIBABA_CLOUD_SECURITY_TOKEN`. Never put credentials in MCP arguments.
+Use the official credentials-go chain: RAM/OIDC/ECS role, STS, or `ALIBABA_CLOUD_ACCESS_KEY_ID` / `ALIBABA_CLOUD_ACCESS_KEY_SECRET`. Temporary credentials also use `ALIBABA_CLOUD_SECURITY_TOKEN`. The adapter derives NLS temporary tokens from that chain and never returns them. Never put credentials in MCP arguments.
 
 Read [references/official-docs.md](references/official-docs.md) when profile type, parameter shape, or action name needs verification.

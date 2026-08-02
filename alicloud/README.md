@@ -1,5 +1,5 @@
 # Alibaba Cloud Skill
 
-本目录把阿里云资源意图路由到统一 `cloud-skills-mcp` server。底层直接发送 ACS3、RPC/ROA V2、DataHub、OpenSearch V3、MaxCompute ODPS v2/v4、Function Compute、OSS v1/v4、SLS v1/v4、MNS 或 OTS v2/v4 签名 HTTPS 请求，不调用 Alibaba Cloud CLI。
+本目录把阿里云资源意图路由到统一 `cloud-skills-mcp` server。底层直接发送 ACS3、RPC/ROA V2、DataHub、OpenSearch V3、MaxCompute ODPS v2/v4、Function Compute、OSS v1/v4、SLS v1/v4、MNS、OTS v2/v4 签名 HTTPS 请求，也支持 Intelligent Speech Interaction 的受控 NLS WSS 识别与合成，不调用 Alibaba Cloud CLI。
 
-凭证仅使用官方 credentials-go 的 RAM/OIDC/ECS role、STS 或 AKSK 环境链。具体规则见 [SKILL.md](SKILL.md)，官方来源见 [references/official-docs.md](references/official-docs.md)。
+凭证仅使用官方 credentials-go 的 RAM/OIDC/ECS role、STS 或 AKSK 环境链。NLS 临时 Token 由 server 内部调用官方 `CreateToken` 获取并缓存，不通过 MCP 参数、响应或审计暴露；NLS AppKey 只是项目标识。具体规则见 [SKILL.md](SKILL.md)，官方来源见 [references/official-docs.md](references/official-docs.md)。
