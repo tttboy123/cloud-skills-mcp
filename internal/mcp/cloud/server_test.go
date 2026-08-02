@@ -3,6 +3,8 @@ package cloud
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -111,6 +113,11 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		}
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
+		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
+			if _, ok := tool.InputSchema.Properties["body_file"]; !ok {
+				t.Errorf("%s must expose guarded REST body_file", tool.Name)
+			}
+		}
 		if tool.Annotations.ReadOnlyHint == nil || *tool.Annotations.ReadOnlyHint == mutating {
 			t.Errorf("%s readOnly annotation mismatch", tool.Name)
 		}
@@ -281,6 +288,8 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 		{Provider: ProviderGCP, Method: "POST", URL: "https://compute.googleapis.com/v1/projects", Body: map[string]any{"data": strings.Repeat("x", maxRequestPayloadBytes)}},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://bcc.bj.baidubce.com.evil.example/v2/instance"},
 		{Provider: ProviderBaidu, Method: "GET", URL: "https://bcc.bj.baidubce.com/v2/instance", Headers: map[string]string{"X-API-Key": "credential"}},
+		{Provider: ProviderGCP, Method: "POST", URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", Body: map[string]any{"x": 1}, BodyFile: "/tmp/payload"},
+		{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file:///etc/passwd"}},
 	} {
 		if err := validateInvocation(request, nil); err == nil {
 			t.Errorf("accepted unsafe request: %#v", request)
@@ -307,6 +316,42 @@ func TestOutputIsBoundedAndCredentialFieldsAreRedacted(t *testing.T) {
 	})
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "response exceeds") {
 		t.Fatalf("large output was not rejected: %#v", result)
+	}
+}
+
+func TestBodyFilePolicyAllowsOnlyBoundedRegularFilesUnderOperatorRoots(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "payload.bin")
+	if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{Provider: ProviderGCP, Method: "POST", URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", BodyFile: path}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded body_file rejected: %v", err)
+	}
+	aliRequest := Invocation{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file://" + path}}
+	if err := validateInvocation(aliRequest, []string{root}); err != nil {
+		t.Fatalf("guarded Alibaba file reference rejected: %v", err)
+	}
+	request.BodyFile = root
+	if err := validateInvocation(request, []string{root}); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("directory body_file error=%v", err)
+	}
+	large := filepath.Join(root, "large.bin")
+	file, err := os.Create(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxRequestFileBytes + 1); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request.BodyFile = large
+	if err := validateInvocation(request, []string{root}); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("large body_file error=%v", err)
 	}
 }
 

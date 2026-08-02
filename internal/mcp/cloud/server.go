@@ -70,6 +70,7 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithArray("arguments", mcp.Description("Additional fixed-executable CLI arguments."), mcp.WithStringItems(), mcp.MaxItems(128)),
 		mcp.WithObject("headers", mcp.Description("Non-credential HTTP headers."), mcp.AdditionalProperties(map[string]any{"type": "string"})),
 		mcp.WithAny("body", mcp.Description("Optional JSON-compatible REST request body.")),
+		mcp.WithString("body_file", mcp.Description("Optional local REST request body file. The resolved regular file must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and cannot be combined with body.")),
 		mcp.WithReadOnlyHintAnnotation(!mutating),
 		mcp.WithDestructiveHintAnnotation(mutating),
 		mcp.WithIdempotentHintAnnotation(!mutating),
@@ -173,6 +174,7 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 		Region: request.GetString("region", ""), Project: request.GetString("project", ""),
 		Subscription: request.GetString("subscription", ""), Method: request.GetString("method", ""),
 		URL: request.GetString("url", ""), Arguments: request.GetStringSlice("arguments", nil),
+		BodyFile: request.GetString("body_file", ""),
 	}
 	if value, ok := arguments["parameters"]; ok {
 		parameters, ok := value.(map[string]any)

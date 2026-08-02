@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -177,6 +178,51 @@ func TestGCPRESTAdapterUsesTokenInternallyAndReturnsOnlyProviderResponse(t *test
 	}
 	if strings.Contains(string(result.Output), tokenProvider.token) || tokenProvider.calls != 1 {
 		t.Fatalf("token exposed or not used exactly once: %#v", result)
+	}
+}
+
+func TestGCPRESTAdapterStreamsGuardedBodyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload.bin")
+	if err := os.WriteFile(path, []byte("binary-payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens := &staticTokenProvider{token: "token"}
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil || string(body) != "binary-payload" || request.ContentLength != int64(len(body)) {
+			t.Fatalf("body=%q length=%d err=%v", body, request.ContentLength, err)
+		}
+		if got := request.Header.Get("Content-Type"); got != "application/octet-stream" {
+			t.Fatalf("content type=%q", got)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	})
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{Tokens: tokens, HTTP: doer})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Method: "POST", URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", BodyFile: path,
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestPrepareRESTBodyRechecksFileSizeAtOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oversized.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxRequestFileBytes + 1); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, cleanup, err := prepareRESTBody(Invocation{BodyFile: path})
+	cleanup()
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized body_file error=%v", err)
 	}
 }
 

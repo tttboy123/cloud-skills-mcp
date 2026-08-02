@@ -31,7 +31,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 - secret/password/token/credential/access-key 类操作还要求 `CLOUD_SKILLS_ALLOW_SENSITIVE=1`。
 - CLI executable 固定且不经过 shell；service、operation、参数、文件引用和 endpoint 均先校验。
 - REST 只允许官方 HTTPS 域名、443 端口且禁止 redirect；调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。
-- 本地文件只允许位于 `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` 下，且会解析 symlink 后再判断。
+- REST 数据面上传可使用 `body_file`，Alibaba/AWS/Tencent CLI 可使用官方文件参数；本地文件只允许位于 `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` 下，且会解析 symlink 后再判断。REST 单文件默认上限 64 MiB，更大对象使用厂商 multipart/chunk API。
 - CLI 和 HTTP 响应均有大小上限；结果会做 credential-field redaction。
 - `CLOUD_SKILLS_AUDIT_LOG` 写入 mode `0600` JSONL。审计不记录请求 body、headers、response 或 URL query；写操作的预执行审计失败时 fail closed。
 - MCP server 不创建、不更新、不导出凭证。凭证只来自各云官方身份链或 operator 注入的 AKSK/IAM 环境。
@@ -117,7 +117,7 @@ GCP 查询：
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
 
-Alibaba/Tencent 使用 `service` + `operation` + `parameters`；Baidu 使用 `method` + 官方 `baidubce.com` URL。六份 Skill 中有完整路由规则和官方文档入口。
+Alibaba/Tencent 使用 `service` + `operation` + `parameters`；Baidu 使用 `method` + 官方 `baidubce.com` URL。Azure/GCP/Baidu 的二进制或媒体 request body 使用受控 `body_file`，文件内容不会进入模型上下文。六份 Skill 中有完整路由规则和官方文档入口。
 
 ## 验证
 

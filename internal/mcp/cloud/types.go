@@ -64,6 +64,7 @@ type Invocation struct {
 	Arguments    []string
 	Headers      map[string]string
 	Body         any
+	BodyFile     string
 }
 
 type InvocationResult struct {

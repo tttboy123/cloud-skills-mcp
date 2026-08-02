@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -12,7 +13,10 @@ import (
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
-const maxRequestPayloadBytes = 1024 * 1024
+const (
+	maxRequestPayloadBytes = 1024 * 1024
+	maxRequestFileBytes    = 64 * 1024 * 1024
+)
 
 var sensitiveTerms = []string{
 	"secret", "password", "credential", "accesskey", "access-key", "privatekey", "private-key",
@@ -89,6 +93,32 @@ func validateInvocation(request Invocation, allowedFileRoots []string) error {
 			return err
 		}
 	}
+	if request.Provider == ProviderAlicloud {
+		if err := validateEmbeddedFileReferences(request.Parameters, allowedFileRoots); err != nil {
+			return err
+		}
+	}
+	if request.Body != nil && request.BodyFile != "" {
+		return fmt.Errorf("body and body_file are mutually exclusive")
+	}
+	if request.BodyFile != "" {
+		if request.Provider != ProviderAzure && request.Provider != ProviderGCP && request.Provider != ProviderBaidu {
+			return fmt.Errorf("body_file is supported only by REST providers")
+		}
+		if !pathAllowed(request.BodyFile, allowedFileRoots) {
+			return fmt.Errorf("body_file is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
+		}
+		info, err := os.Stat(request.BodyFile)
+		if err != nil {
+			return fmt.Errorf("inspect body_file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("body_file must be a regular file")
+		}
+		if info.Size() > maxRequestFileBytes {
+			return fmt.Errorf("body_file exceeds %d bytes", maxRequestFileBytes)
+		}
+	}
 	if len(request.Headers) > 64 {
 		return fmt.Errorf("too many HTTP headers: %d", len(request.Headers))
 	}
@@ -117,6 +147,30 @@ func validateInvocation(request Invocation, allowedFileRoots []string) error {
 		}
 		if len(data) > maxRequestPayloadBytes {
 			return fmt.Errorf("%s exceeds %d bytes", name, maxRequestPayloadBytes)
+		}
+	}
+	return nil
+}
+
+func validateEmbeddedFileReferences(value any, allowedFileRoots []string) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, child := range typed {
+			if err := validateEmbeddedFileReferences(child, allowedFileRoots); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if err := validateEmbeddedFileReferences(child, allowedFileRoots); err != nil {
+				return err
+			}
+		}
+	case string:
+		for _, prefix := range []string{"file://", "fileb://", "@"} {
+			if strings.HasPrefix(typed, prefix) && !pathAllowed(strings.TrimPrefix(typed, prefix), allowedFileRoots) {
+				return fmt.Errorf("embedded local file reference is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
+			}
 		}
 	}
 	return nil

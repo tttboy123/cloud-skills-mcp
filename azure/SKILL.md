@@ -22,6 +22,7 @@ Use the unified MCP server as a guarded Azure REST gateway. With Service Princip
 - `subscription`: optional subscription passed to Azure CLI.
 - `headers`: non-credential headers such as `If-Match`.
 - `body`: JSON-compatible request body.
+- `body_file`: binary/media request body under an operator-approved `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` directory. Do not combine it with `body`; use provider multipart/chunk APIs above 64 MiB.
 - `arguments`: optional safe `az rest` arguments; authentication and endpoint override flags are rejected.
 
 Example read: `azure_api_read(method="GET", url="https://management.azure.com/subscriptions/<id>/resources?api-version=2021-04-01", subscription="<id>")`.

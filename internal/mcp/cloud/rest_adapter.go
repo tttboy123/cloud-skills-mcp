@@ -135,7 +135,9 @@ func (adapter *AzureRESTAdapter) invokeCLI(ctx context.Context, request Invocati
 		args = append(args, "--headers", name+"="+request.Headers[name])
 	}
 	cleanup := func() {}
-	if request.Body != nil {
+	if request.BodyFile != "" {
+		args = append(args, "--body", "@"+request.BodyFile)
+	} else if request.Body != nil {
 		path, err := writeJSONPayload(adapter.config.TempDir, request.Body)
 		if err != nil {
 			return InvocationResult{}, err
@@ -161,14 +163,11 @@ func (adapter *AzureRESTAdapter) invokeHTTP(ctx context.Context, invocation Invo
 	if strings.TrimSpace(token) == "" {
 		return InvocationResult{}, fmt.Errorf("Azure identity returned an empty access token")
 	}
-	var body io.Reader
-	if invocation.Body != nil {
-		data, err := json.Marshal(invocation.Body)
-		if err != nil {
-			return InvocationResult{}, fmt.Errorf("encode Azure request body: %w", err)
-		}
-		body = bytes.NewReader(data)
+	body, contentLength, cleanup, err := prepareRESTBody(invocation)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("prepare Azure request body: %w", err)
 	}
+	defer cleanup()
 	request, err := http.NewRequestWithContext(ctx, strings.ToUpper(invocation.Method), invocation.URL, body)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Azure request: %w", err)
@@ -176,8 +175,11 @@ func (adapter *AzureRESTAdapter) invokeHTTP(ctx context.Context, invocation Invo
 	for name, value := range invocation.Headers {
 		request.Header.Set(name, value)
 	}
-	if invocation.Body != nil && request.Header.Get("Content-Type") == "" {
-		request.Header.Set("Content-Type", "application/json")
+	if contentLength >= 0 {
+		request.ContentLength = contentLength
+	}
+	if (invocation.Body != nil || invocation.BodyFile != "") && request.Header.Get("Content-Type") == "" {
+		request.Header.Set("Content-Type", invocationContentType(invocation))
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := adapter.config.HTTP.Do(request)
@@ -374,14 +376,11 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 	if strings.TrimSpace(token) == "" {
 		return InvocationResult{}, fmt.Errorf("Google Cloud credential returned an empty access token")
 	}
-	var body io.Reader
-	if request.Body != nil {
-		data, err := json.Marshal(request.Body)
-		if err != nil {
-			return InvocationResult{}, fmt.Errorf("encode Google Cloud request body: %w", err)
-		}
-		body = bytes.NewReader(data)
+	body, contentLength, cleanup, err := prepareRESTBody(request)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("prepare Google Cloud request body: %w", err)
 	}
+	defer cleanup()
 	httpRequest, err := http.NewRequestWithContext(ctx, strings.ToUpper(request.Method), request.URL, body)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Google Cloud request: %w", err)
@@ -389,8 +388,11 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 	for name, value := range request.Headers {
 		httpRequest.Header.Set(name, value)
 	}
-	if request.Body != nil && httpRequest.Header.Get("Content-Type") == "" {
-		httpRequest.Header.Set("Content-Type", "application/json")
+	if contentLength >= 0 {
+		httpRequest.ContentLength = contentLength
+	}
+	if (request.Body != nil || request.BodyFile != "") && httpRequest.Header.Get("Content-Type") == "" {
+		httpRequest.Header.Set("Content-Type", invocationContentType(request))
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
 	if request.Project != "" {
@@ -523,4 +525,45 @@ func responseRequestID(headers http.Header) string {
 		}
 	}
 	return ""
+}
+
+func prepareRESTBody(invocation Invocation) (io.Reader, int64, func(), error) {
+	if invocation.Body != nil && invocation.BodyFile != "" {
+		return nil, -1, func() {}, fmt.Errorf("body and body_file are mutually exclusive")
+	}
+	if invocation.BodyFile != "" {
+		file, err := os.Open(invocation.BodyFile)
+		if err != nil {
+			return nil, -1, func() {}, fmt.Errorf("open body_file: %w", err)
+		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return nil, -1, func() {}, fmt.Errorf("inspect body_file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			file.Close()
+			return nil, -1, func() {}, fmt.Errorf("body_file must be a regular file")
+		}
+		if info.Size() > maxRequestFileBytes {
+			file.Close()
+			return nil, -1, func() {}, fmt.Errorf("body_file exceeds %d bytes", maxRequestFileBytes)
+		}
+		return file, info.Size(), func() { _ = file.Close() }, nil
+	}
+	if invocation.Body != nil {
+		data, err := json.Marshal(invocation.Body)
+		if err != nil {
+			return nil, -1, func() {}, fmt.Errorf("encode JSON body: %w", err)
+		}
+		return bytes.NewReader(data), int64(len(data)), func() {}, nil
+	}
+	return nil, -1, func() {}, nil
+}
+
+func invocationContentType(invocation Invocation) string {
+	if invocation.BodyFile != "" {
+		return "application/octet-stream"
+	}
+	return "application/json"
 }

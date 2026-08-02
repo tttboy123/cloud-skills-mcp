@@ -21,6 +21,7 @@ Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMA
 - `method` and `url`: exact official BCE HTTPS API endpoint.
 - `headers`: non-credential product headers.
 - `body`: JSON-compatible request body.
+- `body_file`: binary/media request body under an operator-approved `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` directory. Do not combine it with `body`; use BCE multipart APIs above 64 MiB.
 
 Example read: `baiducloud_api_read(method="GET", url="https://bcc.bj.baidubce.com/v2/instance")`.
 

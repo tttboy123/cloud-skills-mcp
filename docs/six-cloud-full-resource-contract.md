@@ -62,6 +62,9 @@ injected by the operator through the official provider chain.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an
   operator-configured `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` entry.
+- REST data-plane uploads use `body_file`, never embed file content in MCP
+  context, accept regular files only, and are capped at 64 MiB per request;
+  provider multipart or resumable APIs cover larger objects.
 - CLI JSON request bodies use mode-0600 temporary files and are removed after
   the call.
 - Responses are capped and credential-shaped fields are redacted before they

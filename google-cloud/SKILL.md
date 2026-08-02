@@ -22,6 +22,7 @@ Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway
 - `project`: optional quota/billing project, sent as `X-Goog-User-Project`.
 - `headers`: non-credential conditional or product headers.
 - `body`: JSON-compatible request body.
+- `body_file`: binary/media upload body under an operator-approved `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` directory. Do not combine it with `body`; use resumable/chunk upload APIs above 64 MiB.
 
 Example read: `gcp_api_read(method="GET", url="https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances", project="<project>")`.
 

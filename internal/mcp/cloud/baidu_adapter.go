@@ -1,14 +1,12 @@
 package cloud
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -112,14 +110,11 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	var body io.Reader
-	if invocation.Body != nil {
-		data, err := json.Marshal(invocation.Body)
-		if err != nil {
-			return InvocationResult{}, fmt.Errorf("encode Baidu BCE request body: %w", err)
-		}
-		body = bytes.NewReader(data)
+	body, contentLength, cleanup, err := prepareRESTBody(invocation)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("prepare Baidu BCE request body: %w", err)
 	}
+	defer cleanup()
 	request, err := http.NewRequestWithContext(ctx, strings.ToUpper(invocation.Method), invocation.URL, body)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Baidu BCE request: %w", err)
@@ -127,8 +122,11 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	for name, value := range invocation.Headers {
 		request.Header.Set(name, value)
 	}
-	if invocation.Body != nil && request.Header.Get("Content-Type") == "" {
-		request.Header.Set("Content-Type", "application/json")
+	if contentLength >= 0 {
+		request.ContentLength = contentLength
+	}
+	if (invocation.Body != nil || invocation.BodyFile != "") && request.Header.Get("Content-Type") == "" {
+		request.Header.Set("Content-Type", invocationContentType(invocation))
 	}
 	if credentials.SessionToken != "" {
 		request.Header.Set("x-bce-security-token", credentials.SessionToken)
