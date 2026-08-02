@@ -563,7 +563,7 @@ func streamRESTResponseToFile(response *http.Response, responseFile string, maxB
 }
 
 func responseRequestID(headers http.Header) string {
-	for _, name := range []string{"X-Request-Id", "X-Ms-Request-Id", "X-Goog-Request-Id", "X-Cloud-Trace-Context", "X-Bce-Request-Id", "Request-Id"} {
+	for _, name := range []string{"X-Request-Id", "X-Ms-Request-Id", "X-Goog-Request-Id", "X-Cloud-Trace-Context", "X-Bce-Request-Id", "X-NLS-RequestId", "Request-Id"} {
 		if value := headers.Get(name); value != "" {
 			return value
 		}
