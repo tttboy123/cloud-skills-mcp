@@ -30,6 +30,7 @@ import (
 )
 
 var tencentASRWebSocketPath = regexp.MustCompile(`^/asr/v2/[0-9]{5,20}$`)
+var tencentSpeechTranslateWebSocketPath = regexp.MustCompile(`^/asr/speech_translate/[0-9]{5,20}$`)
 var tencentMPSWebSocketPath = regexp.MustCompile(`^/wss/v1/[0-9]{5,20}$`)
 var tencentMPSTTSWebSocketPath = regexp.MustCompile(`^/tts/v1/[0-9]{5,20}$`)
 var tencentASRParameterName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
@@ -49,6 +50,32 @@ func validateTencentASRWebSocketInvocation(invocation Invocation) error {
 	}
 	if len(invocation.Headers) != 0 {
 		return fmt.Errorf("Tencent Cloud ASR WebSocket does not accept caller-supplied handshake headers")
+	}
+	return nil
+}
+
+func validateTencentSpeechTranslateWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket requires method GET for the HTTP upgrade")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "asr.cloud.tencent.com") || target.Port() != "" || !tencentSpeechTranslateWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket requires wss://asr.cloud.tencent.com/asr/speech_translate/<appid> without caller query parameters")
+	}
+	if invocation.BodyFile == "" || invocation.Body != nil {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket requires body_file and does not accept inline body")
+	}
+	if len(invocation.Headers) != 0 {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket does not accept caller-supplied handshake headers")
+	}
+	if invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket does not accept MPS frame controls")
+	}
+	if err := validateTencentSpeechTranslateParameters(invocation.Parameters); err != nil {
+		return err
+	}
+	if tencentScalarParameterEquals(invocation.Parameters, "enable_tts", "1") && invocation.ResponseFile == "" {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket requires response_file when enable_tts=1")
 	}
 	return nil
 }
@@ -230,6 +257,104 @@ func signTencentASRWebSocketURL(rawURL string, credentials TencentCredentials, i
 	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
 	target.RawQuery = encodeTencentV1Parameters(parameters)
 	return target.String(), nil
+}
+
+func signTencentSpeechTranslateWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, nonce, voiceID string) (string, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse Tencent Cloud speech translation WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "asr.cloud.tencent.com") || target.Port() != "" || !tencentSpeechTranslateWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return "", fmt.Errorf("Tencent Cloud speech translation WebSocket requires wss://asr.cloud.tencent.com/asr/speech_translate/<appid> without caller query parameters")
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return "", fmt.Errorf("Tencent Cloud speech translation WebSocket requires complete SecretId/SecretKey credentials")
+	}
+	if credentials.Token != "" {
+		return "", fmt.Errorf("Tencent Cloud speech translation WebSocket does not document CAM temporary-token authentication")
+	}
+	if !validTencentASRNonce(nonce) {
+		return "", fmt.Errorf("Tencent Cloud speech translation WebSocket requires a positive nonce of at most 10 digits")
+	}
+	if !tencentVoiceIDPattern.MatchString(voiceID) {
+		return "", fmt.Errorf("Tencent Cloud speech translation WebSocket requires a generated voice_id of at most 128 characters")
+	}
+	if err := validateTencentSpeechTranslateParameters(input); err != nil {
+		return "", err
+	}
+
+	parameters := make(map[string]string, len(input)+6)
+	for name, value := range input {
+		values, _ := stringValues(value)
+		parameters[name] = values[0]
+	}
+	timestamp := now.UTC().Unix()
+	parameters["secretid"] = credentials.SecretID
+	parameters["timestamp"] = strconv.FormatInt(timestamp, 10)
+	parameters["expired"] = strconv.FormatInt(timestamp+24*60*60, 10)
+	parameters["nonce"] = nonce
+	parameters["voice_id"] = voiceID
+	canonical := canonicalTencentV1Parameters(parameters)
+	target.Scheme = "wss"
+	target.Host = "asr.cloud.tencent.com"
+	source := target.Host + target.EscapedPath() + "?" + canonical
+	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
+	target.RawQuery = encodeTencentV1Parameters(parameters)
+	return target.String(), nil
+}
+
+func validateTencentSpeechTranslateParameters(input map[string]any) error {
+	parameters := make(map[string]string, len(input))
+	for name, value := range input {
+		if isTencentASRControlledParameter(name) {
+			return fmt.Errorf("caller-supplied Tencent Cloud speech translation WebSocket signing parameter %q is forbidden", name)
+		}
+		switch name {
+		case "voice_format", "source", "target", "trans_model", "enable_tts", "voice_type", "fast_voice_type", "sample_rate", "speed", "volume", "codec", "hotword_list", "filter_dirty", "filter_modal", "filter_punc", "convert_num_mode", "noise_threshold", "domain", "vad_silence_time", "max_speak_time":
+		default:
+			return fmt.Errorf("Tencent Cloud speech translation WebSocket query parameter %q is not documented", name)
+		}
+		parameter, err := tencentScalarStringValue(value)
+		if err != nil {
+			return fmt.Errorf("Tencent Cloud speech translation WebSocket query parameter %q must be scalar", name)
+		}
+		parameters[name] = parameter
+	}
+	for _, name := range []string{"source", "target", "trans_model", "voice_format"} {
+		if strings.TrimSpace(parameters[name]) == "" {
+			return fmt.Errorf("Tencent Cloud speech translation WebSocket requires %s", name)
+		}
+	}
+	if parameters["voice_format"] != "1" && parameters["voice_format"] != "12" {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket voice_format must be 1 or 12")
+	}
+	if parameters["trans_model"] != "hunyuan-translation-lite" && parameters["trans_model"] != "hunyuan-translation" {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket trans_model is unsupported")
+	}
+	if value, present := parameters["enable_tts"]; present && value != "0" && value != "1" {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket enable_tts must be 0 or 1")
+	}
+	if value, present := parameters["codec"]; present && value != "pcm" && value != "mp3" {
+		return fmt.Errorf("Tencent Cloud speech translation WebSocket codec must be pcm or mp3")
+	}
+	return nil
+}
+
+func tencentScalarStringValue(value any) (string, error) {
+	switch value.(type) {
+	case []string, []any:
+		return "", fmt.Errorf("array is not scalar")
+	}
+	values, err := stringValues(value)
+	if err != nil || len(values) != 1 {
+		return "", fmt.Errorf("value is not scalar")
+	}
+	return values[0], nil
+}
+
+func tencentScalarParameterEquals(parameters map[string]any, name, expected string) bool {
+	values, err := stringValues(parameters[name])
+	return err == nil && len(values) == 1 && values[0] == expected
 }
 
 func isTencentASRControlledParameter(name string) bool {
@@ -719,6 +844,188 @@ func defaultTencentASRChunkBytes(parameters map[string]any) int {
 		return 3200
 	}
 	return 6400
+}
+
+type tencentSpeechTranslateReadResult struct {
+	requestID string
+	err       error
+}
+
+func invokeTencentSpeechTranslateWebSocket(ctx context.Context, adapter *TencentRESTAdapter, credentials TencentCredentials, invocation Invocation) (InvocationResult, error) {
+	voiceID := adapter.config.VoiceID()
+	signedURL, err := signTencentSpeechTranslateWebSocketURL(invocation.URL, credentials, invocation.Parameters, adapter.config.Now().UTC(), adapter.config.Nonce(), voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	dialContext, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
+	connection, err := adapter.config.WebSocketDial(dialContext, signedURL)
+	cancelDial()
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer connection.Close()
+
+	ttsEnabled := tencentScalarParameterEquals(invocation.Parameters, "enable_tts", "1")
+	messageInvocation := invocation
+	if ttsEnabled {
+		messageInvocation.ResponseFile = ""
+	}
+	messageSink, err := newTencentWebSocketOutputSink(messageInvocation, adapter.config.MaxBodyBytes)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer messageSink.abort()
+	var audioSink *tencentWebSocketOutputSink
+	if ttsEnabled {
+		audioSink, err = newTencentWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes)
+		if err != nil {
+			return InvocationResult{}, err
+		}
+		defer audioSink.abort()
+	}
+
+	handshakeContext, cancelHandshake := context.WithTimeout(ctx, adapter.config.Timeout)
+	messageType, handshake, err := connection.Read(handshakeContext)
+	cancelHandshake()
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("read Tencent Cloud speech translation WebSocket handshake")
+	}
+	requestID, _, err := acceptTencentSpeechTranslateText(messageType, handshake, messageSink, "", 0)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if requestID == "" {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud speech translation WebSocket handshake omitted voice_id")
+	}
+
+	streamContext, cancelStream := tencentASRStreamContext(ctx, invocation)
+	defer cancelStream()
+	readResult := make(chan tencentSpeechTranslateReadResult, 1)
+	finalValue := 1
+	if ttsEnabled {
+		finalValue = 2
+	}
+	go readTencentSpeechTranslateWebSocket(streamContext, cancelStream, connection, messageSink, audioSink, requestID, finalValue, readResult)
+	if err := streamTencentASRAudio(streamContext, connection, invocation, adapter.config.StreamPause); err != nil {
+		cancelStream()
+		reader := <-readResult
+		if reader.err != nil {
+			return InvocationResult{}, reader.err
+		}
+		return InvocationResult{}, err
+	}
+	result := <-readResult
+	if result.err != nil {
+		return InvocationResult{}, result.err
+	}
+	if !ttsEnabled {
+		output, err := messageSink.finish(result.requestID)
+		return InvocationResult{Output: output, RequestID: result.requestID}, err
+	}
+	messages, err := messageSink.finish(result.requestID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	format, sampleRate := tencentSpeechTranslateAudioProperties(invocation.Parameters)
+	audioMetadata, err := audioSink.finishAudio(result.requestID, format, sampleRate)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	output, err := combineTencentSpeechTranslateOutput(messages, audioMetadata)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return InvocationResult{Output: output, RequestID: result.requestID}, nil
+}
+
+func acceptTencentSpeechTranslateText(messageType tencentWebSocketMessageType, data []byte, sink *tencentWebSocketOutputSink, expectedID string, finalValue int) (string, bool, error) {
+	if messageType != tencentWebSocketMessageText {
+		return expectedID, false, fmt.Errorf("Tencent Cloud speech translation WebSocket returned a non-text response")
+	}
+	var message tencentASRWebSocketMessage
+	if err := json.Unmarshal(data, &message); err != nil {
+		return expectedID, false, fmt.Errorf("Tencent Cloud speech translation WebSocket returned invalid JSON")
+	}
+	if message.Code != 0 {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud speech translation WebSocket returned code %d", message.Code)
+	}
+	if strings.TrimSpace(message.VoiceID) == "" || (expectedID != "" && message.VoiceID != expectedID) {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud speech translation WebSocket returned an invalid voice_id")
+	}
+	if err := sink.writeMessage(data); err != nil {
+		return message.VoiceID, false, err
+	}
+	return message.VoiceID, finalValue != 0 && message.Final == finalValue, nil
+}
+
+func readTencentSpeechTranslateWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, messageSink, audioSink *tencentWebSocketOutputSink, requestID string, finalValue int, result chan<- tencentSpeechTranslateReadResult) {
+	for {
+		messageType, data, err := connection.Read(ctx)
+		if err != nil {
+			cancel()
+			result <- tencentSpeechTranslateReadResult{requestID: requestID, err: fmt.Errorf("read Tencent Cloud speech translation WebSocket response")}
+			return
+		}
+		if messageType == tencentWebSocketMessageBinary {
+			if audioSink == nil {
+				cancel()
+				result <- tencentSpeechTranslateReadResult{requestID: requestID, err: fmt.Errorf("Tencent Cloud speech translation WebSocket returned unexpected synthesized audio")}
+				return
+			}
+			if err := audioSink.writeBinary(data); err != nil {
+				cancel()
+				result <- tencentSpeechTranslateReadResult{requestID: requestID, err: err}
+				return
+			}
+			continue
+		}
+		currentID, final, err := acceptTencentSpeechTranslateText(messageType, data, messageSink, requestID, finalValue)
+		if currentID != "" {
+			requestID = currentID
+		}
+		if err != nil || final {
+			if err != nil {
+				cancel()
+			}
+			result <- tencentSpeechTranslateReadResult{requestID: requestID, err: err}
+			return
+		}
+	}
+}
+
+func tencentSpeechTranslateAudioProperties(parameters map[string]any) (string, uint32) {
+	format := "pcm"
+	if values, err := stringValues(parameters["codec"]); err == nil && len(values) == 1 && values[0] != "" {
+		format = values[0]
+	}
+	sampleRate := uint32(16000)
+	if values, err := stringValues(parameters["sample_rate"]); err == nil && len(values) == 1 {
+		if parsed, parseErr := strconv.ParseUint(values[0], 10, 32); parseErr == nil && parsed > 0 {
+			sampleRate = uint32(parsed)
+		}
+	}
+	return format, sampleRate
+}
+
+func combineTencentSpeechTranslateOutput(messages, audioMetadata []byte) ([]byte, error) {
+	lines := bytes.Split(bytes.TrimSpace(messages), []byte{'\n'})
+	encodedMessages := make([]json.RawMessage, 0, len(lines))
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		if !json.Valid(line) {
+			return nil, fmt.Errorf("encode Tencent Cloud speech translation messages")
+		}
+		encodedMessages = append(encodedMessages, append(json.RawMessage(nil), line...))
+	}
+	if !json.Valid(audioMetadata) {
+		return nil, fmt.Errorf("encode Tencent Cloud speech translation audio metadata")
+	}
+	return json.Marshal(map[string]any{
+		"messages": encodedMessages,
+		"audio":    json.RawMessage(audioMetadata),
+	})
 }
 
 type tencentMPSHandshake struct {

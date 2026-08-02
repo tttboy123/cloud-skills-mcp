@@ -78,11 +78,15 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
 	}
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-	webSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS)
+	webSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS)
 	if webSocketScheme {
 		switch tencentScheme {
 		case authSchemeTencentASRWS:
 			if err := validateTencentASRWebSocketInvocation(request); err != nil {
+				return err
+			}
+		case authSchemeTencentTranslateWS:
+			if err := validateTencentSpeechTranslateWebSocketInvocation(request); err != nil {
 				return err
 			}
 		case authSchemeTencentMPSWS:
@@ -248,8 +252,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Tencent Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
-			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, mps-ws, mps-tts-ws, or cos")
+		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
+			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, speech-translate-ws, mps-ws, mps-tts-ws, or cos")
 		}
 		if (scheme == authSchemeTencentTC3 || scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256) && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Tencent Cloud API signing requires a valid api_version")
@@ -292,6 +296,13 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				}
 			}
 		}
+		if scheme == authSchemeTencentTranslateWS {
+			for name := range request.Parameters {
+				if isTencentASRControlledParameter(name) {
+					return fmt.Errorf("caller-supplied Tencent Cloud speech translation WebSocket signing parameter %q is forbidden", name)
+				}
+			}
+		}
 		if scheme == authSchemeTencentMPSWS {
 			for name := range request.Parameters {
 				if isTencentMPSControlledParameter(name) {
@@ -316,7 +327,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported WebSocket auth_scheme")
 	}

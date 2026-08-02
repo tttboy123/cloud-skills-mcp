@@ -29,35 +29,36 @@ import (
 )
 
 const (
-	authSchemeAWSSigV4          = "sigv4"
-	authSchemeAWSSigV4a         = "sigv4a"
-	authSchemeAlibabaACS3       = "acs3"
-	authSchemeAlibabaRPCV2      = "rpc"
-	authSchemeAlibabaROAV2      = "roa"
-	authSchemeAlibabaDataHub    = "datahub"
-	authSchemeAlibabaOpenSearch = "opensearch"
-	authSchemeAlibabaODPS       = "odps"
-	authSchemeAlibabaODPSV4     = "odps4"
-	authSchemeAlibabaFC         = "fc"
-	authSchemeAlibabaFC3        = "fc3"
-	authSchemeAlibabaFCCustom   = "fc-custom"
-	authSchemeAlibabaOSS        = "oss"
-	authSchemeAlibabaOSSV4      = "oss4"
-	authSchemeAlibabaSLS        = "sls"
-	authSchemeAlibabaSLSV4      = "sls4"
-	authSchemeAlibabaMNS        = "mns"
-	authSchemeAlibabaOTS        = "ots"
-	authSchemeAlibabaOTSV4      = "ots4"
-	authSchemeTencentTC3        = "tc3"
-	authSchemeTencentV1         = "tc1"
-	authSchemeTencentV1SHA256   = "tc1-sha256"
-	authSchemeTencentQCloud     = "qcloud"
-	authSchemeTencentQCloud256  = "qcloud-sha256"
-	authSchemeTencentASRWS      = "asr-ws"
-	authSchemeTencentMPSWS      = "mps-ws"
-	authSchemeTencentMPSTTSWS   = "mps-tts-ws"
-	authSchemeTencentCOS        = "cos"
-	defaultHTTPClientTimeout    = 60 * time.Second
+	authSchemeAWSSigV4           = "sigv4"
+	authSchemeAWSSigV4a          = "sigv4a"
+	authSchemeAlibabaACS3        = "acs3"
+	authSchemeAlibabaRPCV2       = "rpc"
+	authSchemeAlibabaROAV2       = "roa"
+	authSchemeAlibabaDataHub     = "datahub"
+	authSchemeAlibabaOpenSearch  = "opensearch"
+	authSchemeAlibabaODPS        = "odps"
+	authSchemeAlibabaODPSV4      = "odps4"
+	authSchemeAlibabaFC          = "fc"
+	authSchemeAlibabaFC3         = "fc3"
+	authSchemeAlibabaFCCustom    = "fc-custom"
+	authSchemeAlibabaOSS         = "oss"
+	authSchemeAlibabaOSSV4       = "oss4"
+	authSchemeAlibabaSLS         = "sls"
+	authSchemeAlibabaSLSV4       = "sls4"
+	authSchemeAlibabaMNS         = "mns"
+	authSchemeAlibabaOTS         = "ots"
+	authSchemeAlibabaOTSV4       = "ots4"
+	authSchemeTencentTC3         = "tc3"
+	authSchemeTencentV1          = "tc1"
+	authSchemeTencentV1SHA256    = "tc1-sha256"
+	authSchemeTencentQCloud      = "qcloud"
+	authSchemeTencentQCloud256   = "qcloud-sha256"
+	authSchemeTencentASRWS       = "asr-ws"
+	authSchemeTencentTranslateWS = "speech-translate-ws"
+	authSchemeTencentMPSWS       = "mps-ws"
+	authSchemeTencentMPSTTSWS    = "mps-tts-ws"
+	authSchemeTencentCOS         = "cos"
+	defaultHTTPClientTimeout     = 60 * time.Second
 )
 
 type AWSCredentials struct {
@@ -530,7 +531,7 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+mps-ws+mps-tts-ws+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+speech-translate-ws+mps-ws+mps-tts-ws+cos",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -538,25 +539,30 @@ func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, erro
 
 func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
 	return json.Marshal(map[string]string{
-		"api_reference":     "https://cloud.tencent.com/document/api",
-		"tc3_signature":     "https://intl.cloud.tencent.com/document/product/627/64494",
-		"tc1_signature":     "https://cloud.tencent.com/document/api/583/17239",
-		"qcloud_signature":  "https://cloud.tencent.com/document/product/216/1714",
-		"asr_websocket":     "https://cloud.tencent.com/document/product/1093/48982",
-		"mps_websocket":     "https://cloud.tencent.com/document/product/862/121186",
-		"mps_tts_websocket": "https://cloud.tencent.com/document/product/862/133241",
-		"cos_signature":     "https://intl.cloud.tencent.com/document/product/436/7778",
+		"api_reference":              "https://cloud.tencent.com/document/api",
+		"tc3_signature":              "https://intl.cloud.tencent.com/document/product/627/64494",
+		"tc1_signature":              "https://cloud.tencent.com/document/api/583/17239",
+		"qcloud_signature":           "https://cloud.tencent.com/document/product/216/1714",
+		"asr_websocket":              "https://cloud.tencent.com/document/product/1093/48982",
+		"speech_translate_websocket": "https://cloud.tencent.com/document/api/1093/127565",
+		"mps_websocket":              "https://cloud.tencent.com/document/product/862/121186",
+		"mps_tts_websocket":          "https://cloud.tencent.com/document/product/862/133241",
+		"cos_signature":              "https://intl.cloud.tencent.com/document/product/436/7778",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, mps-ws, mps-tts-ws, or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, speech-translate-ws, mps-ws, mps-tts-ws, or cos")
 	}
-	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentMPSWS || scheme == authSchemeTencentMPSTTSWS {
+	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentTranslateWS || scheme == authSchemeTencentMPSWS || scheme == authSchemeTencentMPSTTSWS {
 		if scheme == authSchemeTencentASRWS {
 			if err := validateTencentASRWebSocketInvocation(invocation); err != nil {
+				return InvocationResult{}, err
+			}
+		} else if scheme == authSchemeTencentTranslateWS {
+			if err := validateTencentSpeechTranslateWebSocketInvocation(invocation); err != nil {
 				return InvocationResult{}, err
 			}
 		} else if scheme == authSchemeTencentMPSWS {
@@ -577,6 +583,9 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 		if scheme == authSchemeTencentASRWS {
 			return invokeTencentASRWebSocket(ctx, adapter, credentials, invocation)
+		}
+		if scheme == authSchemeTencentTranslateWS {
+			return invokeTencentSpeechTranslateWebSocket(ctx, adapter, credentials, invocation)
 		}
 		if scheme == authSchemeTencentMPSWS {
 			return invokeTencentMPSWebSocket(ctx, adapter, credentials, invocation)

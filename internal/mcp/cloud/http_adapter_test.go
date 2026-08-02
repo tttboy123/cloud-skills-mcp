@@ -1772,6 +1772,61 @@ func TestTencentASRWebSocketSignatureMatchesOfficialCanonicalAlgorithm(t *testin
 	}
 }
 
+func TestTencentSpeechTranslateWebSocketSignatureMatchesOfficialAlgorithm(t *testing.T) {
+	signedURL, err := signTencentSpeechTranslateWebSocketURL(
+		"wss://asr.cloud.tencent.com/asr/speech_translate/1259220000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation-lite", "voice_format": 1},
+		time.Unix(1673408372, 0).UTC(),
+		"1673408372",
+		"c64385ee-3e5c-4fc5-bbfd-7c71addb35b0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := parsed.Query().Get("signature"), "kkqPvXSnhA6H1FRAEmuau0oyy9w="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+}
+
+func TestTencentSpeechTranslateWebSocketRejectsTemporaryTokenAndInvalidInputs(t *testing.T) {
+	baseURL := "wss://asr.cloud.tencent.com/asr/speech_translate/1259220000"
+	credentials := TencentCredentials{SecretID: "id", SecretKey: "key"}
+	parameters := map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation-lite", "voice_format": 1}
+	now := time.Unix(1673408372, 0).UTC()
+	if _, err := signTencentSpeechTranslateWebSocketURL(baseURL, TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, parameters, now, "1673408372", "voice"); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+	if _, err := signTencentSpeechTranslateWebSocketURL(baseURL+"?signature=caller", credentials, parameters, now, "1673408372", "voice"); err == nil {
+		t.Fatal("caller query was accepted")
+	}
+	if _, err := signTencentSpeechTranslateWebSocketURL(baseURL, credentials, parameters, now, "invalid", "voice"); err == nil {
+		t.Fatal("invalid nonce was accepted")
+	}
+	if _, err := signTencentSpeechTranslateWebSocketURL(baseURL, credentials, parameters, now, "1673408372", "voice id"); err == nil {
+		t.Fatal("invalid voice_id was accepted")
+	}
+	invalidParameters := []map[string]any{
+		{},
+		{"source": "zh", "target": "en", "trans_model": "unsupported", "voice_format": 1},
+		{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 2},
+		{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1, "enable_tts": 2},
+		{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1, "codec": "wav"},
+		{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1, "signature": "caller"},
+		{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1, "unknown": "value"},
+		{"source": []string{"zh"}, "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1},
+	}
+	for _, candidate := range invalidParameters {
+		if err := validateTencentSpeechTranslateParameters(candidate); err == nil {
+			t.Fatalf("invalid parameters accepted: %#v", candidate)
+		}
+	}
+}
+
 func TestTencentASRGeneratedNonceAndVoiceIDStayWithinProtocolBounds(t *testing.T) {
 	for range 100 {
 		nonce := secureTencentASRNonce()
@@ -1985,6 +2040,128 @@ func TestTencentASRWebSocketAdapterStreamsGuardedAudioInternally(t *testing.T) {
 	if len(connection.writes) != 2 || connection.writes[0].messageType != tencentWebSocketMessageBinary || string(connection.writes[0].data) != "abcdefgh" || connection.writes[1].messageType != tencentWebSocketMessageText || string(connection.writes[1].data) != `{"type":"end"}` {
 		t.Fatalf("writes=%#v", connection.writes)
 	}
+}
+
+func TestTencentSpeechTranslateWebSocketStreamsJSONAndSynthesizedAudio(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "source.pcm")
+	if err := os.WriteFile(audioFile, []byte("abcdefgh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputFile := filepath.Join(t.TempDir(), "translated.mp3")
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+			[]byte(`{"code":0,"message":"success","voice_id":"voice","result":{"source_text":"你好","target_text":"hello"}}`),
+			[]byte("audio-1"),
+			[]byte(`{"code":0,"message":"success","voice_id":"voice","final":1}`),
+			[]byte("audio-2"),
+			[]byte(`{"code":0,"message":"success","voice_id":"voice","final":2}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}},
+		Now:         func() time.Time { return time.Unix(1673408372, 0).UTC() },
+		Nonce:       func() string { return "1673408372" },
+		VoiceID:     func() string { return "c64385ee-3e5c-4fc5-bbfd-7c71addb35b0" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "speech-translate-ws", Service: "asr", Operation: "TranslateStream", Method: http.MethodGet,
+		URL:        "wss://asr.cloud.tencent.com/asr/speech_translate/1259220000",
+		Parameters: map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation-lite", "voice_format": 1, "enable_tts": 1, "codec": "mp3", "sample_rate": 16000},
+		BodyFile:   audioFile, ResponseFile: outputFile, StreamChunkBytes: 8, StreamIntervalMS: 200, MaxResponseFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != "audio-1audio-2" || result.RequestID != "voice" || !bytes.Contains(result.Output, []byte(`"target_text":"hello"`)) || !bytes.Contains(result.Output, []byte(`"format":"mp3"`)) {
+		t.Fatalf("audio=%q result=%#v", audio, result)
+	}
+	if len(connection.writes) != 2 || connection.writes[0].messageType != tencentWebSocketMessageBinary || string(connection.writes[0].data) != "abcdefgh" || string(connection.writes[1].data) != `{"type":"end"}` {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentSpeechTranslateWebSocketReturnsTranslationWithoutTTS(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "source.pcm")
+	if err := os.WriteFile(audioFile, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","result":{"target_text":"hello"}}`),
+		[]byte(`{"code":0,"message":"success","voice_id":"voice","final":1}`),
+	}}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1673408372, 0).UTC() },
+		Nonce:       func() string { return "1673408372" },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "speech-translate-ws", Service: "asr", Operation: "TranslateStream", Method: http.MethodGet,
+		URL: baseTencentSpeechTranslateTestURL(), Parameters: map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1}, BodyFile: audioFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestID != "voice" || !bytes.Contains(result.Output, []byte(`"target_text":"hello"`)) {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestTencentSpeechTranslateWebSocketDoesNotPublishPartialTTSFailure(t *testing.T) {
+	directory := t.TempDir()
+	audioFile := filepath.Join(directory, "source.pcm")
+	outputFile := filepath.Join(directory, "translated.mp3")
+	if err := os.WriteFile(audioFile, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"code":0,"message":"success","voice_id":"voice"}`),
+			[]byte("partial-audio"),
+			[]byte(`{"code":4001,"message":"provider failure","voice_id":"voice"}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1673408372, 0).UTC() },
+		Nonce:       func() string { return "1673408372" },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "speech-translate-ws", Service: "asr", Operation: "TranslateStream", Method: http.MethodGet,
+		URL: baseTencentSpeechTranslateTestURL(), Parameters: map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation", "voice_format": 1, "enable_tts": 1, "codec": "mp3"},
+		BodyFile: audioFile, ResponseFile: outputFile,
+	})
+	if err == nil || !strings.Contains(err.Error(), "code 4001") {
+		t.Fatalf("error=%v", err)
+	}
+	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
+		t.Fatalf("partial output was published: %v", statErr)
+	}
+}
+
+func baseTencentSpeechTranslateTestURL() string {
+	return "wss://asr.cloud.tencent.com/asr/speech_translate/1259220000"
 }
 
 func TestTencentMPSWebSocketAdapterStreamsFramedAudioInternally(t *testing.T) {

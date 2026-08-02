@@ -407,6 +407,34 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentASRWebSocket(t *testing.T) {
 	}
 }
 
+func TestInvocationBoundaryAllowsGuardedTencentSpeechTranslateWebSocket(t *testing.T) {
+	root := t.TempDir()
+	audio := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audio, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "speech-translate-ws", Service: "asr", Operation: "TranslateStream", Method: http.MethodGet,
+		URL:        "wss://asr.cloud.tencent.com/asr/speech_translate/1259220000",
+		Parameters: map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation-lite", "voice_format": 1},
+		BodyFile:   audio, ResponseFile: filepath.Join(root, "translate.ndjson"), StreamChunkBytes: 6400, StreamIntervalMS: 200,
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded speech translation rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request}
+	invalid[0].URL += "?signature=caller"
+	invalid[1].Parameters = map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation-lite", "voice_format": 1, "signature": "caller"}
+	invalid[2].Parameters = map[string]any{"source": "zh", "target": "en", "voice_format": 1}
+	invalid[3].Parameters = map[string]any{"source": "zh", "target": "en", "trans_model": "hunyuan-translation-lite", "voice_format": 1, "enable_tts": 1}
+	invalid[3].ResponseFile = ""
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe speech translation accepted: %#v", candidate)
+		}
+	}
+}
+
 func TestInvocationBoundaryAllowsOnlyGuardedTencentMPSWebSocket(t *testing.T) {
 	root := t.TempDir()
 	audio := filepath.Join(root, "audio.pcm")
