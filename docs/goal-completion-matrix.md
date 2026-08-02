@@ -1,6 +1,6 @@
 # Six-cloud Goal completion matrix
 
-Date: 2026-08-02
+Date: 2026-08-03
 Overall status: **IN PROGRESS — protocol-family coverage and six-provider live gates pending**
 
 This matrix maps the active product Goal to authoritative repository and
@@ -21,7 +21,7 @@ and every provider has successful live acceptance with sanitized audit evidence.
 | Read/write and sensitive-operation boundary | Conservative read classifier; `CLOUD_SKILLS_ALLOW_MUTATIONS=1` + `force=true`; separate sensitive gate; host approval remains mandatory | Server contract, mutation-gate and protocol-smoke tests | Hermetic gate implemented |
 | Sanitized, fail-closed audit | Mode-0600 JSONL; no headers/body/response/query values; mutation pre-audit fail closed; request ID captured | Audit sink, URL sanitization, failure and live audit tests | Hermetic implemented; live audit pending |
 | Skills service and official documentation mapping | Six HTTP-only `SKILL.md`, six `agents/openai.yaml`, provider `references/official-docs.md` files | Skill validator and live official-link review | Implemented |
-| Protocol, installer, security and cross-platform build gates | `scripts/ci/protocol-smoke.sh`, `install-smoke.sh`, `build-release.sh`, `.github/workflows/ci.yml` | Current slice: local race coverage 81.1%, vet, module verification, protocol/install smoke, six Skill validations, actionlint, vulnerability scan and four-target builds; GitHub Actions run [30757197283](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30757197283) passed macOS, Ubuntu, ShellCheck, security and release jobs on commit `3ff489b` | Local and remote hermetic gates passed |
+| Protocol, installer, security and cross-platform build gates | `scripts/ci/protocol-smoke.sh`, `install-smoke.sh`, `build-release.sh`, `.github/workflows/ci.yml` | Current signed-trailer slice: local race coverage 81.3% overall and 81.5% in the core cloud package, vet, module verification, protocol/install smoke, six Skill validations, actionlint, vulnerability scan and four-target builds; GitHub Actions run [30757790950](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30757790950) passed macOS, Ubuntu, ShellCheck, security and release jobs on commit `b04ba47` | Local and remote hermetic gates passed |
 | Observable six-cloud acceptance | `TestLiveSixCloudReadOnly` selects providers and logs provider/outcome/bytes/request ID only | Requires operator-injected credentials and `CLOUD_SKILLS_LIVE_TEST=1` | **Pending** |
 
 ## Live acceptance command
