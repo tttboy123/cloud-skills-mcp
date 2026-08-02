@@ -19,6 +19,8 @@
 - Standard realtime TTS WebSocket protocol, HMAC-SHA1 signature, status/subtitle text frames, and binary audio: https://cloud.tencent.com/document/product/1073/94308
 - Official Tencent Cloud Speech SDK realtime TTS WebSocket implementation: https://github.com/TencentCloud/tencentcloud-speech-sdk-go/blob/master/tts/speechwssynthesizer.go
 - Streaming-text TTS WebSocket v2 protocol, READY/ACTION/FINAL state machine, and 10000-character session bound: https://cloud.tencent.com/document/product/1073/108595
+- Large-model podcast WebSocket protocol, official HMAC-SHA1 vector, InputObject types, READY/ACTION/FINAL state machine, and error codes: https://cloud.tencent.com/document/api/1073/124700
+- Official Tencent Cloud Speech SDK Python podcast implementation and supported file-format constants: https://github.com/TencentCloud/tencentcloud-speech-sdk-python/blob/master/tts_podcast/speech_synthesizer_ws.py
 - API 3.0 common parameters: https://intl.cloud.tencent.com/document/product/1005/34677
 - TC3-HMAC-SHA256 signature: https://intl.cloud.tencent.com/document/product/627/64494
 - API 3.0 Signature v1 HmacSHA1/HmacSHA256 canonical request and fixed example: https://cloud.tencent.com/document/api/583/17239
@@ -28,4 +30,4 @@
 - Tencent Cloud API Explorer: https://console.cloud.tencent.com/api/explorer
 - COS GET Object and Range download: https://intl.cloud.tencent.com/document/product/436/7753
 
-The universal adapter signs API 3.0 requests with recommended TC3 or the still-documented v1 HmacSHA1/HmacSHA256 query/form protocol, legacy qcloud API 2017 requests at their exact `/v2/index.php` path, COS data-plane requests with the COS REST signature, realtime ASR, virtual-number detection, SOE evaluation, speech-translation, voice-conversion, standard realtime TTS, and streaming-text TTS WSS requests using their official raw canonical query plus HMAC-SHA1 algorithms, and MPS recognition/TTS WSS requests using their documented TC3 canonical `post` requests. Realtime ASR includes the operator-provided temporary credential token in the signed query when present. All signed WSS URLs remain internal to the connection dialer. It never executes TCCLI.
+The universal adapter signs API 3.0 requests with recommended TC3 or the still-documented v1 HmacSHA1/HmacSHA256 query/form protocol, legacy qcloud API 2017 requests at their exact `/v2/index.php` path, COS data-plane requests with the COS REST signature, realtime ASR, virtual-number detection, SOE evaluation, speech-translation, voice-conversion, standard realtime TTS, streaming-text TTS, and large-model podcast WSS requests using their official raw canonical query plus HMAC-SHA1 algorithms, and MPS recognition/TTS WSS requests using their documented TC3 canonical `post` requests. Realtime ASR includes the operator-provided temporary credential token in the signed query when present. All signed WSS URLs remain internal to the connection dialer. It never executes TCCLI.

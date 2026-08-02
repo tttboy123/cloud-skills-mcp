@@ -2290,6 +2290,96 @@ func TestTencentStreamingTTSWebSocketValidatesTextSegments(t *testing.T) {
 	}
 }
 
+func TestTencentPodcastWebSocketSignatureMatchesOfficialVector(t *testing.T) {
+	signedURL, err := signTencentPodcastWebSocketURL(
+		"wss://tts.cloud.tencent.com/stream_ws_podcast",
+		TencentCredentials{SecretID: "AKIDPseudo" + "SecretId1234567890abcdefgH", SecretKey: "PseudoSecretKey1234567890abcdefG"},
+		map[string]any{"AppId": 1300466766, "Codec": "pcm", "SampleRate": 24000},
+		time.Unix(1761816664, 0).UTC(),
+		"27d0a902-b573-11f0-b377-52540037edd7",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if got, want := query.Get("Signature"), "3Ivu6TM5GFMNhUhdvMVkMMcdiX4="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if query.Get("Action") != "TextToPodcastStreamAudioWS" || query.Get("Expired") != "1761903064" || query.Get("SessionId") == "" {
+		t.Fatalf("query=%v", query)
+	}
+}
+
+func TestTencentPodcastWebSocketValidatesInputObjects(t *testing.T) {
+	textObjects, err := tencentPodcastInputObjects([]any{
+		map[string]any{"ObjectType": "TYPE_TEXT", "Text": "first"},
+		map[string]any{"ObjectType": "TYPE_TEXT", "Text": "second"},
+	})
+	if err != nil || len(textObjects) != 2 {
+		t.Fatalf("objects=%v err=%v", textObjects, err)
+	}
+	urlObjects, err := tencentPodcastInputObjects(map[string]any{"ObjectType": "TYPE_URL", "Url": "https://example.com/article"})
+	if err != nil || len(urlObjects) != 1 {
+		t.Fatalf("url objects=%v err=%v", urlObjects, err)
+	}
+	fileObjects, err := tencentPodcastInputObjects(map[string]any{"ObjectType": "TYPE_FILE", "Url": "https://example.com/report.pdf", "FileFormat": "pdf"})
+	if err != nil || len(fileObjects) != 1 {
+		t.Fatalf("file objects=%v err=%v", fileObjects, err)
+	}
+	invalid := []any{
+		nil,
+		[]any{},
+		append(make([]any, 10), map[string]any{"ObjectType": "TYPE_TEXT", "Text": "too many"}),
+		[]any{map[string]any{"ObjectType": "TYPE_TEXT", "Text": "text"}, map[string]any{"ObjectType": "TYPE_URL", "Url": "https://example.com"}},
+		map[string]any{"ObjectType": "TYPE_TEXT", "Text": ""},
+		map[string]any{"ObjectType": "TYPE_TEXT", "Text": "ok", "Url": "https://example.com"},
+		map[string]any{"ObjectType": "TYPE_URL", "Url": "http://example.com"},
+		map[string]any{"ObjectType": "TYPE_URL", "Url": "https://127.0.0.1/private"},
+		map[string]any{"ObjectType": "TYPE_FILE", "Url": "https://example.com/report.exe", "FileFormat": "exe"},
+		map[string]any{"ObjectType": "TYPE_FILE", "Url": "https://example.com/report.pdf"},
+		map[string]any{"ObjectType": "TYPE_TEXT", "Text": "ok", "Extra": true},
+	}
+	for _, body := range invalid {
+		if _, err := tencentPodcastInputObjects(body); err == nil {
+			t.Fatalf("invalid podcast body accepted: %#v", body)
+		}
+	}
+	if _, err := signTencentPodcastWebSocketURL("wss://tts.cloud.tencent.com/stream_ws_podcast", TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, map[string]any{"AppId": 1300466766, "Codec": "pcm", "SampleRate": 24000}, time.Unix(1761816664, 0), "session"); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+}
+
+func TestTencentPodcastWebSocketValidatesDocumentedParameters(t *testing.T) {
+	parameters, err := validateTencentPodcastParameters(map[string]any{
+		"AppId": 1300466766, "SampleRate": 24000, "SpeakerNumber": 2, "Speaker1Voice": "zixin", "Speaker2Voice": "acan", "EnableWebSearch": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parameters["Codec"] != "pcm" || parameters["EnableWebSearch"] != "false" {
+		t.Fatalf("parameters=%v", parameters)
+	}
+	invalid := []map[string]any{
+		{"AppId": 1300466766, "Codec": "pcm"},
+		{"AppId": 1300466766, "SampleRate": 16000},
+		{"AppId": 1300466766, "SampleRate": 24000, "Codec": "mp3"},
+		{"AppId": 1300466766, "SampleRate": 24000, "SpeakerNumber": 1},
+		{"AppId": 1300466766, "SampleRate": 24000, "SpeakerNumber": 1, "Speaker1Voice": "one", "Speaker2Voice": "two"},
+		{"AppId": 1300466766, "SampleRate": 24000, "SpeakerNumber": 2, "Speaker1Voice": "one"},
+		{"AppId": 1300466766, "SampleRate": 24000, "EnableWebSearch": "sometimes"},
+		{"AppId": 1300466766, "SampleRate": 24000, "Unknown": true},
+	}
+	for _, candidate := range invalid {
+		if _, err := validateTencentPodcastParameters(candidate); err == nil {
+			t.Fatalf("invalid parameters accepted: %v", candidate)
+		}
+	}
+}
+
 func TestTencentMPSAudioFrameUsesDocumentedNetworkByteOrder(t *testing.T) {
 	frame, err := encodeTencentMPSAudioFrame(1, true, 0x0102030405060708, "user", []byte{0xde, 0xad})
 	if err != nil {
@@ -3015,6 +3105,73 @@ func TestTencentStreamingTTSWebSocketDoesNotPublishProviderFailure(t *testing.T)
 	}
 	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
 		t.Fatalf("failed output was published: %v", statErr)
+	}
+}
+
+func TestTencentPodcastWebSocketAdapterSendsObjectsAndPublishesAudio(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "podcast.pcm")
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"code":0,"message":"success","session_id":"session-podcast","request_id":"request-podcast","message_id":"event-1","ready":0,"final":0}`),
+			[]byte(`{"code":0,"message":"success","session_id":"session-podcast","request_id":"request-podcast","message_id":"event-2","ready":1,"final":0}`),
+			[]byte("audio-1"),
+			[]byte(`{"code":0,"message":"success","session_id":"session-podcast","request_id":"request-podcast","message_id":"event-3","final":0,"result":{"scripts":[{"Text":"script","Speaker":"host","BeginTime":0,"EndTime":1000,"Index":0}]}}`),
+			[]byte(`{"code":10009,"message":"input timeout notification","session_id":"session-podcast","request_id":"request-podcast","message_id":"event-timeout","final":0}`),
+			[]byte("audio-2"),
+			[]byte(`{"code":0,"message":"success","session_id":"session-podcast","request_id":"request-podcast","message_id":"event-4","final":1}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText, tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1761816664, 0).UTC() }, VoiceID: func() string { return "session-podcast" },
+		WebSocketDial: func(_ context.Context, signedURL string) (tencentWebSocketConnection, error) {
+			parsed, err := url.Parse(signedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Query().Get("Signature") == "" || parsed.Query().Get("Action") != "TextToPodcastStreamAudioWS" {
+				t.Fatalf("signed query=%v", parsed.Query())
+			}
+			return connection, nil
+		},
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "podcast-ws", Service: "tts", Operation: "TextToPodcastStreamAudioWS", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/stream_ws_podcast", Parameters: map[string]any{"AppId": 1300466766, "Codec": "pcm", "SampleRate": 24000},
+		Body: []any{map[string]any{"ObjectType": "TYPE_TEXT", "Text": "first"}, map[string]any{"ObjectType": "TYPE_TEXT", "Text": "second"}}, ResponseFile: outputFile, MaxResponseFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != "audio-1audio-2" || result.RequestID != "request-podcast" || !bytes.Contains(result.Output, []byte(`"sample_rate":24000`)) {
+		t.Fatalf("audio=%q result=%#v", audio, result)
+	}
+	if len(connection.writes) != 3 {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+	for index, write := range connection.writes {
+		var command struct {
+			SessionID string `json:"session_id"`
+			MessageID string `json:"message_id"`
+			Action    string `json:"action"`
+			Data      string `json:"data"`
+		}
+		if write.messageType != tencentWebSocketMessageText || json.Unmarshal(write.data, &command) != nil || command.SessionID != "session-podcast" || command.MessageID == "" {
+			t.Fatalf("write[%d]=%s", index, write.data)
+		}
+		if index < 2 {
+			var object map[string]any
+			if command.Action != "ACTION_SYNTHESIS" || json.Unmarshal([]byte(command.Data), &object) != nil || object["ObjectType"] != "TYPE_TEXT" || object["Text"] != []string{"first", "second"}[index] {
+				t.Fatalf("write[%d]=%s", index, write.data)
+			}
+		} else if command.Action != "ACTION_COMPLETE" || command.Data != "" {
+			t.Fatalf("complete=%s", write.data)
+		}
 	}
 }
 

@@ -231,6 +231,7 @@ func TestReadClassifierCannotBeDowngradedByCaller(t *testing.T) {
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "DescribeInstances"}, true, false},
 		{ProviderTencent, Invocation{AuthScheme: "voice-convert-ws", Service: "vc", Operation: "ConvertVoice"}, true, false},
 		{ProviderTencent, Invocation{AuthScheme: "soe-ws", Service: "soe", Operation: "EvaluateSpeechStream"}, true, false},
+		{ProviderTencent, Invocation{AuthScheme: "podcast-ws", Service: "tts", Operation: "TextToPodcastStreamAudioWS"}, true, false},
 		{ProviderTencent, Invocation{AuthScheme: "tc3", Service: "other", Operation: "ConvertResource"}, false, false},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "StartInstances"}, false, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://management.azure.com/subscriptions/sub/resources?api-version=2021-04-01"}, true, false},
@@ -618,6 +619,32 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentStreamingTTSWebSocket(t *test
 	for _, candidate := range invalid {
 		if err := validateInvocation(candidate, []string{root}); err == nil {
 			t.Fatalf("unsafe streaming TTS WebSocket invocation accepted: %#v", candidate)
+		}
+	}
+}
+
+func TestInvocationBoundaryAllowsOnlyGuardedTencentPodcastWebSocket(t *testing.T) {
+	root := t.TempDir()
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "podcast-ws", Service: "tts", Operation: "TextToPodcastStreamAudioWS", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/stream_ws_podcast", Parameters: map[string]any{"AppId": 1300466766, "Codec": "pcm", "SampleRate": 24000},
+		Body: map[string]any{"ObjectType": "TYPE_TEXT", "Text": "create a podcast"}, ResponseFile: filepath.Join(root, "podcast.pcm"),
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded podcast WebSocket rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request, request, request, request}
+	invalid[0].URL += "?Signature=caller"
+	invalid[1].Method = http.MethodPost
+	invalid[2].Headers = map[string]string{"Origin": "https://example.com"}
+	invalid[3].Body = nil
+	invalid[4].ResponseFile = ""
+	invalid[5].Parameters = map[string]any{"AppId": 1300466766, "Codec": "pcm", "SampleRate": 24000, "Signature": "caller"}
+	invalid[6].Parameters = map[string]any{"AppId": 1300466766, "Codec": "pcm", "SampleRate": 24000, "ContextId": "prior-context"}
+	invalid[6].Body = map[string]any{"ObjectType": "TYPE_URL", "Url": "https://example.com/article"}
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe podcast WebSocket invocation accepted: %#v", candidate)
 		}
 	}
 }

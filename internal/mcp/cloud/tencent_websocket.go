@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -255,6 +256,40 @@ func validateTencentStreamingTTSWebSocketInvocation(invocation Invocation) error
 	}
 	_, err = validateTencentTTSParameters(invocation.Parameters)
 	return err
+}
+
+func validateTencentPodcastWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) {
+		return fmt.Errorf("Tencent Cloud podcast WebSocket requires method GET for the HTTP upgrade")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "tts.cloud.tencent.com") || target.Port() != "" || target.EscapedPath() != "/stream_ws_podcast" || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return fmt.Errorf("Tencent Cloud podcast WebSocket requires wss://tts.cloud.tencent.com/stream_ws_podcast without caller query parameters")
+	}
+	objects, err := tencentPodcastInputObjects(invocation.Body)
+	if err != nil || invocation.BodyFile != "" {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("Tencent Cloud podcast WebSocket requires inline InputObject body and does not accept body_file")
+	}
+	if invocation.ResponseFile == "" {
+		return fmt.Errorf("Tencent Cloud podcast WebSocket requires response_file for binary audio")
+	}
+	if len(invocation.Headers) != 0 {
+		return fmt.Errorf("Tencent Cloud podcast WebSocket does not accept caller-supplied handshake headers")
+	}
+	if invocation.StreamChunkBytes != 0 || invocation.StreamIntervalMS != 0 || invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Tencent Cloud podcast WebSocket does not accept audio-upload stream controls")
+	}
+	parameters, err := validateTencentPodcastParameters(invocation.Parameters)
+	if err != nil {
+		return err
+	}
+	if _, present := parameters["ContextId"]; present && objects[0].ObjectType != "TYPE_TEXT" {
+		return fmt.Errorf("Tencent Cloud podcast WebSocket ContextId interaction mode requires TYPE_TEXT input")
+	}
+	return nil
 }
 
 func validateTencentMPSUserID(userID string) error {
@@ -915,6 +950,42 @@ func signTencentStreamingTTSWebSocketURL(rawURL string, credentials TencentCrede
 	return signTencentTTSWebSocketHandshake(rawURL, "/stream_wsv2", "TextToStreamAudioWSv2", "Tencent Cloud streaming TTS WebSocket", credentials, input, nil, now, sessionID)
 }
 
+func signTencentPodcastWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, sessionID string) (string, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse Tencent Cloud podcast WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "tts.cloud.tencent.com") || target.Port() != "" || target.EscapedPath() != "/stream_ws_podcast" || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket requires wss://tts.cloud.tencent.com/stream_ws_podcast without caller query parameters")
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket requires complete SecretId/SecretKey credentials")
+	}
+	if credentials.Token != "" {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket does not document CAM temporary-token authentication")
+	}
+	if !tencentVoiceIDPattern.MatchString(sessionID) {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket requires a generated SessionId of at most 128 characters")
+	}
+	parameters, err := validateTencentPodcastParameters(input)
+	if err != nil {
+		return "", err
+	}
+	timestamp := now.UTC().Unix()
+	parameters["Action"] = "TextToPodcastStreamAudioWS"
+	parameters["SecretId"] = credentials.SecretID
+	parameters["Timestamp"] = strconv.FormatInt(timestamp, 10)
+	parameters["Expired"] = strconv.FormatInt(timestamp+24*60*60, 10)
+	parameters["SessionId"] = sessionID
+	canonical := canonicalTencentV1Parameters(parameters)
+	source := "GETtts.cloud.tencent.com/stream_ws_podcast?" + canonical
+	parameters["Signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
+	target.Scheme = "wss"
+	target.Host = "tts.cloud.tencent.com"
+	target.RawQuery = encodeTencentV1Parameters(parameters)
+	return target.String(), nil
+}
+
 func signTencentTTSWebSocketHandshake(rawURL, expectedPath, action, protocol string, credentials TencentCredentials, input map[string]any, extra map[string]string, now time.Time, sessionID string) (string, error) {
 	target, err := url.Parse(rawURL)
 	if err != nil {
@@ -1041,6 +1112,76 @@ func validateTencentTTSParameters(input map[string]any) (map[string]string, erro
 	return parameters, nil
 }
 
+func validateTencentPodcastParameters(input map[string]any) (map[string]string, error) {
+	parameters := make(map[string]string, len(input)+2)
+	for name, value := range input {
+		if isTencentTTSControlledParameter(name) {
+			return nil, fmt.Errorf("caller-supplied Tencent Cloud podcast WebSocket signing parameter %q is forbidden", name)
+		}
+		switch name {
+		case "AppId", "SampleRate", "Codec", "SpeakerNumber", "Speaker1Voice", "Speaker2Voice", "ContextId", "EnableWebSearch":
+		default:
+			return nil, fmt.Errorf("Tencent Cloud podcast WebSocket query parameter %q is not documented", name)
+		}
+		values, err := stringValues(value)
+		if err != nil || len(values) != 1 {
+			return nil, fmt.Errorf("Tencent Cloud podcast WebSocket query parameter %q must be scalar", name)
+		}
+		parameters[name] = values[0]
+	}
+	if parsed, err := strconv.ParseUint(parameters["AppId"], 10, 63); !tencentTTSAppIDPattern.MatchString(parameters["AppId"]) || err != nil || parsed == 0 {
+		return nil, fmt.Errorf("Tencent Cloud podcast WebSocket AppId must be a positive 5 to 19 digit integer")
+	}
+	if parameters["SampleRate"] != "24000" {
+		return nil, fmt.Errorf("Tencent Cloud podcast WebSocket SampleRate must be 24000")
+	}
+	codec := strings.ToLower(strings.TrimSpace(parameters["Codec"]))
+	if codec == "" {
+		codec = "pcm"
+	}
+	if codec != "pcm" {
+		return nil, fmt.Errorf("Tencent Cloud podcast WebSocket Codec must be pcm")
+	}
+	parameters["Codec"] = codec
+	speakerNumber := 0
+	if value, present := parameters["SpeakerNumber"]; present {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 || parsed > 2 {
+			return nil, fmt.Errorf("Tencent Cloud podcast WebSocket SpeakerNumber must be 0, 1, or 2")
+		}
+		speakerNumber = parsed
+	}
+	for _, name := range []string{"Speaker1Voice", "Speaker2Voice", "ContextId"} {
+		if value, present := parameters[name]; present {
+			limit := 128
+			if name == "ContextId" {
+				limit = 1024
+			}
+			if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > limit {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket %s must be valid UTF-8 with 1 to %d characters", name, limit)
+			}
+			for _, character := range value {
+				if unicode.IsControl(character) {
+					return nil, fmt.Errorf("Tencent Cloud podcast WebSocket %s must not contain control characters", name)
+				}
+			}
+		}
+	}
+	_, speaker1 := parameters["Speaker1Voice"]
+	_, speaker2 := parameters["Speaker2Voice"]
+	if (speakerNumber == 0 && (speaker1 || speaker2)) || (speakerNumber == 1 && (!speaker1 || speaker2)) || (speakerNumber == 2 && (!speaker1 || !speaker2)) {
+		return nil, fmt.Errorf("Tencent Cloud podcast WebSocket speaker voices must match SpeakerNumber")
+	}
+	if value, present := parameters["EnableWebSearch"]; present {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, fmt.Errorf("Tencent Cloud podcast WebSocket EnableWebSearch must be boolean")
+		}
+		parameters["EnableWebSearch"] = strconv.FormatBool(parsed)
+	}
+	return parameters, nil
+}
+
 func tencentTTSRequestText(body any) (string, error) {
 	text, ok := body.(string)
 	if !ok || text == "" || strings.TrimSpace(text) == "" || !utf8.ValidString(text) {
@@ -1092,6 +1233,125 @@ func tencentStreamingTTSTextSegments(body any) ([]string, error) {
 		}
 	}
 	return segments, nil
+}
+
+type tencentPodcastInputObject struct {
+	ObjectType string `json:"ObjectType"`
+	Text       string `json:"Text,omitempty"`
+	URL        string `json:"Url,omitempty"`
+	FileFormat string `json:"FileFormat,omitempty"`
+}
+
+func tencentPodcastInputObjects(body any) ([]tencentPodcastInputObject, error) {
+	var rawObjects []map[string]any
+	switch typed := body.(type) {
+	case map[string]any:
+		rawObjects = []map[string]any{typed}
+	case []map[string]any:
+		rawObjects = append([]map[string]any(nil), typed...)
+	case []any:
+		rawObjects = make([]map[string]any, len(typed))
+		for index, value := range typed {
+			object, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket body elements must be InputObject maps")
+			}
+			rawObjects[index] = object
+		}
+	default:
+		return nil, fmt.Errorf("Tencent Cloud podcast WebSocket body must be an InputObject or InputObject array")
+	}
+	if len(rawObjects) == 0 || len(rawObjects) > 10 {
+		return nil, fmt.Errorf("Tencent Cloud podcast WebSocket requires 1 to 10 InputObject elements")
+	}
+	objects := make([]tencentPodcastInputObject, len(rawObjects))
+	objectType := ""
+	totalTextCharacters := 0
+	for index, raw := range rawObjects {
+		for name := range raw {
+			switch name {
+			case "ObjectType", "Text", "Url", "FileFormat":
+			default:
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket InputObject field %q is not documented", name)
+			}
+		}
+		currentType, ok := raw["ObjectType"].(string)
+		currentType = strings.ToUpper(strings.TrimSpace(currentType))
+		if !ok || (currentType != "TYPE_TEXT" && currentType != "TYPE_URL" && currentType != "TYPE_FILE") {
+			return nil, fmt.Errorf("Tencent Cloud podcast WebSocket ObjectType must be TYPE_TEXT, TYPE_URL, or TYPE_FILE")
+		}
+		if objectType != "" && currentType != objectType {
+			return nil, fmt.Errorf("Tencent Cloud podcast WebSocket InputObject elements must use one common ObjectType")
+		}
+		objectType = currentType
+		object := tencentPodcastInputObject{ObjectType: currentType}
+		switch currentType {
+		case "TYPE_TEXT":
+			text, ok := raw["Text"].(string)
+			if !ok || strings.TrimSpace(text) == "" || !utf8.ValidString(text) {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket TYPE_TEXT requires non-empty UTF-8 Text")
+			}
+			if _, present := raw["Url"]; present {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket TYPE_TEXT must not include Url")
+			}
+			if _, present := raw["FileFormat"]; present {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket TYPE_TEXT must not include FileFormat")
+			}
+			totalTextCharacters += utf8.RuneCountInString(text)
+			if totalTextCharacters > 10000 {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket text input exceeds the documented 10000-character limit")
+			}
+			object.Text = text
+		case "TYPE_URL":
+			if _, present := raw["Text"]; present {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket TYPE_URL must not include Text")
+			}
+			if _, present := raw["FileFormat"]; present {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket TYPE_URL must not include FileFormat")
+			}
+			source, err := validateTencentPodcastSourceURL(raw["Url"])
+			if err != nil {
+				return nil, err
+			}
+			object.URL = source
+		case "TYPE_FILE":
+			if _, present := raw["Text"]; present {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket TYPE_FILE must not include Text")
+			}
+			source, err := validateTencentPodcastSourceURL(raw["Url"])
+			if err != nil {
+				return nil, err
+			}
+			format, ok := raw["FileFormat"].(string)
+			format = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(format)), ".")
+			if !ok || (format != "pdf" && format != "txt" && format != "docx" && format != "md") {
+				return nil, fmt.Errorf("Tencent Cloud podcast WebSocket FileFormat must be pdf, txt, docx, or md")
+			}
+			object.URL = source
+			object.FileFormat = format
+		}
+		objects[index] = object
+	}
+	return objects, nil
+}
+
+func validateTencentPodcastSourceURL(value any) (string, error) {
+	raw, ok := value.(string)
+	if !ok || len(raw) == 0 || len(raw) > 8192 || !utf8.ValidString(raw) {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket Url must be a valid HTTPS URL of at most 8192 bytes")
+	}
+	target, err := url.Parse(raw)
+	if err != nil || target == nil {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket Url must be a public HTTPS URL without credentials or fragments")
+	}
+	host := strings.ToLower(target.Hostname())
+	if target.Scheme != "https" || host == "" || target.User != nil || target.Fragment != "" || (target.Port() != "" && target.Port() != "443") {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket Url must be a public HTTPS URL without credentials or fragments")
+	}
+	if net.ParseIP(host) != nil || host == "localhost" || strings.HasSuffix(host, ".localhost") || !strings.Contains(host, ".") {
+		return "", fmt.Errorf("Tencent Cloud podcast WebSocket Url must use a non-IP DNS hostname")
+	}
+	return target.String(), nil
 }
 
 func isTencentTTSControlledParameter(name string) bool {
@@ -2554,6 +2814,32 @@ func invokeTencentStreamingTTSWebSocket(ctx context.Context, adapter *TencentRES
 	if err != nil {
 		return InvocationResult{}, err
 	}
+	format, sampleRate := tencentTTSAudioProperties(invocation.Parameters)
+	return invokeTencentActionAudioWebSocket(ctx, adapter, invocation, signedURL, sessionID, segments, "Tencent Cloud streaming TTS WebSocket", adapter.config.Timeout+10*time.Minute, format, sampleRate)
+}
+
+func invokeTencentPodcastWebSocket(ctx context.Context, adapter *TencentRESTAdapter, credentials TencentCredentials, invocation Invocation) (InvocationResult, error) {
+	objects, err := tencentPodcastInputObjects(invocation.Body)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	payloads := make([]string, len(objects))
+	for index, object := range objects {
+		data, err := json.Marshal(object)
+		if err != nil {
+			return InvocationResult{}, fmt.Errorf("encode Tencent Cloud podcast InputObject")
+		}
+		payloads[index] = string(data)
+	}
+	sessionID := adapter.config.VoiceID()
+	signedURL, err := signTencentPodcastWebSocketURL(invocation.URL, credentials, invocation.Parameters, adapter.config.Now().UTC(), sessionID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return invokeTencentActionAudioWebSocket(ctx, adapter, invocation, signedURL, sessionID, payloads, "Tencent Cloud podcast WebSocket", adapter.config.Timeout+30*time.Minute, "pcm", 24000)
+}
+
+func invokeTencentActionAudioWebSocket(ctx context.Context, adapter *TencentRESTAdapter, invocation Invocation, signedURL, sessionID string, payloads []string, protocol string, streamTimeout time.Duration, format string, sampleRate uint32) (InvocationResult, error) {
 	dialContext, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
 	connection, err := adapter.config.WebSocketDial(dialContext, signedURL)
 	cancelDial()
@@ -2575,31 +2861,31 @@ func invokeTencentStreamingTTSWebSocket(ctx context.Context, adapter *TencentRES
 	}
 	defer audioSink.abort()
 
-	streamContext, cancelStream := context.WithTimeout(ctx, adapter.config.Timeout+10*time.Minute)
+	streamContext, cancelStream := context.WithTimeout(ctx, streamTimeout)
 	defer cancelStream()
 	requestID := ""
 	ready := false
 	for !ready {
 		messageType, data, err := connection.Read(streamContext)
 		if err != nil {
-			return InvocationResult{}, fmt.Errorf("read Tencent Cloud streaming TTS WebSocket handshake")
+			return InvocationResult{}, fmt.Errorf("read %s handshake", protocol)
 		}
 		if messageType != tencentWebSocketMessageText {
-			return InvocationResult{}, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned binary audio before READY")
+			return InvocationResult{}, fmt.Errorf("%s returned binary audio before READY", protocol)
 		}
 		var final bool
-		requestID, ready, final, err = acceptTencentStreamingTTSText(messageType, data, messageSink, sessionID, requestID)
+		requestID, ready, final, err = acceptTencentActionAudioText(messageType, data, messageSink, sessionID, requestID, protocol)
 		if err != nil {
 			return InvocationResult{}, err
 		}
 		if final {
-			return InvocationResult{}, fmt.Errorf("Tencent Cloud streaming TTS WebSocket ended before READY")
+			return InvocationResult{}, fmt.Errorf("%s ended before READY", protocol)
 		}
 	}
 
 	readResult := make(chan tencentSpeechTranslateReadResult, 1)
-	go readTencentStreamingTTSWebSocket(streamContext, cancelStream, connection, messageSink, audioSink, sessionID, requestID, readResult)
-	if err := sendTencentStreamingTTSText(streamContext, connection, sessionID, segments); err != nil {
+	go readTencentActionAudioWebSocket(streamContext, cancelStream, connection, messageSink, audioSink, sessionID, requestID, protocol, readResult)
+	if err := sendTencentActionAudioPayloads(streamContext, connection, sessionID, payloads, protocol); err != nil {
 		cancelStream()
 		reader := <-readResult
 		if reader.err != nil {
@@ -2612,13 +2898,12 @@ func invokeTencentStreamingTTSWebSocket(ctx context.Context, adapter *TencentRES
 		return InvocationResult{}, result.err
 	}
 	if audioSink.written == 0 {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud streaming TTS WebSocket completed without audio")
+		return InvocationResult{}, fmt.Errorf("%s completed without audio", protocol)
 	}
 	messages, err := messageSink.finish(result.requestID)
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	format, sampleRate := tencentTTSAudioProperties(invocation.Parameters)
 	audioMetadata, err := audioSink.finishAudio(result.requestID, format, sampleRate)
 	if err != nil {
 		return InvocationResult{}, err
@@ -2630,32 +2915,32 @@ func invokeTencentStreamingTTSWebSocket(ctx context.Context, adapter *TencentRES
 	return InvocationResult{Output: output, RequestID: result.requestID}, nil
 }
 
-func sendTencentStreamingTTSText(ctx context.Context, connection tencentWebSocketConnection, sessionID string, segments []string) error {
+func sendTencentActionAudioPayloads(ctx context.Context, connection tencentWebSocketConnection, sessionID string, payloads []string, protocol string) error {
 	type command struct {
 		SessionID string `json:"session_id"`
 		MessageID string `json:"message_id"`
 		Action    string `json:"action"`
 		Data      string `json:"data"`
 	}
-	for _, segment := range segments {
-		data, _ := json.Marshal(command{SessionID: sessionID, MessageID: secureTencentVoiceID(), Action: "ACTION_SYNTHESIS", Data: segment})
+	for _, payload := range payloads {
+		data, _ := json.Marshal(command{SessionID: sessionID, MessageID: secureTencentVoiceID(), Action: "ACTION_SYNTHESIS", Data: payload})
 		if err := connection.Write(ctx, tencentWebSocketMessageText, data); err != nil {
-			return fmt.Errorf("write Tencent Cloud streaming TTS text segment")
+			return fmt.Errorf("write %s synthesis payload", protocol)
 		}
 	}
 	data, _ := json.Marshal(command{SessionID: sessionID, MessageID: secureTencentVoiceID(), Action: "ACTION_COMPLETE", Data: ""})
 	if err := connection.Write(ctx, tencentWebSocketMessageText, data); err != nil {
-		return fmt.Errorf("finish Tencent Cloud streaming TTS text stream")
+		return fmt.Errorf("finish %s input stream", protocol)
 	}
 	return nil
 }
 
-func readTencentStreamingTTSWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, messageSink, audioSink *tencentWebSocketOutputSink, sessionID, requestID string, result chan<- tencentSpeechTranslateReadResult) {
+func readTencentActionAudioWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, messageSink, audioSink *tencentWebSocketOutputSink, sessionID, requestID, protocol string, result chan<- tencentSpeechTranslateReadResult) {
 	for {
 		messageType, data, err := connection.Read(ctx)
 		if err != nil {
 			cancel()
-			result <- tencentSpeechTranslateReadResult{requestID: requestID, err: fmt.Errorf("read Tencent Cloud streaming TTS WebSocket response")}
+			result <- tencentSpeechTranslateReadResult{requestID: requestID, err: fmt.Errorf("read %s response", protocol)}
 			return
 		}
 		if messageType == tencentWebSocketMessageBinary {
@@ -2666,7 +2951,7 @@ func readTencentStreamingTTSWebSocket(ctx context.Context, cancel context.Cancel
 			}
 			continue
 		}
-		currentID, _, final, err := acceptTencentStreamingTTSText(messageType, data, messageSink, sessionID, requestID)
+		currentID, _, final, err := acceptTencentActionAudioText(messageType, data, messageSink, sessionID, requestID, protocol)
 		if currentID != "" {
 			requestID = currentID
 		}
@@ -2680,25 +2965,25 @@ func readTencentStreamingTTSWebSocket(ctx context.Context, cancel context.Cancel
 	}
 }
 
-func acceptTencentStreamingTTSText(messageType tencentWebSocketMessageType, data []byte, sink *tencentWebSocketOutputSink, expectedSessionID, expectedRequestID string) (string, bool, bool, error) {
+func acceptTencentActionAudioText(messageType tencentWebSocketMessageType, data []byte, sink *tencentWebSocketOutputSink, expectedSessionID, expectedRequestID, protocol string) (string, bool, bool, error) {
 	if messageType != tencentWebSocketMessageText {
-		return expectedRequestID, false, false, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned a non-text status response")
+		return expectedRequestID, false, false, fmt.Errorf("%s returned a non-text status response", protocol)
 	}
 	var message tencentTTSMessage
 	if err := json.Unmarshal(data, &message); err != nil {
-		return expectedRequestID, false, false, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned invalid JSON")
+		return expectedRequestID, false, false, fmt.Errorf("%s returned invalid JSON", protocol)
 	}
 	if message.Code != 0 && message.Code != 10009 {
-		return message.RequestID, false, false, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned code %d", message.Code)
+		return message.RequestID, false, false, fmt.Errorf("%s returned code %d", protocol, message.Code)
 	}
 	if message.SessionID == "" || message.SessionID != expectedSessionID {
-		return message.RequestID, false, false, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned an invalid session_id")
+		return message.RequestID, false, false, fmt.Errorf("%s returned an invalid session_id", protocol)
 	}
 	if strings.TrimSpace(message.RequestID) == "" || (expectedRequestID != "" && message.RequestID != expectedRequestID) {
-		return message.RequestID, false, false, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned an invalid request_id")
+		return message.RequestID, false, false, fmt.Errorf("%s returned an invalid request_id", protocol)
 	}
 	if (message.Final != 0 && message.Final != 1) || (message.Ready != 0 && message.Ready != 1) || (message.Heartbeat != 0 && message.Heartbeat != 1) {
-		return message.RequestID, false, false, fmt.Errorf("Tencent Cloud streaming TTS WebSocket returned an invalid event value")
+		return message.RequestID, false, false, fmt.Errorf("%s returned an invalid event value", protocol)
 	}
 	if err := sink.writeMessage(data); err != nil {
 		return message.RequestID, false, false, err
