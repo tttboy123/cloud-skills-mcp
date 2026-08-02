@@ -66,7 +66,7 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithString("project", mcp.Description("Optional Google Cloud project.")),
 		mcp.WithString("subscription", mcp.Description("Optional Azure subscription.")),
 		mcp.WithString("audience", mcp.Description("Optional Azure Entra resource audience for an uncommon official data-plane endpoint. This is an application/resource identifier, never a token.")),
-		mcp.WithString("auth_scheme", mcp.Description("Optional provider HTTP authentication scheme: sigv4, sigv4a, acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, ots, ots4, tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, cos, or the provider default.")),
+		mcp.WithString("auth_scheme", mcp.Description("Optional provider HTTP authentication scheme: sigv4, sigv4a, acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, ots, ots4, tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, mps-ws, cos, or the provider default.")),
 		mcp.WithString("auth_version", mcp.Description("Optional Baidu BCE signing version: v1 (default) or v2. BCE v2 also requires service and region.")),
 		mcp.WithString("api_version", mcp.Description("Provider API version used by Alibaba ACS3/RPC/ROA/DataHub/SLS/MNS/OTS and Tencent TC3 common parameters or headers.")),
 		mcp.WithString("payload_mode", mcp.Description("Optional AWS payload protocol: aws-chunked for SigV4/SigV4a S3 streaming PutObject/UploadPart, aws-chunked-trailer for a server-computed signed checksum trailer, or aws-eventstream for a bounded SigV4 CRC-valid encoded event-stream body.")),
@@ -78,8 +78,10 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithAny("body", mcp.Description("Optional JSON-compatible REST request body.")),
 		mcp.WithString("body_file", mcp.Description("Optional local HTTP body or WebSocket binary-stream file. The resolved regular file must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and cannot be combined with body.")),
 		mcp.WithString("response_file", mcp.Description("Optional new local file for a successful HTTP body or WebSocket NDJSON messages. The target must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and is never overwritten.")),
-		mcp.WithNumber("stream_chunk_bytes", mcp.Description("Optional WebSocket binary message size. Tencent ASR derives an official-format default when omitted."), mcp.Min(1), mcp.Max(maxRequestFileBytes)),
-		mcp.WithNumber("stream_interval_ms", mcp.Description("Optional Tencent WebSocket pacing interval in milliseconds; defaults to the documented 200 ms."), mcp.Min(1), mcp.Max(5000)),
+		mcp.WithNumber("stream_chunk_bytes", mcp.Description("Optional WebSocket binary message size. Tencent ASR and MPS derive protocol-specific defaults when omitted."), mcp.Min(1), mcp.Max(maxRequestFileBytes)),
+		mcp.WithNumber("stream_interval_ms", mcp.Description("Optional Tencent WebSocket pacing interval in milliseconds; ASR defaults to 200 ms and MPS PCM defaults to 40 ms."), mcp.Min(1), mcp.Max(5000)),
+		mcp.WithString("stream_user_id", mcp.Description("Required MPS WebSocket audio-source ID. It is placed only in the internal binary frame, not the signed URL.")),
+		mcp.WithNumber("stream_format", mcp.Description("Required MPS WebSocket PCM format: 1 for 16 kHz s16 mono or 2 for 8 kHz s16 mono."), mcp.Min(1), mcp.Max(2)),
 		mcp.WithReadOnlyHintAnnotation(!mutating),
 		mcp.WithDestructiveHintAnnotation(mutating),
 		mcp.WithIdempotentHintAnnotation(!mutating),
@@ -194,6 +196,8 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 		ResponseFile:     request.GetString("response_file", ""),
 		StreamChunkBytes: request.GetInt("stream_chunk_bytes", 0),
 		StreamIntervalMS: request.GetInt("stream_interval_ms", 0),
+		StreamUserID:     request.GetString("stream_user_id", ""),
+		StreamFormat:     request.GetInt("stream_format", 0),
 	}
 	if value, ok := arguments["parameters"]; ok {
 		parameters, ok := value.(map[string]any)

@@ -79,6 +79,8 @@ type Invocation struct {
 	ResponseFile      string
 	StreamChunkBytes  int
 	StreamIntervalMS  int
+	StreamUserID      string
+	StreamFormat      int
 	// MaxResponseFileBytes is runtime policy, not caller-controlled MCP input.
 	MaxResponseFileBytes int64
 }

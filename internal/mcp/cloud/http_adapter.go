@@ -54,6 +54,7 @@ const (
 	authSchemeTencentQCloud     = "qcloud"
 	authSchemeTencentQCloud256  = "qcloud-sha256"
 	authSchemeTencentASRWS      = "asr-ws"
+	authSchemeTencentMPSWS      = "mps-ws"
 	authSchemeTencentCOS        = "cos"
 	defaultHTTPClientTimeout    = 60 * time.Second
 )
@@ -492,6 +493,7 @@ type TencentRESTConfig struct {
 	Timeout       time.Duration
 	Now           func() time.Time
 	Nonce         func() string
+	MPSNonce      func() string
 	VoiceID       func() string
 	WebSocketDial func(context.Context, string) (tencentWebSocketConnection, error)
 	StreamPause   func(context.Context, time.Duration) error
@@ -510,6 +512,9 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 	if config.Nonce == nil {
 		config.Nonce = secureTencentNonce
 	}
+	if config.MPSNonce == nil {
+		config.MPSNonce = secureTencentMPSNonce
+	}
 	if config.VoiceID == nil {
 		config.VoiceID = secureTencentVoiceID
 	}
@@ -524,7 +529,7 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+mps-ws+cos",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -537,16 +542,24 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"tc1_signature":    "https://cloud.tencent.com/document/api/583/17239",
 		"qcloud_signature": "https://cloud.tencent.com/document/product/216/1714",
 		"asr_websocket":    "https://cloud.tencent.com/document/product/1093/48982",
+		"mps_websocket":    "https://cloud.tencent.com/document/product/862/121186",
 		"cos_signature":    "https://intl.cloud.tencent.com/document/product/436/7778",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, mps-ws, or cos")
 	}
-	if scheme == authSchemeTencentASRWS {
+	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentMPSWS {
+		if scheme == authSchemeTencentASRWS {
+			if err := validateTencentASRWebSocketInvocation(invocation); err != nil {
+				return InvocationResult{}, err
+			}
+		} else if err := validateTencentMPSWebSocketInvocation(invocation); err != nil {
+			return InvocationResult{}, err
+		}
 		credentials, err := adapter.config.Credentials.Credentials(ctx)
 		if err != nil {
 			return InvocationResult{}, err
@@ -554,7 +567,10 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		if credentials.SecretID == "" || credentials.SecretKey == "" {
 			return InvocationResult{}, fmt.Errorf("Tencent Cloud credential provider returned incomplete AKSK material")
 		}
-		return invokeTencentASRWebSocket(ctx, adapter, credentials, invocation)
+		if scheme == authSchemeTencentASRWS {
+			return invokeTencentASRWebSocket(ctx, adapter, credentials, invocation)
+		}
+		return invokeTencentMPSWebSocket(ctx, adapter, credentials, invocation)
 	}
 	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
 	if err != nil {

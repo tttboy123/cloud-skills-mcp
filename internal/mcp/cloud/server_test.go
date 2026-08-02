@@ -115,7 +115,7 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
 		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
-			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "audience", "auth_version"} {
+			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_user_id", "stream_format", "audience", "auth_version"} {
 				if _, ok := tool.InputSchema.Properties[field]; !ok {
 					t.Errorf("%s must expose HTTP field %s", tool.Name, field)
 				}
@@ -403,6 +403,35 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentASRWebSocket(t *testing.T) {
 	for _, candidate := range invalid {
 		if err := validateInvocation(candidate, []string{root}); err == nil {
 			t.Fatalf("unsafe ASR WebSocket invocation accepted: %#v", candidate)
+		}
+	}
+}
+
+func TestInvocationBoundaryAllowsOnlyGuardedTencentMPSWebSocket(t *testing.T) {
+	root := t.TempDir()
+	audio := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audio, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "mps-ws", Service: "mps", Operation: "RecognizeStream", Method: http.MethodGet,
+		URL: "wss://mps.cloud.tencent.com/wss/v1/1258344699", Parameters: map[string]any{"asrDst": "zh"},
+		BodyFile: audio, ResponseFile: filepath.Join(root, "result.ndjson"), StreamChunkBytes: 1280, StreamIntervalMS: 40,
+		StreamUserID: "speaker-1", StreamFormat: 1,
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded MPS WebSocket rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request, request, request}
+	invalid[0].URL += "?signature=caller"
+	invalid[1].Method = http.MethodPost
+	invalid[2].Headers = map[string]string{"Origin": "https://example.com"}
+	invalid[3].BodyFile = ""
+	invalid[4].StreamUserID = ""
+	invalid[5].StreamFormat = 3
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe MPS WebSocket invocation accepted: %#v", candidate)
 		}
 	}
 }

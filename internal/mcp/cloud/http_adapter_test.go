@@ -1785,6 +1785,70 @@ func TestTencentASRGeneratedNonceAndVoiceIDStayWithinProtocolBounds(t *testing.T
 	}
 }
 
+func TestTencentMPSWebSocketSignatureMatchesOfficialCanonicalAlgorithm(t *testing.T) {
+	signedURL, err := signTencentMPSWebSocketURL(
+		"wss://mps.cloud.tencent.com/wss/v1/1258344699",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"asrDst": "zh", "fragmentNotify": 0},
+		time.Unix(1750217009, 0).UTC(),
+		"7549145852",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if got, want := query.Get("signature"), "d5259168af7cab8ed9cefb1d50628f6b88faabfc9b5092171f90d7b119f0db0e"; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if query.Get("secretId") != "AKIDEXAMPLE" || query.Get("timeStamp") != "1750217009" || query.Get("expired") != "1750220609" || query.Get("nonce") != "7549145852" || query.Has("timeoutSec") {
+		t.Fatalf("query=%v", query)
+	}
+}
+
+func TestTencentMPSWebSocketRejectsTemporaryTokenAndControlledQuery(t *testing.T) {
+	base := func(credentials TencentCredentials, parameters map[string]any) error {
+		_, err := signTencentMPSWebSocketURL(
+			"wss://mps.cloud.tencent.com/wss/v1/1258344699",
+			credentials,
+			parameters,
+			time.Unix(1750217009, 0).UTC(),
+			"7549145852",
+		)
+		return err
+	}
+	if err := base(TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, map[string]any{"asrDst": "zh"}); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+	if err := base(TencentCredentials{SecretID: "id", SecretKey: "key"}, map[string]any{"asrDst": "zh", "signature": "caller"}); err == nil || !strings.Contains(err.Error(), "caller-supplied") {
+		t.Fatalf("controlled query error=%v", err)
+	}
+	if err := base(TencentCredentials{SecretID: "id", SecretKey: "key"}, map[string]any{"transSrc": "zh"}); err == nil || !strings.Contains(err.Error(), "transDst") {
+		t.Fatalf("translation pair error=%v", err)
+	}
+}
+
+func TestTencentMPSGeneratedNonceIsExactlyTenDigits(t *testing.T) {
+	for range 100 {
+		if nonce := secureTencentMPSNonce(); !tencentMPSNoncePattern.MatchString(nonce) {
+			t.Fatalf("invalid generated MPS nonce %q", nonce)
+		}
+	}
+}
+
+func TestTencentMPSAudioFrameUsesDocumentedNetworkByteOrder(t *testing.T) {
+	frame, err := encodeTencentMPSAudioFrame(1, true, 0x0102030405060708, "user", []byte{0xde, 0xad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := hex.EncodeToString(frame), "010101020304050607080004757365720000dead"; got != want {
+		t.Fatalf("frame=%q, want %q", got, want)
+	}
+}
+
 type fakeTencentWebSocketConnection struct {
 	reads  [][]byte
 	writes []struct {
@@ -1851,6 +1915,56 @@ func TestTencentASRWebSocketAdapterStreamsGuardedAudioInternally(t *testing.T) {
 	}
 	if len(connection.writes) != 2 || connection.writes[0].messageType != tencentWebSocketMessageBinary || string(connection.writes[0].data) != "abcdefgh" || connection.writes[1].messageType != tencentWebSocketMessageText || string(connection.writes[1].data) != `{"type":"end"}` {
 		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentMPSWebSocketAdapterStreamsFramedAudioInternally(t *testing.T) {
+	audioFile := filepath.Join(t.TempDir(), "audio.pcm")
+	if err := os.WriteFile(audioFile, []byte("abcdefgh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"Code":0,"Message":"success","TaskId":"task-1"}`),
+		[]byte(`{"Response":{"NotificationType":"AiRecognitionResult","TaskId":"task-1"}}`),
+		[]byte(`{"Response":{"NotificationType":"ProcessEof","TaskId":"task-1","ProcessEofInfo":{"ErrCode":4002,"Message":"data timeout"}}}`),
+	}}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}},
+		Now:         func() time.Time { return time.Unix(1750217009, 0).UTC() },
+		MPSNonce:    func() string { return "7549145852" },
+		WebSocketDial: func(_ context.Context, signedURL string) (tencentWebSocketConnection, error) {
+			parsed, err := url.Parse(signedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Query().Get("signature") == "" || parsed.Query().Get("secretId") != "AKIDEXAMPLE" {
+				t.Fatalf("signed query=%v", parsed.Query())
+			}
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "mps-ws", Service: "mps", Operation: "RecognizeStream", Method: http.MethodGet,
+		URL: "wss://mps.cloud.tencent.com/wss/v1/1258344699", Parameters: map[string]any{"asrDst": "zh"}, BodyFile: audioFile,
+		StreamChunkBytes: 4, StreamUserID: "user-1", StreamFormat: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(result.Output, []byte(`"NotificationType":"AiRecognitionResult"`)) || result.RequestID != "task-1" {
+		t.Fatalf("result=%#v", result)
+	}
+	if len(connection.writes) != 2 {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+	for index, write := range connection.writes {
+		if write.messageType != tencentWebSocketMessageBinary || len(write.data) < 16 || write.data[0] != 1 {
+			t.Fatalf("write[%d]=%#v", index, write)
+		}
+	}
+	if connection.writes[0].data[1] != 0 || connection.writes[1].data[1] != 1 {
+		t.Fatalf("MPS IsEnd flags=%d,%d", connection.writes[0].data[1], connection.writes[1].data[1])
 	}
 }
 

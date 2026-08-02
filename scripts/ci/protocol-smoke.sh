@@ -34,7 +34,7 @@ jq -e -s '
       (.inputSchema.required | index("force") != null)] | all) and
     ([map(select(.id == 2))[0].result.tools[] |
       select(.name | test("_api_(read|mutate)$")) |
-      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and (has("arguments") | not))] | all) and
+      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
     (["aws","azure","gcp","alicloud","tencent","baiducloud"] -
       [map(select(.id == 2))[0].result.tools[].name | select(endswith("_api_read")) | sub("_api_read$"; "")]) == [] and
     (map(select(.id == 3))[0].result.isError == true) and
