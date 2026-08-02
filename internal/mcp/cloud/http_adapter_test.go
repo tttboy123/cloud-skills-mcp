@@ -1677,6 +1677,76 @@ func TestTencentV1AdapterInjectsCredentialsAndCallsHTTPS(t *testing.T) {
 	}
 }
 
+func TestTencentQCloudLegacyAdapterSignsDocumentedPath(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if got, want := request.URL.EscapedPath(), "/v2/index.php"; got != want {
+			t.Fatalf("path=%q, want %q", got, want)
+		}
+		query := request.URL.Query()
+		if got, want := query.Get("Signature"), "t8vBZr4+Yu2PUKC1b50qtw8I+6E="; got != want {
+			t.Fatalf("signature=%q, want %q; query=%v", got, want, query)
+		}
+		if query.Get("Version") != "" || query.Get("SignatureMethod") != "HmacSHA1" || query.Get("Token") != "cam-token" {
+			t.Fatalf("legacy common parameters=%v", query)
+		}
+		return httpResponse(200, `{"code":0,"message":""}`), nil
+	})
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret", Token: "cam-token"}},
+		HTTP:        doer, Now: func() time.Time { return time.Unix(1465185768, 0).UTC() }, Nonce: func() string { return "11886" },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "qcloud", Service: "dc", Operation: "CreateDirectConnectTunnel", Region: "ap-guangzhou",
+		Method: http.MethodGet, URL: "https://dc.api.qcloud.com/v2/index.php", Parameters: map[string]any{"directConnectId": "dc-kd7d06of"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTencentQCloudLegacySignsFormPOSTWithSHA256(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPost, "https://dc.api.qcloud.com/v2/index.php", strings.NewReader("limit=20"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	invocation := Invocation{Service: "dc", Operation: "DescribeDirectConnects", Region: "ap-guangzhou"}
+	if err := signTencentQCloud(request, TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}, invocation, time.Unix(1465185768, 0).UTC(), "11886", true); err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := form.Get("Signature"), "u7bWTdzEn2MDdrqmoTS2gKkiB9Hzueqnz2u3eP4PCdw="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if form.Get("SignatureMethod") != "HmacSHA256" || form.Get("Version") != "" {
+		t.Fatalf("form=%v", form)
+	}
+}
+
+func TestTencentQCloudLegacyRejectsNonProductEndpoint(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://api.qcloud.com/v2/index.php",
+		"https://dc.api.qcloud.com/",
+		"https://dc.tencentcloudapi.com/v2/index.php",
+	} {
+		request, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = signTencentQCloud(request, TencentCredentials{SecretID: "id", SecretKey: "key"}, Invocation{Operation: "DescribeDirectConnects"}, time.Unix(1465185768, 0).UTC(), "11886", false)
+		if err == nil {
+			t.Fatalf("URL %q was accepted", rawURL)
+		}
+	}
+}
+
 func TestAlibabaOSS4AndTencentCOSDataPlaneSchemes(t *testing.T) {
 	ossRequest, err := http.NewRequest(http.MethodGet, "https://bucket.oss-cn-hangzhou.aliyuncs.com/object?acl", nil)
 	if err != nil {

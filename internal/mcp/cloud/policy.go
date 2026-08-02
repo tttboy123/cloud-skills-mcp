@@ -229,18 +229,30 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Tencent Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentCOS {
-			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, or cos")
+		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentCOS {
+			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, or cos")
 		}
 		if (scheme == authSchemeTencentTC3 || scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256) && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Tencent Cloud API signing requires a valid api_version")
 		}
-		if scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256 {
+		if scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256 || scheme == authSchemeTencentQCloud || scheme == authSchemeTencentQCloud256 {
 			if !strings.EqualFold(request.Method, http.MethodGet) && !strings.EqualFold(request.Method, http.MethodPost) {
-				return fmt.Errorf("Tencent Cloud API v1 requires method GET or POST")
+				return fmt.Errorf("Tencent Cloud query signing requires method GET or POST")
 			}
 			parsed, err := url.Parse(request.URL)
-			if err != nil || (parsed.EscapedPath() != "" && parsed.EscapedPath() != "/") {
+			if err != nil {
+				return fmt.Errorf("Tencent Cloud query signing requires a valid URL")
+			}
+			path := parsed.EscapedPath()
+			if path == "" {
+				path = "/"
+			}
+			if scheme == authSchemeTencentQCloud || scheme == authSchemeTencentQCloud256 {
+				host := strings.ToLower(parsed.Hostname())
+				if path != "/v2/index.php" || !strings.HasSuffix(host, ".api.qcloud.com") || host == ".api.qcloud.com" {
+					return fmt.Errorf("Tencent Cloud legacy API requires a product .api.qcloud.com endpoint with path /v2/index.php")
+				}
+			} else if path != "/" {
 				return fmt.Errorf("Tencent Cloud API v1 requires the root request path")
 			}
 			for name := range parsed.Query() {

@@ -51,6 +51,8 @@ const (
 	authSchemeTencentTC3        = "tc3"
 	authSchemeTencentV1         = "tc1"
 	authSchemeTencentV1SHA256   = "tc1-sha256"
+	authSchemeTencentQCloud     = "qcloud"
+	authSchemeTencentQCloud256  = "qcloud-sha256"
 	authSchemeTencentCOS        = "cos"
 	defaultHTTPClientTimeout    = 60 * time.Second
 )
@@ -509,7 +511,7 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS", Version: "tc3+tc1+tc1-sha256+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+cos",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -517,17 +519,18 @@ func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, erro
 
 func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
 	return json.Marshal(map[string]string{
-		"api_reference": "https://cloud.tencent.com/document/api",
-		"tc3_signature": "https://intl.cloud.tencent.com/document/product/627/64494",
-		"tc1_signature": "https://cloud.tencent.com/document/api/583/17239",
-		"cos_signature": "https://intl.cloud.tencent.com/document/product/436/7778",
+		"api_reference":    "https://cloud.tencent.com/document/api",
+		"tc3_signature":    "https://intl.cloud.tencent.com/document/product/627/64494",
+		"tc1_signature":    "https://cloud.tencent.com/document/api/583/17239",
+		"qcloud_signature": "https://cloud.tencent.com/document/product/216/1714",
+		"cos_signature":    "https://intl.cloud.tencent.com/document/product/436/7778",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentCOS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, or cos")
 	}
 	request, payloadHash, cleanup, err := buildSignedHTTPRequest(ctx, invocation)
 	if err != nil {
@@ -551,6 +554,10 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeTencentV1, authSchemeTencentV1SHA256:
 		if err := signTencentV1(request, credentials, invocation, adapter.config.Now().UTC(), adapter.config.Nonce(), scheme == authSchemeTencentV1SHA256); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeTencentQCloud, authSchemeTencentQCloud256:
+		if err := signTencentQCloud(request, credentials, invocation, adapter.config.Now().UTC(), adapter.config.Nonce(), scheme == authSchemeTencentQCloud256); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeTencentCOS:
@@ -1378,39 +1385,67 @@ func signTencentTC3(request *http.Request, payloadHash string, credentials Tence
 }
 
 func signTencentV1(request *http.Request, credentials TencentCredentials, invocation Invocation, now time.Time, nonce string, useSHA256 bool) error {
+	return signTencentQuery(request, credentials, invocation, now, nonce, tencentQuerySigningOptions{
+		protocol: "Tencent Cloud API v1", requiredPath: "/", includeVersion: true, useSHA256: useSHA256,
+	})
+}
+
+func signTencentQCloud(request *http.Request, credentials TencentCredentials, invocation Invocation, now time.Time, nonce string, useSHA256 bool) error {
+	host := strings.ToLower(request.URL.Hostname())
+	if !strings.HasSuffix(host, ".api.qcloud.com") || host == ".api.qcloud.com" {
+		return fmt.Errorf("Tencent Cloud legacy API requires a product .api.qcloud.com endpoint")
+	}
+	return signTencentQuery(request, credentials, invocation, now, nonce, tencentQuerySigningOptions{
+		protocol: "Tencent Cloud legacy API", requiredPath: "/v2/index.php", emitSHA1Method: true, useSHA256: useSHA256,
+	})
+}
+
+type tencentQuerySigningOptions struct {
+	protocol       string
+	requiredPath   string
+	includeVersion bool
+	emitSHA1Method bool
+	useSHA256      bool
+}
+
+func signTencentQuery(request *http.Request, credentials TencentCredentials, invocation Invocation, now time.Time, nonce string, options tencentQuerySigningOptions) error {
 	if parsedNonce, err := strconv.ParseUint(nonce, 10, 63); err != nil || parsedNonce == 0 {
-		return fmt.Errorf("Tencent Cloud API v1 requires a positive numeric nonce")
+		return fmt.Errorf("%s requires a positive numeric nonce", options.protocol)
 	}
 	if request.Method != http.MethodGet && request.Method != http.MethodPost {
-		return fmt.Errorf("Tencent Cloud API v1 requires method GET or POST")
+		return fmt.Errorf("%s requires method GET or POST", options.protocol)
 	}
-	if request.URL.EscapedPath() != "" && request.URL.EscapedPath() != "/" {
-		return fmt.Errorf("Tencent Cloud API v1 requires the root request path")
+	path := request.URL.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if path != options.requiredPath {
+		return fmt.Errorf("%s requires request path %s", options.protocol, options.requiredPath)
 	}
 	values := request.URL.Query()
 	if request.Method == http.MethodPost {
 		if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
-			return fmt.Errorf("Tencent Cloud API v1 POST requires application/x-www-form-urlencoded")
+			return fmt.Errorf("%s POST requires application/x-www-form-urlencoded", options.protocol)
 		}
 		if request.URL.RawQuery != "" {
-			return fmt.Errorf("Tencent Cloud API v1 POST does not allow query parameters outside the form body")
+			return fmt.Errorf("%s POST does not allow query parameters outside the form body", options.protocol)
 		}
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
-			return fmt.Errorf("read Tencent Cloud API v1 form body: %w", err)
+			return fmt.Errorf("read %s form body: %w", options.protocol, err)
 		}
 		values, err = url.ParseQuery(string(body))
 		if err != nil {
-			return fmt.Errorf("parse Tencent Cloud API v1 form body: %w", err)
+			return fmt.Errorf("parse %s form body: %w", options.protocol, err)
 		}
 	}
 	parameters := make(map[string]string)
 	for name, entries := range values {
 		if isTencentV1ControlledParameter(name) {
-			return fmt.Errorf("caller-supplied Tencent Cloud API v1 signing parameter %q is forbidden", name)
+			return fmt.Errorf("caller-supplied %s signing parameter %q is forbidden", options.protocol, name)
 		}
 		if len(entries) != 1 {
-			return fmt.Errorf("Tencent Cloud API v1 query parameter %q must have exactly one value", name)
+			return fmt.Errorf("%s parameter %q must have exactly one value", options.protocol, name)
 		}
 		parameters[name] = entries[0]
 	}
@@ -1418,7 +1453,9 @@ func signTencentV1(request *http.Request, credentials TencentCredentials, invoca
 	parameters["Nonce"] = nonce
 	parameters["SecretId"] = credentials.SecretID
 	parameters["Timestamp"] = strconv.FormatInt(now.UTC().Unix(), 10)
-	parameters["Version"] = invocation.APIVersion
+	if options.includeVersion {
+		parameters["Version"] = invocation.APIVersion
+	}
 	if invocation.Region != "" {
 		parameters["Region"] = invocation.Region
 	}
@@ -1426,12 +1463,14 @@ func signTencentV1(request *http.Request, credentials TencentCredentials, invoca
 		parameters["Token"] = credentials.Token
 	}
 	var algorithm func() hash.Hash = sha1.New
-	if useSHA256 {
+	if options.useSHA256 {
 		parameters["SignatureMethod"] = "HmacSHA256"
 		algorithm = sha256.New
+	} else if options.emitSHA1Method {
+		parameters["SignatureMethod"] = "HmacSHA1"
 	}
 	canonical := canonicalTencentV1Parameters(parameters)
-	stringToSign := request.Method + request.URL.Host + "/?" + canonical
+	stringToSign := request.Method + request.URL.Host + path + "?" + canonical
 	parameters["Signature"] = base64.StdEncoding.EncodeToString(hmacBytes(algorithm, []byte(credentials.SecretKey), []byte(stringToSign)))
 	encoded := encodeTencentV1Parameters(parameters)
 	if request.Method == http.MethodGet {
