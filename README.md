@@ -122,6 +122,12 @@ S3 `PutObject`/`UploadPart` 的 SigV4 流式上传使用 `payload_mode=aws-chunk
 {"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-chunked","service":"s3","operation":"put-object","region":"us-east-1","method":"PUT","url":"https://<bucket>.s3.us-east-1.amazonaws.com/object","body_file":"/approved/uploads/object.bin","force":true}}
 ```
 
+需要 SigV4 EventStream 请求签名的有限 HTTP 流使用 `payload_mode=aws-eventstream`。`body_file` 是一个或多个连续的、CRC 有效但尚未添加签名外层的 Amazon EventStream 帧；服务端验证单帧边界后添加 `:date`、链式 `:chunk-signature` 和终止帧。交互式 WebSocket 会话不属于这个有限 HTTP 请求模式。
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-eventstream","service":"transcribestreaming","operation":"start-stream-transcription","region":"us-east-1","method":"POST","url":"https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription","body_file":"/approved/streams/audio.events","response_file":"/approved/streams/transcript.events","force":true}}
+```
+
 Azure 查询：
 
 ```json

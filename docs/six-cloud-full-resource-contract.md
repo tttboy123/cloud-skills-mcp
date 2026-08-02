@@ -77,6 +77,10 @@ remain available through the guarded resource gateway.
   generate `aws-chunked` framing, content lengths, seed and chained chunk
   signatures in-process; callers cannot provide signing or transfer-length
   headers.
+- Finite AWS SigV4 HTTP EventStream requests accept only bounded, CRC-valid
+  unsigned frames, then use the official SDK stream signer to create dated,
+  chained signing envelopes and a terminal frame. Interactive WebSocket
+  sessions remain a separate transport family.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.

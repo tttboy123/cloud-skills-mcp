@@ -132,14 +132,20 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	if payloadMode != "" {
-		if request.Provider != ProviderAWS || payloadMode != awsPayloadModeChunked {
+		if request.Provider != ProviderAWS || (payloadMode != awsPayloadModeChunked && payloadMode != awsPayloadModeEventStream) {
 			return fmt.Errorf("unsupported payload_mode %q", request.PayloadMode)
 		}
-		if normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) != authSchemeAWSSigV4 || !strings.EqualFold(request.Service, "s3") {
-			return fmt.Errorf("aws-chunked requires AWS SigV4 and service s3")
+		if normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) != authSchemeAWSSigV4 {
+			return fmt.Errorf("%s requires AWS SigV4", payloadMode)
 		}
-		if !strings.EqualFold(request.Method, http.MethodPut) || (request.Body == nil && request.BodyFile == "") {
-			return fmt.Errorf("aws-chunked requires a PUT request body")
+		if request.Body == nil && request.BodyFile == "" {
+			return fmt.Errorf("%s requires a request body", payloadMode)
+		}
+		if payloadMode == awsPayloadModeChunked && (!strings.EqualFold(request.Service, "s3") || !strings.EqualFold(request.Method, http.MethodPut)) {
+			return fmt.Errorf("aws-chunked requires service s3 and method PUT")
+		}
+		if payloadMode == awsPayloadModeEventStream && !strings.EqualFold(request.Method, http.MethodPost) {
+			return fmt.Errorf("aws-eventstream requires method POST")
 		}
 	}
 	for name, value := range map[string]string{

@@ -158,6 +158,14 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			return InvocationResult{}, err
 		}
 		payloadHash = awsSigV4StreamingPayload
+	} else if payloadMode == awsPayloadModeEventStream {
+		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Method, http.MethodPost) {
+			return InvocationResult{}, fmt.Errorf("aws-eventstream requires AWS SigV4 and method POST")
+		}
+		if err := configureAWSEventStreamRequest(request); err != nil {
+			return InvocationResult{}, err
+		}
+		payloadHash = awsSigV4StreamingEventsPayload
 	} else if payloadMode != "" {
 		return InvocationResult{}, fmt.Errorf("unsupported AWS payload_mode %q", invocation.PayloadMode)
 	}
@@ -179,6 +187,12 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			}
 			request.Body = newAWSSigV4ChunkedReader(request.Body, decodedContentLength, awsCredentials, "s3", strings.ToLower(invocation.Region), signingTime, seed, defaultAWSChunkSize)
 			request.GetBody = nil
+		} else if payloadMode == awsPayloadModeEventStream {
+			seed, err := awsSeedSignature(request.Header.Get("Authorization"))
+			if err != nil {
+				return InvocationResult{}, err
+			}
+			request.Body = newAWSSigV4EventStreamReader(ctx, request.Body, awsCredentials, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now, seed)
 		}
 	} else if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, signingTime); err != nil {
 		return InvocationResult{}, fmt.Errorf("sign AWS SigV4a request: %w", err)

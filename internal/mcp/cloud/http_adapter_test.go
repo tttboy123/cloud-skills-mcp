@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/asn1"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,12 +14,15 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/smithy-go/eventstream"
 )
 
 type ecdsaSignaturePair struct {
@@ -439,6 +443,115 @@ func TestAWSSigV4ChunkedHelpersRejectMalformedInputAndPreserveEncoding(t *testin
 	empty, err := awsChunkedEncodedLength(0, defaultAWSChunkSize)
 	if err != nil || empty != 86 {
 		t.Fatalf("empty encoded length=%d err=%v", empty, err)
+	}
+}
+
+func TestAWSSigV4EventStreamAdapterSignsFramesAndTerminalMessage(t *testing.T) {
+	innerMessage := eventstream.Message{
+		Headers: eventstream.Headers{
+			{Name: eventstream.MessageTypeHeader, Value: eventstream.StringValue(eventstream.EventMessageType)},
+			{Name: eventstream.EventTypeHeader, Value: eventstream.StringValue("AudioEvent")},
+			{Name: eventstream.ContentTypeHeader, Value: eventstream.StringValue("application/octet-stream")},
+		},
+		Payload: []byte("audio-frame"),
+	}
+	var unsigned bytes.Buffer
+	if err := eventstream.NewEncoder().Encode(&unsigned, innerMessage); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	bodyFile := filepath.Join(root, "events.bin")
+	if err := os.WriteFile(bodyFile, unsigned.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("X-Amz-Content-Sha256") != awsSigV4StreamingEventsPayload || request.Header.Get("Content-Type") != "application/vnd.amazon.eventstream" {
+			t.Fatalf("event-stream headers=%v", request.Header)
+		}
+		if request.ContentLength != -1 || request.GetBody != nil {
+			t.Fatalf("event-stream content length=%d getBody=%v", request.ContentLength, request.GetBody != nil)
+		}
+		decoder := eventstream.NewDecoder()
+		first, err := decoder.Decode(request.Body, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(first.Payload, unsigned.Bytes()) || first.Headers.Get(eventstream.DateHeader) == nil || first.Headers.Get(eventstream.ChunkSignatureHeader) == nil {
+			t.Fatalf("signed event=%#v", first)
+		}
+		terminal, err := decoder.Decode(request.Body, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(terminal.Payload) != 0 || terminal.Headers.Get(eventstream.ChunkSignatureHeader) == nil {
+			t.Fatalf("terminal event=%#v", terminal)
+		}
+		if _, err := decoder.Decode(request.Body, nil); err != io.EOF {
+			t.Fatalf("event stream end error=%v", err)
+		}
+		return httpResponse(200, `{"ok":true}`), nil
+	})
+	adapter := NewAWSRESTAdapter(AWSRESTConfig{
+		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}}, HTTP: doer, Now: func() time.Time { return now },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4", PayloadMode: "aws-eventstream", Method: "POST",
+		URL: "https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", Service: "transcribestreaming", Operation: "start-stream-transcription", Region: "us-east-1", BodyFile: bodyFile,
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAWSSigV4EventStreamPolicyRejectsUnsafeCombinations(t *testing.T) {
+	valid := Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4", PayloadMode: "aws-eventstream", Service: "transcribestreaming", Operation: "start-stream-transcription",
+		Method: "POST", URL: "https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", Region: "us-east-1", Body: "encoded-event",
+	}
+	if err := validateInvocation(valid, nil); err != nil {
+		t.Fatalf("valid aws-eventstream request rejected: %v", err)
+	}
+	for _, mutate := range []func(*Invocation){
+		func(request *Invocation) { request.AuthScheme = "sigv4a"; request.RegionSet = "*" },
+		func(request *Invocation) { request.Method = "GET" },
+		func(request *Invocation) { request.Body = nil },
+	} {
+		request := valid
+		mutate(&request)
+		if err := validateInvocation(request, nil); err == nil {
+			t.Fatalf("unsafe aws-eventstream request accepted: %#v", request)
+		}
+	}
+}
+
+func TestAWSSigV4EventStreamRejectsMalformedAndOversizedFrames(t *testing.T) {
+	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	credentials := aws.Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}
+	seed := bytes.Repeat([]byte{1}, sha256.Size)
+	oversizedPrelude := make([]byte, 8)
+	binary.BigEndian.PutUint32(oversizedPrelude[:4], maxAWSEventStreamFrameBytes+1)
+	for name, input := range map[string][]byte{
+		"truncated-prelude": {0},
+		"oversized-frame":   oversizedPrelude,
+		"invalid-crc":       make([]byte, awsEventStreamMinimumFrameBytes),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "invalid-crc" {
+				binary.BigEndian.PutUint32(input[:4], awsEventStreamMinimumFrameBytes)
+			}
+			reader := newAWSSigV4EventStreamReader(t.Context(), io.NopCloser(bytes.NewReader(input)), credentials, "transcribestreaming", "us-east-1", func() time.Time { return now }, seed)
+			if _, err := io.ReadAll(reader); err == nil {
+				t.Fatalf("accepted malformed event stream frame %q", name)
+			}
+		})
+	}
+	request, err := http.NewRequest(http.MethodPost, "https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configureAWSEventStreamRequest(request); err == nil {
+		t.Fatal("accepted event stream request without body")
 	}
 }
 
