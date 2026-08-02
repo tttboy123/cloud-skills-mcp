@@ -13,6 +13,7 @@ func TestDefaultRuntimeLoadsOnlySafetyConfiguration(t *testing.T) {
 	t.Setenv("CLOUD_SKILLS_ALLOW_MUTATIONS", "1")
 	t.Setenv("CLOUD_SKILLS_ALLOW_SENSITIVE", "1")
 	t.Setenv("CLOUD_SKILLS_MAX_OUTPUT_BYTES", "4096")
+	t.Setenv("CLOUD_SKILLS_MAX_RESPONSE_FILE_BYTES", "8192")
 	t.Setenv("CLOUD_SKILLS_ALLOWED_FILE_ROOTS", strings.Join([]string{"/tmp/one", "/tmp/two"}, string(os.PathListSeparator)))
 	t.Setenv("CLOUD_SKILLS_AWS_ALLOWED_ENDPOINT_HOSTS", "new-api.example.aws")
 	t.Setenv("CLOUD_SKILLS_AZURE_ALLOWED_ENDPOINT_HOSTS", "new-api.example.microsoft,*.evil.example,127.0.0.1,new-api.example.microsoft")
@@ -20,7 +21,7 @@ func TestDefaultRuntimeLoadsOnlySafetyConfiguration(t *testing.T) {
 	t.Setenv("CLOUD_SKILLS_TENCENT_ALLOWED_ENDPOINT_HOSTS", "new-api.example.tencent")
 	t.Setenv("CLOUD_SKILLS_AUDIT_LOG", filepath.Join(t.TempDir(), "audit", "events.jsonl"))
 	runtime := DefaultRuntime()
-	if !runtime.AllowMutations || !runtime.AllowSensitive || runtime.MaxOutputBytes != 4096 {
+	if !runtime.AllowMutations || !runtime.AllowSensitive || runtime.MaxOutputBytes != 4096 || runtime.MaxResponseFileBytes != 8192 {
 		t.Fatalf("runtime safety config=%#v", runtime)
 	}
 	if strings.Join(runtime.AllowedFileRoots, ",") != "/tmp/one,/tmp/two" || runtime.Audit == nil {
@@ -71,7 +72,7 @@ func TestCloudFileAuditSinkWritesMetadataMode0600(t *testing.T) {
 
 func TestHelpTextDocumentsUniversalSurfaceAndCredentialBoundary(t *testing.T) {
 	help := HelpText()
-	for _, value := range []string{"19 tools", "AWS", "Azure", "Google Cloud", "Alibaba Cloud", "Tencent Cloud", "Baidu", "CLOUD_SKILLS_ALLOW_MUTATIONS", "credentials are never returned"} {
+	for _, value := range []string{"19 tools", "AWS", "Azure", "Google Cloud", "Alibaba Cloud", "Tencent Cloud", "Baidu", "CLOUD_SKILLS_ALLOW_MUTATIONS", "credentials are never returned", "response_file"} {
 		if !strings.Contains(help, value) {
 			t.Fatalf("help missing %q", value)
 		}

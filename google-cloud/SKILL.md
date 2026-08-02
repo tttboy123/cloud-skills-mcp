@@ -23,6 +23,7 @@ Use the unified MCP server for authenticated Google Cloud REST APIs. The gateway
 - `headers`: non-credential conditional or product headers.
 - `body`: JSON-compatible request body.
 - `body_file`: binary/media upload body under an operator-approved `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` directory. Do not combine it with `body`; use resumable/chunk upload APIs above 64 MiB.
+- `response_file`: new approved-root file for media downloads, exports, or other large responses. Use the official `Range` header above the configured per-call limit; existing files are never overwritten.
 
 Example read: `gcp_api_read(method="GET", url="https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances", project="<project>")`.
 

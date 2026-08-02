@@ -17,8 +17,9 @@ var azureApplicationIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{
 var endpointLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 const (
-	maxRequestPayloadBytes = 1024 * 1024
-	maxRequestFileBytes    = 64 * 1024 * 1024
+	maxRequestPayloadBytes         = 1024 * 1024
+	maxRequestFileBytes            = 64 * 1024 * 1024
+	defaultResponseFileLimit int64 = 1024 * 1024 * 1024
 )
 
 var sensitiveTerms = []string{
@@ -171,6 +172,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 		if info.Size() > maxRequestFileBytes {
 			return fmt.Errorf("body_file exceeds %d bytes", maxRequestFileBytes)
+		}
+	}
+	if request.ResponseFile != "" {
+		if _, err := resolveResponseFileTarget(request.ResponseFile, allowedFileRoots); err != nil {
+			return err
 		}
 	}
 	if len(request.Headers) > 64 {
@@ -329,6 +335,45 @@ func pathAllowed(path string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+func resolveResponseFileTarget(path string, roots []string) (string, error) {
+	if len(roots) == 0 || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("response_file is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
+	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve response_file: %w", err)
+	}
+	if _, err := os.Lstat(target); err == nil {
+		return "", fmt.Errorf("response_file already exists")
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("inspect response_file: %w", err)
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(target))
+	if err != nil {
+		return "", fmt.Errorf("resolve response_file parent: %w", err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("response_file parent must be an existing directory")
+	}
+	target = filepath.Join(parent, filepath.Base(target))
+	for _, root := range roots {
+		rootPath, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		rootPath, err = filepath.EvalSymlinks(rootPath)
+		if err != nil {
+			continue
+		}
+		relative, err := filepath.Rel(rootPath, target)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return target, nil
+		}
+	}
+	return "", fmt.Errorf("response_file is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
 }
 
 func validateRESTTarget(provider Provider, method, rawURL string) error {

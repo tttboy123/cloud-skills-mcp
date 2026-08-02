@@ -7,9 +7,10 @@
 > **Current-state note (2026-08-02):** This is a historical design record.
 > The active product boundary is defined by `README.md` and
 > `docs/six-cloud-full-resource-contract.md`: the universal stdio server covers
-> the six providers through 19 guarded gateway tools, while the 15 Tencent
-> fine-grained tools remain a compatibility surface. Phased resource lists and
-> placeholders below are retained as design history.
+> the six providers through 19 guarded direct-HTTPS gateway tools. The former
+> CLI-backed Tencent compatibility server is no longer built, installed, or
+> shipped. CLI/fallback designs, phased resource lists, and placeholders below
+> are retained only as design history and do not describe the current runtime.
 
 ## 1. 目标
 

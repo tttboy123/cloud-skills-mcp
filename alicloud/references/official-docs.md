@@ -5,5 +5,6 @@
 - Official credentials-go provider chain: https://github.com/aliyun/credentials-go
 - OpenAPI Explorer: https://api.aliyun.com/
 - OpenAPI MCP Server guide: https://help.aliyun.com/en/openapi/user-guide/openapi-mcp-server-guide
+- OSS GetObject and Range download: https://www.alibabacloud.com/help/en/oss/developer-reference/getobject
 
 The universal adapter signs general OpenAPI requests with ACS3 and OSS data-plane requests with OSS4. It never executes Alibaba Cloud CLI.

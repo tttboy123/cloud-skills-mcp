@@ -26,6 +26,7 @@ Use the unified MCP gateway for API 3.0 product actions and COS REST operations.
 - `method` and `url`: exact official Tencent Cloud HTTPS request.
 - `parameters`: optional scalar query parameters; API 3.0 normally uses a JSON `body`.
 - `headers`, `body`, `body_file`: non-credential request data.
+- `response_file`: new approved-root file for COS objects, exports, or other large responses. Use the documented single `Range` above the configured per-call limit; existing files are never overwritten.
 
 Example read: `tencent_api_read(auth_scheme="tc3", service="cvm", operation="DescribeInstances", api_version="2017-03-12", region="ap-shanghai", method="POST", url="https://cvm.tencentcloudapi.com/", body={"Limit":20})`.
 

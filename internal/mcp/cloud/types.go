@@ -73,6 +73,9 @@ type Invocation struct {
 	Headers      map[string]string
 	Body         any
 	BodyFile     string
+	ResponseFile string
+	// MaxResponseFileBytes is runtime policy, not caller-controlled MCP input.
+	MaxResponseFileBytes int64
 }
 
 type InvocationResult struct {
@@ -114,6 +117,7 @@ type Runtime struct {
 	AllowedFileRoots     []string
 	AllowedEndpointHosts map[Provider][]string
 	MaxOutputBytes       int
+	MaxResponseFileBytes int64
 	Audit                AuditSink
 	Now                  func() time.Time
 }
@@ -124,6 +128,9 @@ func (runtime Runtime) normalized() Runtime {
 	}
 	if runtime.MaxOutputBytes <= 0 {
 		runtime.MaxOutputBytes = defaultOutputSize
+	}
+	if runtime.MaxResponseFileBytes <= 0 {
+		runtime.MaxResponseFileBytes = defaultResponseFileLimit
 	}
 	if runtime.Now == nil {
 		runtime.Now = time.Now

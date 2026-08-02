@@ -25,6 +25,7 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 - `region`: required by OSS4 and recommended as operation context.
 - `method` and `url`: exact official Alibaba Cloud HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` or `body_file` for request payloads.
+- `response_file`: new approved-root file for OSS objects, exports, or other large responses. Use the documented `Range` header above the configured per-call limit; existing files are never overwritten.
 
 Example read: `alicloud_api_read(auth_scheme="acs3", service="ecs", operation="DescribeInstances", api_version="2014-05-26", region="cn-hangzhou", method="POST", url="https://ecs.cn-hangzhou.aliyuncs.com/", parameters={"RegionId":"cn-hangzhou","PageSize":20})`.
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -117,7 +118,7 @@ func (adapter *AzureRESTAdapter) invokeHTTP(ctx context.Context, invocation Invo
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("Azure REST API request: %w", err)
 	}
-	output, err := readRESTResponse(response, adapter.config.MaxBodyBytes)
+	output, err := readRESTResponseWithFile(response, adapter.config.MaxBodyBytes, invocation.ResponseFile, invocation.MaxResponseFileBytes)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -384,7 +385,7 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("Google Cloud API request: %w", err)
 	}
-	output, err := readRESTResponse(response, adapter.config.MaxBodyBytes)
+	output, err := readRESTResponseWithFile(response, adapter.config.MaxBodyBytes, request.ResponseFile, request.MaxResponseFileBytes)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -429,10 +430,17 @@ func (provider *gcpADCTokenProvider) Token(ctx context.Context) (string, error) 
 }
 
 func readRESTResponse(response *http.Response, maxBytes int64) ([]byte, error) {
+	return readRESTResponseWithFile(response, maxBytes, "", 0)
+}
+
+func readRESTResponseWithFile(response *http.Response, maxBytes int64, responseFile string, maxResponseFileBytes int64) ([]byte, error) {
 	if response == nil || response.Body == nil {
 		return nil, fmt.Errorf("provider returned an empty HTTP response")
 	}
 	defer response.Body.Close()
+	if response.StatusCode >= 200 && response.StatusCode < 300 && responseFile != "" {
+		return streamRESTResponseToFile(response, responseFile, maxResponseFileBytes)
+	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read provider response: %w", err)
@@ -444,6 +452,70 @@ func readRESTResponse(response *http.Response, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("provider returned HTTP %d: %s", response.StatusCode, sdk.RedactSecret(string(data)))
 	}
 	return data, nil
+}
+
+func streamRESTResponseToFile(response *http.Response, responseFile string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultResponseFileLimit
+	}
+	target, err := filepath.Abs(responseFile)
+	if err != nil {
+		return nil, fmt.Errorf("resolve response_file: %w", err)
+	}
+	if _, err := os.Lstat(target); err == nil {
+		return nil, fmt.Errorf("response_file already exists")
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect response_file: %w", err)
+	}
+	if response.ContentLength > maxBytes {
+		return nil, fmt.Errorf("provider response download exceeds %d bytes", maxBytes)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(target), ".cloud-skills-download-*")
+	if err != nil {
+		return nil, fmt.Errorf("create response_file temporary file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return nil, fmt.Errorf("secure response_file temporary file: %w", err)
+	}
+	written, copyErr := io.Copy(temporary, io.LimitReader(response.Body, maxBytes+1))
+	if copyErr != nil {
+		temporary.Close()
+		return nil, fmt.Errorf("write response_file: %w", copyErr)
+	}
+	if written > maxBytes {
+		temporary.Close()
+		return nil, fmt.Errorf("provider response download exceeds %d bytes", maxBytes)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return nil, fmt.Errorf("sync response_file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return nil, fmt.Errorf("close response_file: %w", err)
+	}
+	// A same-directory hard link publishes the complete file atomically and
+	// fails if another process created the target after policy validation.
+	if err := os.Link(temporaryPath, target); err != nil {
+		if _, statErr := os.Lstat(target); statErr == nil {
+			return nil, fmt.Errorf("response_file already exists")
+		}
+		return nil, fmt.Errorf("publish response_file: %w", err)
+	}
+	metadata, err := json.Marshal(map[string]any{
+		"response_file": target,
+		"bytes":         written,
+		"content_type":  response.Header.Get("Content-Type"),
+		"etag":          response.Header.Get("ETag"),
+		"request_id":    responseRequestID(response.Header),
+	})
+	if err != nil {
+		_ = os.Remove(target)
+		return nil, fmt.Errorf("encode response_file metadata: %w", err)
+	}
+	return metadata, nil
 }
 
 func responseRequestID(headers http.Header) string {

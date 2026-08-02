@@ -79,6 +79,13 @@ remain available through the guarded resource gateway.
 - REST data-plane uploads use `body_file`, never embed file content in MCP
   context, accept regular files only, and are capped at 64 MiB per request;
   provider multipart or resumable APIs cover larger objects.
+- Successful response bodies can use `response_file` to stream into a new file
+  below an approved root without entering MCP context. Existing targets are
+  never overwritten; a mode-0600 same-directory temporary file is synced and
+  atomically published only after the bounded download completes. The default
+  1 GiB per-call bound is controlled by
+  `CLOUD_SKILLS_MAX_RESPONSE_FILE_BYTES`; official `Range` APIs cover larger
+  objects. Provider error bodies never create the target file.
 - Azure uncommon data-plane endpoints can use a first-class, validated
   `audience` identifier. The value is never a credential: the adapter derives
   the `.default` scope internally.
@@ -92,7 +99,8 @@ remain available through the guarded resource gateway.
   comma-separated exact DNS hostnames only; schemes, ports, paths, IPs, and
   wildcard/subdomain inheritance are not accepted.
 - Responses are capped and credential-shaped fields are redacted before they
-  enter MCP output.
+  enter MCP output. A `response_file` call returns only path/byte-count/content
+  metadata through MCP.
 
 ## Approval, audit and retry
 

@@ -139,7 +139,7 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 	if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, payloadHash, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now().UTC()); err != nil {
 		return InvocationResult{}, fmt.Errorf("sign AWS SigV4 request: %w", err)
 	}
-	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, "AWS API")
+	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, invocation, "AWS API")
 }
 
 type AlibabaCredentials struct {
@@ -248,7 +248,7 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 			return InvocationResult{}, err
 		}
 	}
-	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, "Alibaba Cloud API")
+	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, invocation, "Alibaba Cloud API")
 }
 
 type TencentCredentials struct {
@@ -344,7 +344,7 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 			return InvocationResult{}, err
 		}
 	}
-	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, "Tencent Cloud API")
+	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, invocation, "Tencent Cloud API")
 }
 
 func normalizeSignedHTTPConfig(client *HTTPDoer, timeout *time.Duration, maxBodyBytes *int64, now *func() time.Time) {
@@ -472,12 +472,12 @@ func stringValues(value any) ([]string, error) {
 	}
 }
 
-func invokeSignedHTTP(client HTTPDoer, maxBodyBytes int64, request *http.Request, providerName string) (InvocationResult, error) {
+func invokeSignedHTTP(client HTTPDoer, maxBodyBytes int64, request *http.Request, invocation Invocation, providerName string) (InvocationResult, error) {
 	response, err := client.Do(request)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("%s HTTP request: %w", providerName, err)
 	}
-	output, err := readRESTResponse(response, maxBodyBytes)
+	output, err := readRESTResponseWithFile(response, maxBodyBytes, invocation.ResponseFile, invocation.MaxResponseFileBytes)
 	if err != nil {
 		return InvocationResult{}, err
 	}

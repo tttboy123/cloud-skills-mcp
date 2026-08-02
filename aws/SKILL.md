@@ -25,6 +25,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
 - `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root.
+- `response_file`: optional new approved-root file for large/binary responses. Use the documented `Range` header for objects larger than the configured per-call limit; existing files are never overwritten.
 
 Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="describe-instances", region="us-east-1", method="POST", url="https://ec2.us-east-1.amazonaws.com/", headers={"Content-Type":"application/x-www-form-urlencoded"}, body="Action=DescribeInstances&Version=2016-11-15&MaxResults=20")`.
 

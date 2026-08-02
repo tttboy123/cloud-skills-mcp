@@ -33,6 +33,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 - REST 只允许官方 HTTPS 域名、443 端口且禁止 redirect；调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。Azure 非常见数据面可提供公开的 Entra `audience` 标识，但不能提供 token。
 - 新发布且尚未进入内置域名表的官方 endpoint，只能由 operator 通过 `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` 追加逗号分隔的精确 hostname；不接受 URL、端口、子域 wildcard 或 MCP 参数。
 - 六云数据面上传均可使用 `body_file`；本地文件只允许位于 `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` 下，且会解析 symlink 后再判断。单文件默认上限 64 MiB，更大对象使用厂商 multipart/chunk API。
+- 六云成功响应均可使用 `response_file` 流式写入批准目录中的新文件，正文不会进入 MCP/模型上下文。目标文件绝不覆盖，临时文件以 mode `0600` 写完并同步后才原子发布；默认单次上限 1 GiB，可用 `CLOUD_SKILLS_MAX_RESPONSE_FILE_BYTES` 收紧或调大，更大对象使用厂商 `Range` API 分段下载。
 - HTTP 响应有大小上限；结果会做 credential-field redaction。
 - `CLOUD_SKILLS_AUDIT_LOG` 写入 mode `0600` JSONL。审计不记录请求 body、headers、response 或 URL query；写操作的预执行审计失败时 fail closed。
 - MCP server 不创建、不更新、不导出凭证。凭证只来自各云官方身份链或 operator 注入的 AKSK/IAM 环境。
@@ -121,7 +122,13 @@ GCP 查询：
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
 
-Alibaba ACS3 使用 `auth_scheme=acs3`、`api_version`、`operation` 和精确 URL；OSS 使用 `auth_scheme=oss4`。Tencent API 3.0 使用 `auth_scheme=tc3`、`api_version`、`operation` 和精确 URL；COS 使用 `auth_scheme=cos`。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`，文件内容不会进入模型上下文。
+Alibaba ACS3 使用 `auth_scheme=acs3`、`api_version`、`operation` 和精确 URL；OSS 使用 `auth_scheme=oss4`。Tencent API 3.0 使用 `auth_scheme=tc3`、`api_version`、`operation` 和精确 URL；COS 使用 `auth_scheme=cos`。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；对象下载、日志导出和备份响应使用 `response_file`，文件内容不会进入模型上下文。
+
+Google Cloud Storage 分段下载示例（其他五云同样使用各自官方 GetObject/Get Blob URL 与 `Range` header）：
+
+```json
+{"name":"gcp_api_read","arguments":{"method":"GET","url":"https://storage.googleapis.com/storage/v1/b/<bucket>/o/<url-encoded-object>?alt=media","headers":{"Range":"bytes=0-104857599"},"response_file":"/approved/downloads/object.part-000"}}
+```
 
 ## 验证
 
@@ -156,7 +163,7 @@ scripts/ci/                # 协议、安装与安全验证
 
 ## 官方文档
 
-每份 Skill 的 `references/official-docs.md` 保存对应云厂商的认证、HTTP 签名、资源发现和 API reference 链接。通用访问层的完成定义、安全合同与真实验收门见 [docs/six-cloud-full-resource-contract.md](docs/six-cloud-full-resource-contract.md)，逐项完成证据与仍未通过的 live gate 见 [docs/goal-completion-matrix.md](docs/goal-completion-matrix.md)。
+每份 Skill 的 `references/official-docs.md` 保存对应云厂商的认证、HTTP 签名、资源发现和 API reference 链接。通用访问层的完成定义、安全合同与真实验收门见 [docs/six-cloud-full-resource-contract.md](docs/six-cloud-full-resource-contract.md)，认证/传输族的真实覆盖与缺口见 [docs/api-protocol-coverage.md](docs/api-protocol-coverage.md)，逐项完成证据与仍未通过的 live gate 见 [docs/goal-completion-matrix.md](docs/goal-completion-matrix.md)。
 
 ## License
 

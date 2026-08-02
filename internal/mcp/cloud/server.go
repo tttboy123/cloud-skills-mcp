@@ -74,6 +74,7 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithObject("headers", mcp.Description("Non-credential HTTP headers."), mcp.AdditionalProperties(map[string]any{"type": "string"})),
 		mcp.WithAny("body", mcp.Description("Optional JSON-compatible REST request body.")),
 		mcp.WithString("body_file", mcp.Description("Optional local REST request body file. The resolved regular file must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and cannot be combined with body.")),
+		mcp.WithString("response_file", mcp.Description("Optional new local file for a successful HTTP response body. The target must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and is never overwritten.")),
 		mcp.WithReadOnlyHintAnnotation(!mutating),
 		mcp.WithDestructiveHintAnnotation(mutating),
 		mcp.WithIdempotentHintAnnotation(!mutating),
@@ -138,6 +139,13 @@ func makeInvokeHandler(runtime Runtime, provider Provider, mode InvocationMode) 
 		if err := validateInvocationWithEndpointHosts(invocation, runtime.AllowedFileRoots, runtime.AllowedEndpointHosts[provider]); err != nil {
 			return sdk.WrapError(string(provider)+" invoke", err), nil
 		}
+		if invocation.ResponseFile != "" {
+			invocation.ResponseFile, err = resolveResponseFileTarget(invocation.ResponseFile, runtime.AllowedFileRoots)
+			if err != nil {
+				return sdk.WrapError(string(provider)+" invoke", err), nil
+			}
+			invocation.MaxResponseFileBytes = runtime.MaxResponseFileBytes
+		}
 		sensitive := isSensitiveInvocation(invocation)
 		if mode == ModeRead && !classifyRead(provider, invocation) {
 			return sdk.WrapError(string(provider)+" invoke", fmt.Errorf("operation is not classified as read-only; use %s_api_mutate with explicit approval", provider)), nil
@@ -176,8 +184,9 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 		Service: request.GetString("service", ""), Operation: request.GetString("operation", ""),
 		Region: request.GetString("region", ""), Project: request.GetString("project", ""),
 		Subscription: request.GetString("subscription", ""), Audience: request.GetString("audience", ""), AuthScheme: request.GetString("auth_scheme", ""), AuthVersion: request.GetString("auth_version", ""), APIVersion: request.GetString("api_version", ""), Method: request.GetString("method", ""),
-		URL:      request.GetString("url", ""),
-		BodyFile: request.GetString("body_file", ""),
+		URL:          request.GetString("url", ""),
+		BodyFile:     request.GetString("body_file", ""),
+		ResponseFile: request.GetString("response_file", ""),
 	}
 	if value, ok := arguments["parameters"]; ok {
 		parameters, ok := value.(map[string]any)

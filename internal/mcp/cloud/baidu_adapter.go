@@ -161,7 +161,7 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("Baidu BCE API request: %w", err)
 	}
-	output, err := readRESTResponse(response, adapter.config.MaxBodyBytes)
+	output, err := readRESTResponseWithFile(response, adapter.config.MaxBodyBytes, invocation.ResponseFile, invocation.MaxResponseFileBytes)
 	if err != nil {
 		return InvocationResult{}, err
 	}

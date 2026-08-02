@@ -27,10 +27,16 @@ func DefaultRuntime() Runtime {
 		AllowedFileRoots:     filepath.SplitList(os.Getenv("CLOUD_SKILLS_ALLOWED_FILE_ROOTS")),
 		AllowedEndpointHosts: allowedEndpointHosts,
 		MaxOutputBytes:       defaultOutputSize,
+		MaxResponseFileBytes: defaultResponseFileLimit,
 	}
 	if value := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_MAX_OUTPUT_BYTES")); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
 			runtime.MaxOutputBytes = parsed
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_MAX_RESPONSE_FILE_BYTES")); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed > 0 {
+			runtime.MaxResponseFileBytes = parsed
 		}
 	}
 	if path := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_AUDIT_LOG")); path != "" {
@@ -119,5 +125,7 @@ Tencent:   TENCENTCLOUD_* AKSK or CAM temporary credentials
 Baidu:     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY, optional BCE_SESSION_TOKEN
 
 The unified server sends direct HTTPS requests and never executes a cloud CLI.
+Successful large response bodies can be written to a new operator-approved
+response_file without entering MCP model context; existing files are never overwritten.
 `
 }
