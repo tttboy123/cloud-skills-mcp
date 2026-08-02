@@ -33,6 +33,7 @@ var tencentASRWebSocketPath = regexp.MustCompile(`^/asr/v2/[0-9]{5,20}$`)
 var tencentSpeechTranslateWebSocketPath = regexp.MustCompile(`^/asr/speech_translate/[0-9]{5,20}$`)
 var tencentMPSWebSocketPath = regexp.MustCompile(`^/wss/v1/[0-9]{5,20}$`)
 var tencentMPSTTSWebSocketPath = regexp.MustCompile(`^/tts/v1/[0-9]{5,20}$`)
+var tencentVoiceConversionWebSocketPath = regexp.MustCompile(`^/vc_stream/[0-9]{5,20}$`)
 var tencentASRParameterName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 var tencentVoiceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 var tencentMPSNoncePattern = regexp.MustCompile(`^[1-9][0-9]{9}$`)
@@ -78,6 +79,30 @@ func validateTencentSpeechTranslateWebSocketInvocation(invocation Invocation) er
 		return fmt.Errorf("Tencent Cloud speech translation WebSocket requires response_file when enable_tts=1")
 	}
 	return nil
+}
+
+func validateTencentVoiceConversionWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) {
+		return fmt.Errorf("Tencent Cloud voice conversion WebSocket requires method GET for the HTTP upgrade")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "tts.cloud.tencent.com") || target.Port() != "" || !tencentVoiceConversionWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return fmt.Errorf("Tencent Cloud voice conversion WebSocket requires wss://tts.cloud.tencent.com/vc_stream/<appid> without caller query parameters")
+	}
+	if invocation.BodyFile == "" || invocation.Body != nil {
+		return fmt.Errorf("Tencent Cloud voice conversion WebSocket requires body_file and does not accept inline body")
+	}
+	if invocation.ResponseFile == "" {
+		return fmt.Errorf("Tencent Cloud voice conversion WebSocket requires response_file for converted PCM audio")
+	}
+	if len(invocation.Headers) != 0 {
+		return fmt.Errorf("Tencent Cloud voice conversion WebSocket does not accept caller-supplied handshake headers")
+	}
+	if invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Tencent Cloud voice conversion WebSocket does not accept MPS frame controls")
+	}
+	_, err = validateTencentVoiceConversionParameters(invocation.Parameters)
+	return err
 }
 
 func validateTencentMPSWebSocketInvocation(invocation Invocation) error {
@@ -253,7 +278,7 @@ func signTencentASRWebSocketURL(rawURL string, credentials TencentCredentials, i
 	canonical := canonicalTencentV1Parameters(parameters)
 	target.Scheme = "wss"
 	target.Host = "asr.cloud.tencent.com"
-	source := target.Host + target.EscapedPath() + "?" + canonical
+	source := "asr.cloud.tencent.com" + target.EscapedPath() + "?" + canonical
 	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
 	target.RawQuery = encodeTencentV1Parameters(parameters)
 	return target.String(), nil
@@ -297,10 +322,128 @@ func signTencentSpeechTranslateWebSocketURL(rawURL string, credentials TencentCr
 	canonical := canonicalTencentV1Parameters(parameters)
 	target.Scheme = "wss"
 	target.Host = "asr.cloud.tencent.com"
-	source := target.Host + target.EscapedPath() + "?" + canonical
+	source := "asr.cloud.tencent.com" + target.EscapedPath() + "?" + canonical
 	parameters["signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
 	target.RawQuery = encodeTencentV1Parameters(parameters)
 	return target.String(), nil
+}
+
+func signTencentVoiceConversionWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, voiceID string) (string, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse Tencent Cloud voice conversion WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "tts.cloud.tencent.com") || target.Port() != "" || !tencentVoiceConversionWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return "", fmt.Errorf("Tencent Cloud voice conversion WebSocket requires wss://tts.cloud.tencent.com/vc_stream/<appid> without caller query parameters")
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return "", fmt.Errorf("Tencent Cloud voice conversion WebSocket requires complete SecretId/SecretKey credentials")
+	}
+	if credentials.Token != "" {
+		return "", fmt.Errorf("Tencent Cloud voice conversion WebSocket does not document CAM temporary-token authentication")
+	}
+	if !tencentVoiceIDPattern.MatchString(voiceID) {
+		return "", fmt.Errorf("Tencent Cloud voice conversion WebSocket requires a generated VoiceId of at most 128 characters")
+	}
+	parameters, err := validateTencentVoiceConversionParameters(input)
+	if err != nil {
+		return "", err
+	}
+	timestamp := now.UTC().Unix()
+	parameters["SecretId"] = credentials.SecretID
+	parameters["Timestamp"] = strconv.FormatInt(timestamp, 10)
+	parameters["Expired"] = strconv.FormatInt(timestamp+24*60*60, 10)
+	parameters["VoiceId"] = voiceID
+	parameters["End"] = "0"
+	if _, present := parameters["Volume"]; !present {
+		parameters["Volume"] = "0"
+	}
+	canonical := canonicalTencentV1Parameters(parameters)
+	source := "tts.cloud.tencent.com" + target.EscapedPath() + "?" + canonical
+	parameters["Signature"] = base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.SecretKey), []byte(source)))
+	target.Scheme = "wss"
+	target.Host = "tts.cloud.tencent.com"
+	target.RawQuery = encodeTencentV1Parameters(parameters)
+	return target.String(), nil
+}
+
+func validateTencentVoiceConversionParameters(input map[string]any) (map[string]string, error) {
+	parameters := make(map[string]string, len(input))
+	for name, value := range input {
+		switch name {
+		case "VoiceType", "SampleRate", "Codec", "Volume":
+		default:
+			return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket query parameter %q is not documented", name)
+		}
+		parameter, err := tencentScalarStringValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket query parameter %q must be scalar", name)
+		}
+		parameters[name] = parameter
+	}
+	for _, name := range []string{"VoiceType", "SampleRate", "Codec"} {
+		if strings.TrimSpace(parameters[name]) == "" {
+			return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket requires %s", name)
+		}
+	}
+	voiceType, err := strconv.ParseUint(parameters["VoiceType"], 10, 32)
+	if err != nil || voiceType == 0 {
+		return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket VoiceType must be a positive uint32")
+	}
+	if parameters["SampleRate"] != "16000" {
+		return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket SampleRate must be 16000")
+	}
+	if parameters["Codec"] != "pcm" {
+		return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket Codec must be pcm")
+	}
+	if volume, present := parameters["Volume"]; present {
+		parsed, err := strconv.ParseFloat(volume, 64)
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < -10 || parsed > 10 {
+			return nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket Volume must be between -10 and 10")
+		}
+	}
+	return parameters, nil
+}
+
+type tencentVoiceConversionMessage struct {
+	VoiceID   string `json:"VoiceId"`
+	MessageID string `json:"MessageId"`
+	Message   string `json:"Message"`
+	Final     int    `json:"Final"`
+	Code      int    `json:"Code"`
+}
+
+func encodeTencentVoiceConversionFrame(isEnd bool, audio []byte) ([]byte, error) {
+	body := struct {
+		End int `json:"End"`
+	}{}
+	if isEnd {
+		body.End = 1
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("encode Tencent Cloud voice conversion frame: %w", err)
+	}
+	frame := make([]byte, 4+len(encoded)+len(audio))
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(encoded)))
+	copy(frame[4:], encoded)
+	copy(frame[4+len(encoded):], audio)
+	return frame, nil
+}
+
+func decodeTencentVoiceConversionFrame(frame []byte) (tencentVoiceConversionMessage, []byte, error) {
+	if len(frame) < 4 {
+		return tencentVoiceConversionMessage{}, nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket returned a truncated frame")
+	}
+	jsonBytes := int(binary.BigEndian.Uint32(frame[:4]))
+	if jsonBytes == 0 || jsonBytes > len(frame)-4 {
+		return tencentVoiceConversionMessage{}, nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket returned an invalid JSON length")
+	}
+	var message tencentVoiceConversionMessage
+	if err := json.Unmarshal(frame[4:4+jsonBytes], &message); err != nil {
+		return tencentVoiceConversionMessage{}, nil, fmt.Errorf("Tencent Cloud voice conversion WebSocket returned invalid JSON")
+	}
+	return message, frame[4+jsonBytes:], nil
 }
 
 func validateTencentSpeechTranslateParameters(input map[string]any) error {
@@ -1026,6 +1169,176 @@ func combineTencentSpeechTranslateOutput(messages, audioMetadata []byte) ([]byte
 		"messages": encodedMessages,
 		"audio":    json.RawMessage(audioMetadata),
 	})
+}
+
+func invokeTencentVoiceConversionWebSocket(ctx context.Context, adapter *TencentRESTAdapter, credentials TencentCredentials, invocation Invocation) (InvocationResult, error) {
+	voiceID := adapter.config.VoiceID()
+	signedURL, err := signTencentVoiceConversionWebSocketURL(invocation.URL, credentials, invocation.Parameters, adapter.config.Now().UTC(), voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	dialContext, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
+	connection, err := adapter.config.WebSocketDial(dialContext, signedURL)
+	cancelDial()
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer connection.Close()
+
+	sink, err := newTencentWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer sink.abort()
+
+	handshakeContext, cancelHandshake := context.WithTimeout(ctx, adapter.config.Timeout)
+	messageType, handshake, err := connection.Read(handshakeContext)
+	cancelHandshake()
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("read Tencent Cloud voice conversion WebSocket handshake")
+	}
+	requestID, final, err := acceptTencentVoiceConversionFrame(messageType, handshake, sink, voiceID)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if final {
+		output, err := sink.finishAudio(requestID, "pcm", 16000)
+		return InvocationResult{Output: output, RequestID: requestID}, err
+	}
+
+	streamContext, cancelStream := tencentVoiceConversionStreamContext(ctx, invocation, adapter.config.Timeout)
+	defer cancelStream()
+	readResult := make(chan tencentASRReadResult, 1)
+	go readTencentVoiceConversionWebSocket(streamContext, cancelStream, connection, sink, requestID, readResult)
+	if err := streamTencentVoiceConversionAudio(streamContext, connection, invocation, adapter.config.StreamPause); err != nil {
+		cancelStream()
+		reader := <-readResult
+		if reader.err != nil {
+			return InvocationResult{}, reader.err
+		}
+		return InvocationResult{}, err
+	}
+	result := <-readResult
+	if result.err != nil {
+		return InvocationResult{}, result.err
+	}
+	output, err := sink.finishAudio(result.requestID, "pcm", 16000)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return InvocationResult{Output: output, RequestID: result.requestID}, nil
+}
+
+func acceptTencentVoiceConversionFrame(messageType tencentWebSocketMessageType, frame []byte, sink *tencentWebSocketOutputSink, expectedID string) (string, bool, error) {
+	if messageType != tencentWebSocketMessageBinary {
+		return expectedID, false, fmt.Errorf("Tencent Cloud voice conversion WebSocket returned a non-binary response")
+	}
+	message, audio, err := decodeTencentVoiceConversionFrame(frame)
+	if err != nil {
+		return expectedID, false, err
+	}
+	if message.Code != 0 {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud voice conversion WebSocket returned code %d", message.Code)
+	}
+	if strings.TrimSpace(message.VoiceID) == "" || (expectedID != "" && message.VoiceID != expectedID) {
+		return message.VoiceID, false, fmt.Errorf("Tencent Cloud voice conversion WebSocket returned an invalid VoiceId")
+	}
+	if len(audio) > 0 {
+		if err := sink.writeBinary(audio); err != nil {
+			return message.VoiceID, false, err
+		}
+	}
+	return message.VoiceID, message.Final == 1, nil
+}
+
+func readTencentVoiceConversionWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, sink *tencentWebSocketOutputSink, requestID string, result chan<- tencentASRReadResult) {
+	for {
+		messageType, data, err := connection.Read(ctx)
+		if err != nil {
+			cancel()
+			result <- tencentASRReadResult{requestID: requestID, err: fmt.Errorf("read Tencent Cloud voice conversion WebSocket response")}
+			return
+		}
+		currentID, final, err := acceptTencentVoiceConversionFrame(messageType, data, sink, requestID)
+		if currentID != "" {
+			requestID = currentID
+		}
+		if err != nil || final {
+			if err != nil {
+				cancel()
+			}
+			result <- tencentASRReadResult{requestID: requestID, err: err}
+			return
+		}
+	}
+}
+
+func streamTencentVoiceConversionAudio(ctx context.Context, connection tencentWebSocketConnection, invocation Invocation, pause func(context.Context, time.Duration) error) error {
+	audio, err := os.Open(invocation.BodyFile)
+	if err != nil {
+		return fmt.Errorf("open Tencent Cloud voice conversion audio body_file: %w", err)
+	}
+	defer audio.Close()
+	chunkBytes := invocation.StreamChunkBytes
+	if chunkBytes == 0 {
+		chunkBytes = 3200
+	}
+	interval := invocation.StreamIntervalMS
+	if interval == 0 {
+		interval = 100
+	}
+	reader := bufio.NewReaderSize(audio, chunkBytes+1)
+	buffer := make([]byte, chunkBytes)
+	for {
+		count, readErr := io.ReadFull(reader, buffer)
+		if readErr == io.EOF && count == 0 {
+			return fmt.Errorf("Tencent Cloud voice conversion audio body_file is empty")
+		}
+		if readErr != nil && readErr != io.ErrUnexpectedEOF {
+			return fmt.Errorf("read Tencent Cloud voice conversion audio body_file: %w", readErr)
+		}
+		isEnd := readErr == io.ErrUnexpectedEOF
+		if readErr == nil {
+			if _, peekErr := reader.Peek(1); peekErr == io.EOF {
+				isEnd = true
+			} else if peekErr != nil {
+				return fmt.Errorf("read Tencent Cloud voice conversion audio body_file: %w", peekErr)
+			}
+		}
+		frame, err := encodeTencentVoiceConversionFrame(isEnd, buffer[:count])
+		if err != nil {
+			return err
+		}
+		if err := connection.Write(ctx, tencentWebSocketMessageBinary, frame); err != nil {
+			return fmt.Errorf("write Tencent Cloud voice conversion audio frame")
+		}
+		if isEnd {
+			return nil
+		}
+		if err := pause(ctx, time.Duration(interval)*time.Millisecond); err != nil {
+			return fmt.Errorf("pace Tencent Cloud voice conversion audio stream: %w", err)
+		}
+	}
+}
+
+func tencentVoiceConversionStreamContext(ctx context.Context, invocation Invocation, adapterTimeout time.Duration) (context.Context, context.CancelFunc) {
+	chunkBytes := invocation.StreamChunkBytes
+	if chunkBytes == 0 {
+		chunkBytes = 3200
+	}
+	interval := invocation.StreamIntervalMS
+	if interval == 0 {
+		interval = 100
+	}
+	duration := adapterTimeout + 2*time.Minute
+	if info, err := os.Stat(invocation.BodyFile); err == nil && info.Size() > 0 {
+		chunks := (info.Size() + int64(chunkBytes) - 1) / int64(chunkBytes)
+		duration += time.Duration(chunks) * time.Duration(interval) * time.Millisecond
+	}
+	if duration > time.Hour {
+		duration = time.Hour
+	}
+	return context.WithTimeout(ctx, duration)
 }
 
 type tencentMPSHandshake struct {

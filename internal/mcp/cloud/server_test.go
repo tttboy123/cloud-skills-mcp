@@ -229,6 +229,8 @@ func TestReadClassifierCannotBeDowngradedByCaller(t *testing.T) {
 		{ProviderAWS, Invocation{Service: "secretsmanager", Operation: "get-secret-value"}, false, true},
 		{ProviderAWS, Invocation{Service: "kms", Operation: "decrypt"}, false, true},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "DescribeInstances"}, true, false},
+		{ProviderTencent, Invocation{AuthScheme: "voice-convert-ws", Service: "vc", Operation: "ConvertVoice"}, true, false},
+		{ProviderTencent, Invocation{AuthScheme: "tc3", Service: "other", Operation: "ConvertResource"}, false, false},
 		{ProviderTencent, Invocation{Service: "cvm", Operation: "StartInstances"}, false, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://management.azure.com/subscriptions/sub/resources?api-version=2021-04-01"}, true, false},
 		{ProviderAzure, Invocation{Method: "GET", URL: "https://registry.azurecr.io/v2/repositories"}, true, false},
@@ -431,6 +433,33 @@ func TestInvocationBoundaryAllowsGuardedTencentSpeechTranslateWebSocket(t *testi
 	for _, candidate := range invalid {
 		if err := validateInvocation(candidate, []string{root}); err == nil {
 			t.Fatalf("unsafe speech translation accepted: %#v", candidate)
+		}
+	}
+}
+
+func TestInvocationBoundaryAllowsOnlyGuardedTencentVoiceConversionWebSocket(t *testing.T) {
+	root := t.TempDir()
+	audio := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audio, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "voice-convert-ws", Service: "vc", Operation: "ConvertVoice", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/vc_stream/1259220000", Parameters: map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm"},
+		BodyFile: audio, ResponseFile: filepath.Join(root, "converted.pcm"), StreamChunkBytes: 3200, StreamIntervalMS: 100,
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded voice conversion rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request, request}
+	invalid[0].URL += "?Signature=caller"
+	invalid[1].Parameters = map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm", "SecretId": "caller"}
+	invalid[2].Parameters = map[string]any{"VoiceType": 301005, "SampleRate": 8000, "Codec": "pcm"}
+	invalid[3].ResponseFile = ""
+	invalid[4].Headers = map[string]string{"Authorization": "caller"}
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe voice conversion accepted: %#v", candidate)
 		}
 	}
 }

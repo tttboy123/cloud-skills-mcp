@@ -1827,6 +1827,99 @@ func TestTencentSpeechTranslateWebSocketRejectsTemporaryTokenAndInvalidInputs(t 
 	}
 }
 
+func TestTencentVoiceConversionWebSocketSignatureMatchesOfficialAlgorithm(t *testing.T) {
+	signedURL, err := signTencentVoiceConversionWebSocketURL(
+		"wss://tts.cloud.tencent.com/vc_stream/1259220000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm"},
+		time.Unix(1670304040, 0).UTC(),
+		"voice-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if got, want := query.Get("Signature"), "vuCesnwv4Oj9bLNbC7A9Cpikb3g="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if query.Get("SecretId") != "AKIDEXAMPLE" || query.Get("VoiceType") != "301005" || query.Get("Volume") != "0" || query.Get("End") != "0" {
+		t.Fatalf("query=%v", query)
+	}
+	uppercaseURL, err := signTencentVoiceConversionWebSocketURL(
+		"wss://TTS.CLOUD.TENCENT.COM/vc_stream/1259220000",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm"},
+		time.Unix(1670304040, 0).UTC(),
+		"voice-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uppercaseParsed, err := url.Parse(uppercaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := uppercaseParsed.Query().Get("Signature"), query.Get("Signature"); got != want {
+		t.Fatalf("case-normalized signature=%q, want %q", got, want)
+	}
+}
+
+func TestTencentVoiceConversionFramesUseDocumentedNetworkByteOrder(t *testing.T) {
+	frame, err := encodeTencentVoiceConversionFrame(true, []byte{0xde, 0xad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := hex.EncodeToString(frame), "000000097b22456e64223a317ddead"; got != want {
+		t.Fatalf("frame=%q, want %q", got, want)
+	}
+	responseJSON := []byte(`{"VoiceId":"voice-test","MessageId":"message","Message":"success","Final":1,"Code":0}`)
+	responseFrame := make([]byte, 4+len(responseJSON)+2)
+	binary.BigEndian.PutUint32(responseFrame[:4], uint32(len(responseJSON)))
+	copy(responseFrame[4:], responseJSON)
+	copy(responseFrame[4+len(responseJSON):], []byte{0xca, 0xfe})
+	message, audio, err := decodeTencentVoiceConversionFrame(responseFrame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.VoiceID != "voice-test" || message.Final != 1 || hex.EncodeToString(audio) != "cafe" {
+		t.Fatalf("message=%#v audio=%x", message, audio)
+	}
+}
+
+func TestTencentVoiceConversionWebSocketRejectsTemporaryTokenAndInvalidInputs(t *testing.T) {
+	baseURL := "wss://tts.cloud.tencent.com/vc_stream/1259220000"
+	parameters := map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm"}
+	if _, err := signTencentVoiceConversionWebSocketURL(baseURL, TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, parameters, time.Unix(1670304040, 0), "voice"); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+	if _, err := signTencentVoiceConversionWebSocketURL(baseURL+"?Signature=caller", TencentCredentials{SecretID: "id", SecretKey: "key"}, parameters, time.Unix(1670304040, 0), "voice"); err == nil {
+		t.Fatal("caller query was accepted")
+	}
+	invalidParameters := []map[string]any{
+		{},
+		{"VoiceType": 0, "SampleRate": 16000, "Codec": "pcm"},
+		{"VoiceType": 301005, "SampleRate": 8000, "Codec": "pcm"},
+		{"VoiceType": 301005, "SampleRate": 16000, "Codec": "wav"},
+		{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm", "Volume": 11},
+		{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm", "End": 1},
+		{"VoiceType": []string{"301005"}, "SampleRate": 16000, "Codec": "pcm"},
+	}
+	for _, candidate := range invalidParameters {
+		if _, err := validateTencentVoiceConversionParameters(candidate); err == nil {
+			t.Fatalf("invalid parameters accepted: %#v", candidate)
+		}
+	}
+	for _, frame := range [][]byte{{0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 10, '{'}} {
+		if _, _, err := decodeTencentVoiceConversionFrame(frame); err == nil {
+			t.Fatalf("invalid frame accepted: %x", frame)
+		}
+	}
+}
+
 func TestTencentASRGeneratedNonceAndVoiceIDStayWithinProtocolBounds(t *testing.T) {
 	for range 100 {
 		nonce := secureTencentASRNonce()
@@ -2158,6 +2251,130 @@ func TestTencentSpeechTranslateWebSocketDoesNotPublishPartialTTSFailure(t *testi
 	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
 		t.Fatalf("partial output was published: %v", statErr)
 	}
+}
+
+func TestTencentVoiceConversionWebSocketStreamsFramedPCMAndPublishesOutput(t *testing.T) {
+	directory := t.TempDir()
+	inputFile := filepath.Join(directory, "source.pcm")
+	outputFile := filepath.Join(directory, "converted.pcm")
+	if err := os.WriteFile(inputFile, bytes.Repeat([]byte{0x44}, 4000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			tencentVoiceConversionTestFrame(t, "voice", 0, 0, nil),
+			tencentVoiceConversionTestFrame(t, "voice", 0, 0, []byte("audio-1")),
+			tencentVoiceConversionTestFrame(t, "voice", 0, 1, []byte("audio-2")),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageBinary, tencentWebSocketMessageBinary, tencentWebSocketMessageBinary},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1670304040, 0).UTC() },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(_ context.Context, signedURL string) (tencentWebSocketConnection, error) {
+			parsed, err := url.Parse(signedURL)
+			if err != nil || parsed.Query().Get("Signature") == "" {
+				t.Fatalf("signed URL=%q err=%v", signedURL, err)
+			}
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "voice-convert-ws", Service: "vc", Operation: "ConvertVoice", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/vc_stream/1259220000", Parameters: map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm"},
+		BodyFile: inputFile, ResponseFile: outputFile, MaxResponseFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(converted) != "audio-1audio-2" || result.RequestID != "voice" || !bytes.Contains(result.Output, []byte(`"format":"pcm"`)) {
+		t.Fatalf("converted=%q result=%#v", converted, result)
+	}
+	if len(connection.writes) != 2 {
+		t.Fatalf("writes=%d", len(connection.writes))
+	}
+	for index, want := range []struct {
+		end   float64
+		bytes int
+	}{{end: 0, bytes: 3200}, {end: 1, bytes: 800}} {
+		write := connection.writes[index]
+		message, audio := decodeTencentVoiceConversionTestFrame(t, write.data)
+		if write.messageType != tencentWebSocketMessageBinary || message["End"] != want.end || len(audio) != want.bytes {
+			t.Fatalf("write[%d] type=%d message=%v audio=%d", index, write.messageType, message, len(audio))
+		}
+	}
+}
+
+func TestTencentVoiceConversionWebSocketDoesNotPublishPartialProviderFailure(t *testing.T) {
+	directory := t.TempDir()
+	inputFile := filepath.Join(directory, "source.pcm")
+	outputFile := filepath.Join(directory, "converted.pcm")
+	if err := os.WriteFile(inputFile, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			tencentVoiceConversionTestFrame(t, "voice", 0, 0, nil),
+			tencentVoiceConversionTestFrame(t, "voice", 0, 0, []byte("partial")),
+			tencentVoiceConversionTestFrame(t, "voice", 5000, 0, nil),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageBinary, tencentWebSocketMessageBinary, tencentWebSocketMessageBinary},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1670304040, 0).UTC() },
+		VoiceID:     func() string { return "voice" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "voice-convert-ws", Service: "vc", Operation: "ConvertVoice", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/vc_stream/1259220000", Parameters: map[string]any{"VoiceType": 301005, "SampleRate": 16000, "Codec": "pcm"},
+		BodyFile: inputFile, ResponseFile: outputFile,
+	})
+	if err == nil || !strings.Contains(err.Error(), "code 5000") {
+		t.Fatalf("error=%v", err)
+	}
+	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
+		t.Fatalf("partial output was published: %v", statErr)
+	}
+}
+
+func tencentVoiceConversionTestFrame(t *testing.T, voiceID string, code, final int, audio []byte) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"VoiceId": voiceID, "MessageId": "message", "Message": "success", "Final": final, "Code": code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := make([]byte, 4+len(body)+len(audio))
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(body)))
+	copy(frame[4:], body)
+	copy(frame[4+len(body):], audio)
+	return frame
+}
+
+func decodeTencentVoiceConversionTestFrame(t *testing.T, frame []byte) (map[string]any, []byte) {
+	t.Helper()
+	if len(frame) < 4 {
+		t.Fatal("truncated voice conversion frame")
+	}
+	length := int(binary.BigEndian.Uint32(frame[:4]))
+	if length <= 0 || length > len(frame)-4 {
+		t.Fatal("invalid voice conversion frame length")
+	}
+	var message map[string]any
+	if err := json.Unmarshal(frame[4:4+length], &message); err != nil {
+		t.Fatal(err)
+	}
+	return message, frame[4+length:]
 }
 
 func baseTencentSpeechTranslateTestURL() string {
