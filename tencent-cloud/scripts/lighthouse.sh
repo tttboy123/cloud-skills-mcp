@@ -31,7 +31,7 @@ lighthouse.sh — 管理 Lighthouse (轻量应用服务器) 实例
   lighthouse.sh start <instance-id>                        # 开机
   lighthouse.sh stop <instance-id>                         # 关机
   lighthouse.sh reboot <instance-id>                       # 重启
-  lighthouse.sh reset-pass <instance-id> <new-pass>        # 重置密码 (需 --force)
+  lighthouse.sh reset-pass <instance-id> --force           # 安全提示输入新密码
   lighthouse.sh destroy <instance-id>                      # 销毁 (需 --force, 默认拒绝)
   lighthouse.sh firewall <instance-id>                     # 查防火墙规则
   lighthouse.sh packages [--region <region>]                # 查可买套餐
@@ -125,22 +125,39 @@ case "${cmd}" in
     ;;
 
   reset-pass)
-    [[ $# -lt 2 ]] && { echo "usage: lighthouse.sh reset-pass <instance-id> <new-pass> --force" >&2; exit 1; }
+    [[ $# -lt 2 ]] && { echo "usage: lighthouse.sh reset-pass <instance-id> --force" >&2; exit 1; }
     INSTANCE_ID="$1"
-    NEW_PASS="$2"
-    shift 2
+    shift
     FORCE=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --force) FORCE="1"; shift;;
+        *) echo "unknown arg: $1" >&2; exit 1;;
       esac
     done
     if [[ -z "${FORCE}" ]]; then
       echo "❌ 重置密码需要 --force 二次确认" >&2
       exit 1
     fi
+    read -r -s -p "新密码: " NEW_PASS
+    echo ""
+    read -r -s -p "再次输入新密码: " CONFIRM_PASS
+    echo ""
+    if [[ -z "${NEW_PASS}" || "${NEW_PASS}" != "${CONFIRM_PASS}" ]]; then
+      echo "❌ 两次输入的密码不一致或为空" >&2
+      exit 1
+    fi
+    PAYLOAD=$(mktemp)
+    cleanup_reset_payload() {
+      rm -f "${PAYLOAD}"
+      unset NEW_PASS CONFIRM_PASS
+    }
+    trap cleanup_reset_payload EXIT
+    printf '%s' "${NEW_PASS}" | jq -n --arg id "${INSTANCE_ID}" --rawfile password /dev/stdin \
+      '{InstanceIds:[$id], Password:$password}' > "${PAYLOAD}"
+    unset NEW_PASS CONFIRM_PASS
     echo "🔑 重置 ${INSTANCE_ID} 密码..."
-    tccli lighthouse ResetInstancesPassword --region "${REGION}" --InstanceIds.0 "${INSTANCE_ID}" --Password "${NEW_PASS}"
+    tccli lighthouse ResetInstancesPassword --region "${REGION}" --cli-input-json "file://${PAYLOAD}"
     ;;
 
   destroy)

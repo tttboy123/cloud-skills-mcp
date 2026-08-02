@@ -2,13 +2,15 @@
 # 查 CVM 列表 (ListInstances) — 用修好的 v3 签名
 set -euo pipefail
 
-# 从 macOS Keychain 读凭证
-secret_id=$(security find-generic-password -s "tencent-cloud" -a "tccli-secretid" -w 2>/dev/null || echo "")
-secret_key=$(security find-generic-password -s "tencent-cloud" -a "tccli-secretkey" -w 2>/dev/null || echo "")
-region=$(security find-generic-password -s "tencent-cloud" -a "tccli-region" -w 2>/dev/null || echo "ap-shanghai")
-
-hash_extract() { awk '{print $NF}'; }
-sha256_hex() { openssl sha256 -hex | hash_extract; }
+REFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/_creds.sh
+source "${REFERENCE_DIR}/../scripts/_creds.sh"
+# shellcheck source=_tc3-safe.sh
+source "${REFERENCE_DIR}/_tc3-safe.sh"
+secret_id="${TENCENTCLOUD_SECRET_ID}"
+secret_key="${TENCENTCLOUD_SECRET_KEY}"
+region="${TENCENTCLOUD_REGION:-ap-shanghai}"
+unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
 
 service="cvm"
 host="cvm.tencentcloudapi.com"
@@ -45,23 +47,26 @@ string_to_sign=$(printf "%s\n%s\n%s\n%s" \
   "$credential_scope" \
   "$hashed_canonical_request")
 
-secret_date=$(printf "%s" "$date" | openssl sha256 -hmac "TC3${secret_key}" | hash_extract)
-secret_service=$(printf "%s" "$service" | openssl dgst -sha256 -mac hmac -macopt hexkey:"$secret_date" | hash_extract)
-secret_signing=$(printf "%s" "tc3_request" | openssl dgst -sha256 -mac hmac -macopt hexkey:"$secret_service" | hash_extract)
-signature=$(printf "%s" "$string_to_sign" | openssl dgst -sha256 -mac hmac -macopt hexkey:"$secret_signing" | hash_extract)
+secret_date=$(hmac_sha256_hex "TC3${secret_key}" "${date}")
+unset secret_key TENCENTCLOUD_SECRET_KEY
+secret_service=$(hmac_sha256_hex "${secret_date}" "${service}" hex)
+secret_signing=$(hmac_sha256_hex "${secret_service}" "tc3_request" hex)
+signature=$(hmac_sha256_hex "${secret_signing}" "${string_to_sign}" hex)
 
 authorization="${algorithm} Credential=${secret_id}/${credential_scope}, SignedHeaders=content-type;host;x-tc-action, Signature=${signature}"
+headers_file=$(mktemp)
+cleanup() {
+  rm -f "${headers_file}"
+  unset authorization secret_id secret_date secret_service secret_signing signature
+  unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
+}
+trap cleanup EXIT
+write_tc3_headers "${headers_file}" "${authorization}" "${host}" "${action}" "${timestamp}" "${version}" "${region}"
+unset authorization secret_id secret_date secret_service secret_signing signature
+unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
 
 echo "📡 ${action} region=${region}"
 echo ""
-curl -sS -XPOST "https://${host}" -d "$payload" \
-  -H "Authorization: ${authorization}" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -H "Host: ${host}" \
-  -H "X-TC-Action: ${action}" \
-  -H "X-TC-Timestamp: ${timestamp}" \
-  -H "X-TC-Version: ${version}" \
-  -H "X-TC-Region: ${region}" \
-  -H "X-TC-Token: " | python3 -m json.tool
+curl -sS -XPOST "https://${host}" -d "$payload" -H "@${headers_file}" | python3 -m json.tool
 echo ""
 echo "curl exit: $?"

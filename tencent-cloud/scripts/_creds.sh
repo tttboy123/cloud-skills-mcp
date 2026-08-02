@@ -32,7 +32,7 @@ if [[ -z "${TENCENTCLOUD_SECRET_ID}" || -z "${TENCENTCLOUD_SECRET_KEY}" ]]; then
   echo "❌ 没找到 tccli 凭证" >&2
   echo "" >&2
   echo "首次使用请跑:" >&2
-  echo "  bash ~/.claude/skills/tencent-cloud/scripts/setup-keychain.sh" >&2
+  echo "  bash ~/.codex/skills/tencent-cloud/scripts/setup-keychain.sh" >&2
   echo "" >&2
   echo "或临时用环境变量:" >&2
   echo "  export TENCENTCLOUD_SECRET_ID=AKIDxxxxxx" >&2

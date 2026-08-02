@@ -12,6 +12,7 @@ package sdk
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -19,122 +20,27 @@ import (
 
 // Common sentinel errors so callers can errors.Is against them.
 var (
-	ErrForceRequired     = errors.New("this operation requires --force confirmation")
+	ErrForceRequired      = errors.New("this operation requires --force confirmation")
+	ErrMutationsDisabled  = errors.New("mutating cloud tools are disabled by the operator")
 	ErrCredentialsMissing = errors.New("no credentials available for this cloud")
-	ErrInvalidRegion     = errors.New("invalid region")
-	ErrEmptyInstanceID   = errors.New("instance id is empty")
+	ErrInvalidRegion      = errors.New("invalid region")
+	ErrEmptyInstanceID    = errors.New("instance id is empty")
 )
 
-// RedactSecret returns s with anything that looks like an AKSK / API key
-// redacted. The regex is intentionally conservative — better to over-redact
-// than leak. Used to scrub error messages that originated from cloud SDKs
-// (some SDKs echo the request body on auth errors).
-//
-// The match targets the common shapes:
-//   - 32+ char base64-ish (AKID)
-//   - 40+ char hex / base64 (SK)
-//   - "SecretId":"..." / "secretKey":"..."
+var (
+	sensitiveQuotedValue = regexp.MustCompile(`(?i)(["']?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)["']?\s*[:=]\s*["'])([^"']*)(["'])`)
+	sensitiveBareValue   = regexp.MustCompile(`(?i)(["']?(?:secret(?:id|key)?|access[_-]?key(?:id|secret)?|security[_-]?token|private[_-]?key|password|authorization|token)["']?\s*[:=]\s*)([A-Za-z0-9+/=_-]+)`)
+	rawTencentAKID       = regexp.MustCompile(`AKID[A-Za-z0-9]{8,}`)
+)
+
+// RedactSecret removes values assigned to security-sensitive field names and
+// raw Tencent AKIDs. It intentionally preserves unrelated long identifiers
+// such as RequestId and temporary paths because operators need them to debug.
 func RedactSecret(s string) string {
-	out := s
-	out = redactField(out, "secretId")
-	out = redactField(out, "secretKey")
-	out = redactField(out, "SecretId")
-	out = redactField(out, "SecretKey")
-	out = redactField(out, "AccessKeyId")
-	out = redactField(out, "AccessKeySecret")
-	out = redactLongToken(out)
+	out := sensitiveQuotedValue.ReplaceAllString(s, `${1}***REDACTED***${3}`)
+	out = sensitiveBareValue.ReplaceAllString(out, `${1}***REDACTED***`)
+	out = rawTencentAKID.ReplaceAllString(out, "***REDACTED***")
 	return out
-}
-
-func redactField(s, name string) string {
-	// Walk the string left-to-right. At each occurrence of `name`, look ahead
-	// for the JSON-style `"name":"value"` shape. If matched, replace value
-	// with REDACTED. If not, advance past the occurrence and continue.
-	for {
-		idx := strings.Index(s, name)
-		if idx < 0 {
-			return s
-		}
-		// look for the pattern: optional whitespace/colon, then opening quote
-		j := idx + len(name)
-		// skip past the name itself; if next non-space is not ':' or '"' it's
-		// not a JSON field, so just skip past it
-		if j >= len(s) {
-			return s
-		}
-		// skip whitespace between name and value
-		k := j
-		for k < len(s) && (s[k] == ' ' || s[k] == '\t') {
-			k++
-		}
-		// accept "name": or "name"=
-		if k < len(s) && s[k] == '=' {
-			k++
-		} else if k < len(s) && s[k] == ':' {
-			k++
-		} else {
-			// not a key=value / key:value shape; skip past this occurrence
-			s = s[:idx] + "X" + s[idx+1:]
-			continue
-		}
-		// skip whitespace
-		for k < len(s) && (s[k] == ' ' || s[k] == '\t') {
-			k++
-		}
-		// expect opening quote
-		if k >= len(s) || s[k] != '"' {
-			s = s[:idx] + "X" + s[idx+1:]
-			continue
-		}
-		start := k + 1
-		quote2 := strings.Index(s[start:], `"`)
-		if quote2 < 0 {
-			return s
-		}
-		end := start + quote2
-		s = s[:start] + "***REDACTED***" + s[end:]
-	}
-}
-
-// redactLongToken replaces 32+ contiguous [A-Za-z0-9+/=_-] tokens (likely AKID/SK)
-// that weren't already caught by redactField. False positives are fine.
-func redactLongToken(s string) string {
-	var b strings.Builder
-	runes := []byte(s)
-	i := 0
-	for i < len(runes) {
-		// start of a token?
-		if isTokenByte(runes[i]) {
-			j := i
-			for j < len(runes) && isTokenByte(runes[j]) {
-				j++
-			}
-			if j-i >= 32 {
-				b.WriteString("***REDACTED***")
-			} else {
-				b.Write(runes[i:j])
-			}
-			i = j
-		} else {
-			b.WriteByte(runes[i])
-			i++
-		}
-	}
-	return b.String()
-}
-
-func isTokenByte(b byte) bool {
-	switch {
-	case b >= 'A' && b <= 'Z':
-		return true
-	case b >= 'a' && b <= 'z':
-		return true
-	case b >= '0' && b <= '9':
-		return true
-	case b == '+' || b == '/' || b == '=' || b == '_' || b == '-':
-		return true
-	}
-	return false
 }
 
 // RequireForce is the canonical guard for mutating tools. The tool handler
@@ -148,6 +54,19 @@ func RequireForce(force bool) (*mcp.CallToolResult, error) {
 			fmt.Errorf("%w (force=false)", ErrForceRequired)
 	}
 	return nil, nil
+}
+
+// RequireMutationApproval enforces two independent gates: the operator must
+// enable mutating tools when starting the server, and the individual request
+// must still carry force=true. The second gate is not treated as human approval.
+func RequireMutationApproval(enabled, force bool) (*mcp.CallToolResult, error) {
+	if !enabled {
+		return mcp.NewToolResultError(
+				"refusing to run: mutating cloud tools are disabled. The operator must restart " +
+					"the server with CLOUD_SKILLS_ALLOW_MUTATIONS=1 after explicit approval."),
+			fmt.Errorf("%w (CLOUD_SKILLS_ALLOW_MUTATIONS!=1)", ErrMutationsDisabled)
+	}
+	return RequireForce(force)
 }
 
 // WrapError builds a soft MCP error from any error, redacting any embedded

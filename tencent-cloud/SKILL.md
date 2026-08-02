@@ -13,26 +13,27 @@ license: MIT
 
 ```bash
 # 1. 首次使用: 把 SecretId/SecretKey 存到 Keychain
-bash ~/.claude/skills/tencent-cloud/scripts/setup-keychain.sh
+bash ~/.codex/skills/tencent-cloud/scripts/setup-keychain.sh
 
 # 2. 列你的服务器 (先试 Lighthouse, 0 台再试 CVM)
-bash ~/.claude/skills/tencent-cloud/scripts/lighthouse.sh list
-bash ~/.claude/skills/tencent-cloud/scripts/cvm.sh list
+bash ~/.codex/skills/tencent-cloud/scripts/lighthouse.sh list
+bash ~/.codex/skills/tencent-cloud/scripts/cvm.sh list
 
 # 3. 开机/关机 (CVM 和 Lighthouse 用各自的脚本)
-bash ~/.claude/skills/tencent-cloud/scripts/lighthouse.sh start <instance-id>
-bash ~/.claude/skills/tencent-cloud/scripts/lighthouse.sh stop <instance-id>
-bash ~/.claude/skills/tencent-cloud/scripts/cvm.sh start <instance-id>
-bash ~/.claude/skills/tencent-cloud/scripts/cvm.sh stop <instance-id>
+# 必须先取得用户对具体 instance/action 的明确批准
+bash ~/.codex/skills/tencent-cloud/scripts/lighthouse.sh start <instance-id>
+bash ~/.codex/skills/tencent-cloud/scripts/lighthouse.sh stop <instance-id>
+bash ~/.codex/skills/tencent-cloud/scripts/cvm.sh start <instance-id>
+bash ~/.codex/skills/tencent-cloud/scripts/cvm.sh stop <instance-id>
 
 # 4. 查数据库
-bash ~/.claude/skills/tencent-cloud/scripts/cdb.sh list
+bash ~/.codex/skills/tencent-cloud/scripts/cdb.sh list
 
 # 5. 查对象存储桶
-bash ~/.claude/skills/tencent-cloud/scripts/cos.sh list
+bash ~/.codex/skills/tencent-cloud/scripts/cos.sh list
 
 # 6. CloudBase 环境
-bash ~/.claude/skills/tencent-cloud/scripts/cloudbase.sh envs
+bash ~/.codex/skills/tencent-cloud/scripts/cloudbase.sh envs
 ```
 
 ## 覆盖范围 (5 大场景)
@@ -85,6 +86,8 @@ bash ~/.claude/skills/tencent-cloud/scripts/cloudbase.sh envs
 2. **不批量**: stop/reboot 一次最多 5 个 instance, 防止误操作全关
 3. **dry-run 优先**: 任何 create/destroy 命令先 `--dry-run` 打印 plan
 4. **凭证不写日志**: tccli 输出有 secret 时, 自动 redact
+5. **宿主批准是权威边界**: `force=true` 不是用户批准证明。任何 start/stop/reboot/reset/destroy/put/delete 前必须取得用户对具体资源和动作的明确批准
+6. **MCP 默认只读**: 写工具还要求 server 环境中有 `CLOUD_SKILLS_ALLOW_MUTATIONS=1`; 不要长期写入共享 MCP 基线
 
 ## 常见任务 (Recipes)
 
@@ -147,8 +150,9 @@ bash scripts/cloudbase.sh functions
 ## MCP 调用方式 (推荐, Phase 1 PoC)
 
 本 skill 同时支持 **bash 脚本 (fallback)** 和 **MCP server (推荐)** 两种调用方式。
-两者读同一份 macOS Keychain 凭证, 行为一致; MCP 工具会**强制要求 `force=true`**
-才会执行 `start` / `stop` 等破坏性操作。
+两者读同一份 macOS Keychain 凭证。MCP 默认禁用写操作；只有宿主进程显式设置
+`CLOUD_SKILLS_ALLOW_MUTATIONS=1` 且单次调用传入 `force=true` 才会执行 `start` / `stop`。
+这两个技术门都不能替代用户批准。
 
 ### 工具清单 (4 个 CVM)
 
@@ -159,7 +163,15 @@ bash scripts/cloudbase.sh functions
 | `tencent_cvm_start_instance` | 开机 CVM | **是** |
 | `tencent_cvm_stop_instance` | 关机 CVM | **是** |
 
-### 注册到 `~/.claude/mcp_servers.json`
+### 注册到 Codex
+
+```bash
+codex mcp add tencent-cloud -- "$HOME/.local/bin/tencent-cloud-mcp"
+```
+
+默认不要给 server 配 `CLOUD_SKILLS_ALLOW_MUTATIONS`，此时只有 list/describe 可用。
+
+### 其他兼容客户端
 
 ```json
 {
@@ -186,7 +198,7 @@ echo '{"jsonrpc":"2.0","id":2,"method":"tools/call",
                  "arguments":{"region":"ap-shanghai","limit":10}}}' \
   | /Users/lune/bin/tencent-cloud-mcp
 
-# 启动 CVM (注意 force=true)
+# 启动 CVM (server 还必须由 operator 启用 mutations，且宿主已取得用户批准)
 echo '{"jsonrpc":"2.0","id":3,"method":"tools/call",
        "params":{"name":"tencent_cvm_start_instance",
                  "arguments":{"instance_id":"ins-abc123def","force":true}}}' \
@@ -202,12 +214,12 @@ echo '{"jsonrpc":"2.0","id":3,"method":"tools/call",
 | 需要 `--filter` / 模糊匹配 | bash (`lighthouse.sh list --filter web`) |
 | 危险操作需要二次确认 | **MCP** (force 守卫) |
 
-### 凭证 100% 复用
+### 凭证读取顺序
 
 - MCP server 跟 bash 共用 macOS Keychain (service=`tencent-cloud`)
 - env var 路径也兼容 (`TENCENTCLOUD_SECRET_ID` 带下划线)
 - MCP 错误信息自动 redact AKSK, 不会泄漏到 LLM context
 
-MCP server 源码: `~/Documents/Codex/2026-06-18/hermes-openclaw/agent-platform/internal/mcp/tencent/main.go`
+MCP server 源码: `cmd/tencent-cloud-mcp/main.go` + `internal/mcp/tencent/server.go`
 
-更多见 [references/troubleshooting.md](references/troubleshooting.md) (待写)
+更多见仓库根目录 `README.md`。

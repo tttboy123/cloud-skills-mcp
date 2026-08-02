@@ -45,20 +45,23 @@ func RegisterTool(srv ToolRegistrar, tool mcp.Tool, handler server.ToolHandlerFu
 //	    mcp.WithString("instance_id", mcp.Required()),
 //	)
 func RegionArg(defaultRegion string) mcp.ToolOption {
-	return mcp.WithString("region",
+	opts := []mcp.PropertyOption{
 		mcp.Description("Cloud region. If omitted, uses the default region from the loaded credentials (or the SDK default)."),
-		mcp.DefaultString(defaultRegion),
-	)
+	}
+	if defaultRegion != "" {
+		opts = append(opts, mcp.DefaultString(defaultRegion))
+	}
+	return mcp.WithString("region", opts...)
 }
 
 // ForceArg returns a boolean property for the "force" confirmation flag. Tools
 // that mutate state (start, stop, destroy, delete) should include this and
-// pass its value to sdk.RequireForce. The flag is always optional; missing
-// or false = refuse the call.
+// pass its value to RequireMutationApproval. The schema requires the field,
+// and false is still refused by the handler.
 func ForceArg() mcp.ToolOption {
 	return mcp.WithBoolean("force",
 		mcp.Description("REQUIRED for mutating tools. Pass --force / force=true to confirm you understand the operation is irreversible. Without this, the tool refuses to run."),
-		mcp.DefaultBool(false),
+		mcp.Required(),
 	)
 }
 

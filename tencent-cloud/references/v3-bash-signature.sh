@@ -9,13 +9,14 @@
 
 set -euo pipefail
 
-# 从 macOS Keychain 读凭证
-if command -v security >/dev/null 2>&1; then
-  secret_id=$(security find-generic-password -s "tencent-cloud" -a "tccli-secretid" -w 2>/dev/null || echo "")
-  secret_key=$(security find-generic-password -s "tencent-cloud" -a "tccli-secretkey" -w 2>/dev/null || echo "")
-fi
-secret_id="${secret_id:-${TENCENTCLOUD_SECRET_ID:-}}"
-secret_key="${secret_key:-${TENCENTCLOUD_SECRET_KEY:-}}"
+REFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/_creds.sh
+source "${REFERENCE_DIR}/../scripts/_creds.sh"
+# shellcheck source=_tc3-safe.sh
+source "${REFERENCE_DIR}/_tc3-safe.sh"
+secret_id="${TENCENTCLOUD_SECRET_ID}"
+secret_key="${TENCENTCLOUD_SECRET_KEY}"
+unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
 
 if [[ -z "${secret_id}" || -z "${secret_key}" ]]; then
   echo "❌ AKSK 缺失, 请先跑 setup-keychain.sh" >&2
@@ -24,10 +25,6 @@ fi
 
 echo "🔑 secret_id: ${secret_id:0:8}...${secret_id: -4}"
 echo ""
-
-# 通用工具
-hash_extract() { awk '{print $NF}'; }
-sha256_hex() { openssl sha256 -hex | hash_extract; }
 
 # ============= 参数 =============
 service="cvm"
@@ -84,37 +81,35 @@ printf "%s" "$string_to_sign" | od -c | head -8
 echo ""
 
 # ============= 步骤 3：计算签名 =============
-secret_date=$(printf "%s" "$date" | openssl sha256 -hmac "TC3${secret_key}" | hash_extract)
-echo "secret_date:    $secret_date"
-
-secret_service=$(printf "%s" "$service" | openssl dgst -sha256 -mac hmac -macopt hexkey:"$secret_date" | hash_extract)
-echo "secret_service: $secret_service"
-
-secret_signing=$(printf "%s" "tc3_request" | openssl dgst -sha256 -mac hmac -macopt hexkey:"$secret_service" | hash_extract)
-echo "secret_signing: $secret_signing"
-
-signature=$(printf "%s" "$string_to_sign" | openssl dgst -sha256 -mac hmac -macopt hexkey:"$secret_signing" | hash_extract)
-echo "signature:      $signature"
+secret_date=$(hmac_sha256_hex "TC3${secret_key}" "${date}")
+unset secret_key TENCENTCLOUD_SECRET_KEY
+secret_service=$(hmac_sha256_hex "${secret_date}" "${service}" hex)
+secret_signing=$(hmac_sha256_hex "${secret_service}" "tc3_request" hex)
+signature=$(hmac_sha256_hex "${secret_signing}" "${string_to_sign}" hex)
+echo "TC3 signing key chain generated without exposing key material in argv."
 
 # ============= 步骤 4：拼接 Authorization =============
 authorization="${algorithm} Credential=${secret_id}/${credential_scope}, SignedHeaders=content-type;host;x-tc-action, Signature=${signature}"
 
 echo ""
 echo "=== authorization ==="
-echo "$authorization"
+echo "${algorithm} Credential=${secret_id:0:8}.../[scope redacted], SignedHeaders=content-type;host;x-tc-action, Signature=[redacted]"
 echo ""
+
+headers_file=$(mktemp)
+cleanup() {
+  rm -f "${headers_file}"
+  unset authorization secret_id secret_date secret_service secret_signing signature
+  unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
+}
+trap cleanup EXIT
+write_tc3_headers "${headers_file}" "${authorization}" "${host}" "${action}" "${timestamp}" "${version}" "${region}"
+unset authorization secret_id secret_date secret_service secret_signing signature
+unset TENCENTCLOUD_SECRET_ID TENCENTCLOUD_SECRET_KEY
 
 # ============= 步骤 5：发起请求 =============
 echo "📡 请求: POST https://${host}  Action=${action}"
 echo ""
-curl -sS -XPOST "https://${host}" -d "$payload" \
-  -H "Authorization: ${authorization}" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -H "Host: ${host}" \
-  -H "X-TC-Action: ${action}" \
-  -H "X-TC-Timestamp: ${timestamp}" \
-  -H "X-TC-Version: ${version}" \
-  -H "X-TC-Region: ${region}" \
-  -H "X-TC-Token: "
+curl -sS -XPOST "https://${host}" -d "$payload" -H "@${headers_file}"
 echo ""
 echo "curl exit: $?"

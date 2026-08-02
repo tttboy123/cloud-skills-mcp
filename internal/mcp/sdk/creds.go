@@ -1,9 +1,9 @@
 // Package sdk provides shared infrastructure for the 6 cloud MCP servers.
 //
 // creds.go — credential abstraction with 3-tier fallback:
-//   1. macOS Keychain (per-cloud service name, see CloudConfig)
-//   2. env vars (per-cloud variable set)
-//   3. cloud-CLI's own config file (e.g. ~/.aws/credentials, ~/.tencentcloud/credentials)
+//  1. macOS Keychain (per-cloud service name, see CloudConfig)
+//  2. env vars (per-cloud variable set)
+//  3. cloud-CLI's own config file (e.g. ~/.aws/credentials, ~/.tencentcloud/credentials)
 //
 // The 6 supported clouds are aws / azure / gcp / alicloud / tencent-cloud / baiducloud.
 package sdk
@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -24,24 +25,24 @@ import (
 type Cloud string
 
 const (
-	CloudAWS         Cloud = "aws"
-	CloudAzure       Cloud = "azure"
-	CloudGCP         Cloud = "gcp"
-	CloudAlicloud    Cloud = "alicloud"
-	CloudTencent     Cloud = "tencent-cloud"
-	CloudBaiducloud  Cloud = "baiducloud"
+	CloudAWS        Cloud = "aws"
+	CloudAzure      Cloud = "azure"
+	CloudGCP        Cloud = "gcp"
+	CloudAlicloud   Cloud = "alicloud"
+	CloudTencent    Cloud = "tencent-cloud"
+	CloudBaiducloud Cloud = "baiducloud"
 )
 
 // Creds is the uniform credential struct returned to all MCP servers.
 // Field semantics:
 //
-//   AccessKeyID     — primary access identifier (for tccli this is the SecretId,
-//                     for AWS this is the access key id; see per-cloud notes)
-//   AccessKeySecret — secret half of the key pair
-//   SecurityToken   — STS / OAuth token (optional, AWS / Alibaba use this for temporary creds)
-//   Region          — default region if not supplied per-call
-//   Source          — diagnostic tag: "keychain" | "env" | "cli-config" | "none"
-//   Account         — for multi-account scenarios, the Keychain account name (e.g. "tccli-secretid")
+//	AccessKeyID     — primary access identifier (for tccli this is the SecretId,
+//	                  for AWS this is the access key id; see per-cloud notes)
+//	AccessKeySecret — secret half of the key pair
+//	SecurityToken   — STS / OAuth token (optional, AWS / Alibaba use this for temporary creds)
+//	Region          — default region if not supplied per-call
+//	Source          — diagnostic tag: "keychain" | "env" | "cli-config" | "none"
+//	Account         — for multi-account scenarios, the Keychain account name (e.g. "tccli-secretid")
 type Creds struct {
 	AccessKeyID     string
 	AccessKeySecret string
@@ -59,15 +60,15 @@ type CloudConfig struct {
 	KeychainService string
 	// KeychainAccountAKID / KeychainAccountSecret are the account names under the service.
 	// For most clouds the convention is "<cli>-secretid" / "<cli>-secretkey".
-	KeychainAccountAKID    string
-	KeychainAccountSecret  string
-	KeychainAccountToken   string // optional STS account
-	KeychainAccountRegion  string // optional region account
+	KeychainAccountAKID   string
+	KeychainAccountSecret string
+	KeychainAccountToken  string // optional STS account
+	KeychainAccountRegion string // optional region account
 	// EnvAKID / EnvSecret / EnvToken / EnvRegion are the env var names the cloud SDK reads.
-	EnvAKID    []string // try in order, first non-empty wins
-	EnvSecret  []string
-	EnvToken   []string
-	EnvRegion  []string
+	EnvAKID   []string // try in order, first non-empty wins
+	EnvSecret []string
+	EnvToken  []string
+	EnvRegion []string
 	// DefaultRegion is used when neither Keychain nor env supplies one.
 	DefaultRegion string
 	// CLIBinary is the cloud's CLI; presence is checked before parsing CLI config.
@@ -147,24 +148,28 @@ func LoadCreds(cloud Cloud) (*Creds, error) {
 }
 
 // loadFromKeychain reads AKID/secret/(token)/(region) from macOS Keychain.
-// It is fail-soft: any single missing field is allowed; only "no AKID at all" is a miss
-// (caller decides whether tier 1 produced anything).
+// A keychain source is accepted only when both halves of the credential pair
+// exist; partial entries fall through to the next credential tier.
 func loadFromKeychain(cfg CloudConfig) (*Creds, error) {
+	return loadFromKeychainWithLookup(cfg, keychainGet)
+}
+
+func loadFromKeychainWithLookup(cfg CloudConfig, lookup func(service, account string) (string, error)) (*Creds, error) {
 	c := &Creds{Source: "keychain", Account: cfg.KeychainAccountAKID}
-	if v, err := keychainGet(cfg.KeychainService, cfg.KeychainAccountAKID); err == nil {
+	if v, err := lookup(cfg.KeychainService, cfg.KeychainAccountAKID); err == nil {
 		c.AccessKeyID = v
 		c.Account = cfg.KeychainAccountAKID
 	}
-	if v, err := keychainGet(cfg.KeychainService, cfg.KeychainAccountSecret); err == nil {
+	if v, err := lookup(cfg.KeychainService, cfg.KeychainAccountSecret); err == nil {
 		c.AccessKeySecret = v
 	}
 	if cfg.KeychainAccountToken != "" {
-		if v, err := keychainGet(cfg.KeychainService, cfg.KeychainAccountToken); err == nil {
+		if v, err := lookup(cfg.KeychainService, cfg.KeychainAccountToken); err == nil {
 			c.SecurityToken = v
 		}
 	}
 	if cfg.KeychainAccountRegion != "" {
-		if v, err := keychainGet(cfg.KeychainService, cfg.KeychainAccountRegion); err == nil {
+		if v, err := lookup(cfg.KeychainService, cfg.KeychainAccountRegion); err == nil {
 			c.Region = v
 		}
 	}
@@ -173,6 +178,9 @@ func loadFromKeychain(cfg CloudConfig) (*Creds, error) {
 	}
 	if c.AccessKeyID == "" {
 		return c, fmt.Errorf("keychain service=%q has no entry for account=%q", cfg.KeychainService, cfg.KeychainAccountAKID)
+	}
+	if c.AccessKeySecret == "" {
+		return c, fmt.Errorf("keychain service=%q has no entry for account=%q", cfg.KeychainService, cfg.KeychainAccountSecret)
 	}
 	return c, nil
 }
@@ -206,6 +214,9 @@ func loadFromCLIConfig(cfg CloudConfig, home string) (*Creds, error) {
 	}
 	if akid == "" {
 		return nil, fmt.Errorf("cli config at %s has no AKID", filepath.Join(home, cfg.CLICredPath))
+	}
+	if secret == "" && len(cfg.EnvSecret) > 0 {
+		return nil, fmt.Errorf("cli config at %s has no credential secret", filepath.Join(home, cfg.CLICredPath))
 	}
 	c := &Creds{
 		AccessKeyID:     akid,
@@ -325,12 +336,20 @@ func jsonValue(path string, segments ...string) (string, error) {
 		return "", err
 	}
 	for _, seg := range segments {
-		m, ok := node.(map[string]any)
-		if !ok {
-			return "", nil
-		}
-		node, ok = m[seg]
-		if !ok {
+		switch current := node.(type) {
+		case map[string]any:
+			var ok bool
+			node, ok = current[seg]
+			if !ok {
+				return "", nil
+			}
+		case []any:
+			index, err := strconv.Atoi(seg)
+			if err != nil || index < 0 || index >= len(current) {
+				return "", nil
+			}
+			node = current[index]
+		default:
 			return "", nil
 		}
 	}

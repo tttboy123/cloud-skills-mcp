@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+command -v security >/dev/null 2>&1 || { echo "security CLI is required (macOS only)" >&2; exit 1; }
+command -v tccli >/dev/null 2>&1 || { echo "tccli is required; install and place it on PATH first" >&2; exit 1; }
+
 echo "🔐 腾讯云凭证 → macOS Keychain"
 echo ""
 echo "在 https://console.cloud.tencent.com/cam/capi 拿 SecretId + SecretKey"
@@ -26,72 +29,63 @@ if [[ -z "${SECRET_KEY}" ]]; then
   exit 1
 fi
 
-# 3. Region (默认 ap-guangzhou)
-read -r -p "默认 Region [ap-guangzhou]: " REGION
-REGION="${REGION:-ap-guangzhou}"
+# 3. Region
+read -r -p "默认 Region [ap-shanghai]: " REGION
+REGION="${REGION:-ap-shanghai}"
+if [[ ! "${REGION}" =~ ^[a-z][a-z0-9-]{1,31}$ ]]; then
+  echo "❌ Region 格式无效: ${REGION}" >&2
+  exit 1
+fi
 
-# 4. 存到 Keychain (更新已有或新增)
-# 同时清掉废弃的 TENCENTCLOUD_SECRETID/SECRETKEY 老 env (如果以前写过)
-unset TENCENTCLOUD_SECRETID TENCENTCLOUD_SECRETKEY 2>/dev/null || true
-security delete-generic-password -s "tencent-cloud" -a "tccli-secretid" 2>/dev/null || true
-security delete-generic-password -s "tencent-cloud" -a "tccli-secretkey" 2>/dev/null || true
-security delete-generic-password -s "tencent-cloud" -a "tccli-region" 2>/dev/null || true
+# 4. 先用输入值验证。验证失败时不修改 Keychain。
+echo ""
+echo "🧪 验证凭证 (只读调用 DescribeInstances)..."
+export TENCENTCLOUD_SECRET_ID="${SECRET_ID}"
+export TENCENTCLOUD_SECRET_KEY="${SECRET_KEY}"
+export TENCENTCLOUD_REGION="${REGION}"
 
+TC_OUT=$(mktemp)
+cleanup() {
+  rm -f "${TC_OUT}"
+  unset SECRET_KEY STORED_SECRET TENCENTCLOUD_SECRET_KEY
+}
+trap cleanup EXIT
+
+if tccli cvm DescribeInstances --region "${REGION}" --Limit 1 > "${TC_OUT}" 2>&1; then
+  echo "✅ 凭证验证通过"
+else
+  TC_CLI_EXIT=$?
+  ERR_MSG=$(grep -oE "(secretId is invalid|AuthFailure|UnauthorizedOperation|InvalidParameter|RequestLimitExceeded|InternalError|ResourceNotFound|InvalidCredential)[^[:space:]]*" "${TC_OUT}" 2>/dev/null | head -1 || true)
+  echo "❌ tccli 调用失败 (exit ${TC_CLI_EXIT}); Keychain 未修改" >&2
+  if [[ -n "${ERR_MSG}" ]]; then
+    echo "腾讯云错误: ${ERR_MSG}" >&2
+  else
+    echo "请检查 SecretId/SecretKey、Region、CAM 权限和账户状态。" >&2
+  fi
+  exit 1
+fi
+
+# 5. 安全写入 Keychain。security(1) 明确警告 `-w <value>` 会把密码
+# 暴露在进程参数中，所以 SecretKey 由 security 自己再次静默提示。
+echo ""
+echo "请再次输入同一个 SecretKey，让 macOS security 直接写入 Keychain。"
+while true; do
+  security add-generic-password -s "tencent-cloud" -a "tccli-secretkey" -U -w
+  STORED_SECRET=$(security find-generic-password -s "tencent-cloud" -a "tccli-secretkey" -w)
+  if [[ "${STORED_SECRET}" == "${SECRET_KEY}" ]]; then
+    break
+  fi
+  echo "❌ 两次输入的 SecretKey 不一致，请重试。" >&2
+done
+
+# SecretId 不是密码材料；region 也不是秘密。-U 会原地更新，无需先删除旧项。
 security add-generic-password -s "tencent-cloud" -a "tccli-secretid" -w "${SECRET_ID}" -U
-security add-generic-password -s "tencent-cloud" -a "tccli-secretkey" -w "${SECRET_KEY}" -U
 security add-generic-password -s "tencent-cloud" -a "tccli-region" -w "${REGION}" -U
 
 echo ""
-echo "✅ 凭证已存到 Keychain:"
+echo "✅ 凭证已验证并存到 Keychain"
 echo "   service: tencent-cloud"
 echo "   account: tccli-secretid / tccli-secretkey / tccli-region"
 echo "   region:  ${REGION}"
 echo ""
-
-# 5. 验证 — 用 DescribeInstances 真正需要凭证的 API
-#    ⚠️  tccli 读的是 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY (带下划线, 跟 SDK 一致)
-#    用临时文件捕获输出, 不用 OUTPUT=$(...) 包, 因为后者会吞 tccli 的真实 exit code
-echo "🧪 验证凭证 (调 DescribeInstances)..."
-export PATH="$HOME/.local/bin:$PATH"
-export TENCENTCLOUD_SECRET_ID="${SECRET_ID}"
-export TENCENTCLOUD_SECRET_KEY="${SECRET_KEY}"
-
-TC_OUT=$(mktemp)
-# 同步跑 tccli, 拿真实 exit code (不经过子 shell 包装)
-tccli cvm DescribeInstances --region "${REGION}" --Limit 1 > "${TC_OUT}" 2>&1
-TC_CLI_EXIT=$?
-
-# 显示前 12 行输出
-head -12 "${TC_OUT}"
-rm -f "${TC_OUT}"
-
-if [[ ${TC_CLI_EXIT} -ne 0 ]]; then
-  # 重新调一次专门拿错误 (因为已经清掉文件了, 用 set -o pipefail 抓 stderr)
-  ERR_TMP=$(mktemp)
-  tccli cvm DescribeInstances --region "${REGION}" --Limit 1 > "${ERR_TMP}" 2>&1
-  ERR_MSG=$(grep -oE "(secretId is invalid|AuthFailure|UnauthorizedOperation|InvalidParameter|RequestLimitExceeded|InternalError|ResourceNotFound|InvalidCredential)[^[:space:]]*" "${ERR_TMP}" 2>/dev/null | head -1)
-  rm -f "${ERR_TMP}"
-  echo ""
-  echo "❌ tccli 调用失败 (exit ${TC_CLI_EXIT})"
-  echo ""
-  if [[ -n "${ERR_MSG}" ]]; then
-    echo "腾讯云错误: ${ERR_MSG}"
-  else
-    echo "可能原因:"
-    echo "   - SecretId/SecretKey 是不是复制错了 (注意前后空格)"
-    echo "   - 子账号有没有 QcloudCVMReadOnlyAccess 权限"
-    echo "   - Region 有没有填错 (ap-guangzhou / ap-shanghai / ap-beijing)"
-    echo "   - APPID 可能被风控/欠费冻结 — 查 https://console.cloud.tencent.com/expense"
-  fi
-  echo ""
-  echo "⚠️  凭证已存到 Keychain 但验证未通过, 调 API 仍会失败"
-  echo "   修好后再跑: bash $0"
-  exit 1
-fi
-
-# 二次确认: 凭证存好
-echo ""
-echo "✅ 凭证验证通过 + 已存到 Keychain"
-echo ""
-echo "下一步:"
-echo "  bash ~/.claude/skills/tencent-cloud/scripts/cvm.sh list"
+echo "下一步: bash ~/.codex/skills/tencent-cloud/scripts/cvm.sh list"

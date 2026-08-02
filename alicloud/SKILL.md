@@ -7,7 +7,7 @@ license: MIT
 
 # Alibaba Cloud (阿里云) Manager — Meta 入口
 
-本目录是 `cloud-skills-mcp` 仓库的 alicloud **meta 入口**。完整的 184 个细粒度 sub-skill 来自 [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (Apache 2.0)。
+本目录是 `cloud-skills-mcp` 仓库的 alicloud **meta 入口**。完整的 184 个细粒度 sub-skill 来自 [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (MIT)。
 
 ## 快速使用
 
@@ -84,5 +84,5 @@ export ALIBABACLOUD_REGION=cn-hangzhou
 
 ## 致谢
 
-- Sub-skill 来自 [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (Apache 2.0) — 184 个细粒度 skill
+- Sub-skill 来自 [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (MIT) — 184 个细粒度 skill
 - 跟 tencent-cloud / google-cloud / aws / azure / baiducloud 共享 SKILL.md + MCP 双形态架构

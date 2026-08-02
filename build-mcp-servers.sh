@@ -1,25 +1,17 @@
-#!/bin/bash
-# 一键编译 6 个 MCP server
-# Phase 1 实现后会用
+#!/usr/bin/env bash
+# Build every MCP server that is implemented in this checkout.
 
-set -e
+set -euo pipefail
 
-CLOUDS=(
-  "tencent"
-  "alicloud"
-  "google"
-  "aws"
-  "azure"
-  "baidu"
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+BIN_DIR=${CLOUD_SKILLS_BIN_DIR:-"${ROOT_DIR}/bin"}
+
+mkdir -p "${BIN_DIR}"
+
+echo "Building tencent-cloud-mcp..."
+(
+  cd "${ROOT_DIR}"
+  go build -trimpath -o "${BIN_DIR}/tencent-cloud-mcp" ./cmd/tencent-cloud-mcp
 )
 
-mkdir -p ~/bin
-
-for cloud in "${CLOUDS[@]}"; do
-  echo "🔨 Building ${cloud}-mcp..."
-  go build -o ~/bin/${cloud}-mcp ./cmd/${cloud}-mcp/ 2>/dev/null || echo "   ⏭  ${cloud}-mcp 还没实现, skip"
-done
-
-echo ""
-echo "✅ 编译完成. 已实现的 daemon 在 ~/bin/"
-ls -la ~/bin/*-mcp 2>/dev/null || echo "   (还没有)"
+echo "Built ${BIN_DIR}/tencent-cloud-mcp"

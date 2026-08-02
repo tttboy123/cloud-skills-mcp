@@ -2,19 +2,19 @@
 //
 // This is a SKELETON for Phase 2. The plan is:
 //
-//   1. Each cloud publishes a machine-readable API catalog:
-//        AWS       — https://docs.aws.amazon.com/cli/latest/reference/<svc>/index.html
-//        Azure     — https://learn.microsoft.com/en-us/rest/api/<svc>/
-//        GCP       — https://cloud.google.com/<svc>/docs/reference/rest
-//        Alicloud  — https://api.aliyun.com/api/<svc>/<ver>
-//        Tencent   — https://cloud.tencent.com/document/api/<product-code>/<version>
-//        Baidu BCE — https://cloud.baidu.com/doc/<product>/index.html
+//  1. Each cloud publishes a machine-readable API catalog:
+//     AWS       — https://docs.aws.amazon.com/cli/latest/reference/<svc>/index.html
+//     Azure     — https://learn.microsoft.com/en-us/rest/api/<svc>/
+//     GCP       — https://cloud.google.com/<svc>/docs/reference/rest
+//     Alicloud  — https://api.aliyun.com/api/<svc>/<ver>
+//     Tencent   — https://cloud.tencent.com/document/api/<product-code>/<version>
+//     Baidu BCE — https://cloud.baidu.com/doc/<product>/index.html
 //
-//   2. We pre-fetch the JSON / YAML for the products we care about (CVM, EC2, ...)
-//      at SKILL.md install time, cache to ~/.cache/loom/cloud-apidocs/<cloud>/<svc>.json.
+//  2. We pre-fetch the JSON / YAML for the products we care about (CVM, EC2, ...)
+//     at SKILL.md install time, cache to ~/.cache/loom/cloud-apidocs/<cloud>/<svc>.json.
 //
-//   3. At runtime, each tool's handler can call APIDoc(cloud, service, action) to
-//      render a parameter cheat sheet into the LLM's context window.
+//  3. At runtime, each tool's handler can call APIDoc(cloud, service, action) to
+//     render a parameter cheat sheet into the LLM's context window.
 //
 // Phase 1 just needs the signature + a clear "not yet implemented" return.
 package sdk

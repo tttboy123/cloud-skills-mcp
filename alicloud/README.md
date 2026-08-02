@@ -3,7 +3,7 @@
 **本目录是 `cloud-skills-mcp` 仓库的 alicloud meta 入口**。
 
 完整的 184 个细粒度 sub-skill 来自:
-- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (Apache 2.0) — ECS / OSS / RDS / VPC / KMS / FC / Model Studio ...
+- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (MIT) — ECS / OSS / RDS / VPC / KMS / FC / Model Studio ...
 
 ## 安装
 
@@ -39,4 +39,4 @@ security add-generic-password -s alicloud -a region -w cn-hangzhou
 
 ## 致谢
 
-- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (Apache 2.0) — 184 sub-skill
+- [`cinience/alicloud-skills`](https://github.com/cinience/alicloud-skills) (MIT) — 184 sub-skill

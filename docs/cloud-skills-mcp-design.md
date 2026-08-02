@@ -4,6 +4,11 @@
 > **Author**: Mavis (2026-08-01)
 > **Workspace**: `/Users/lune/Documents/Codex/2026-06-18/hermes-openclaw/agent-platform/`
 
+> **Current-state note (2026-08-02):** This is an aspirational design record.
+> The implemented product boundary is documented in `README.md` and
+> `docs/cloud-mcp-phase1.5.md`: Tencent CVM over stdio only. Six-cloud and SSE
+> sections below are roadmap material, not shipped capability.
+
 ## 1. 目标
 
 为 6 大云厂商 (Google Cloud / Azure / AWS / AliCloud / TencentCloud / BaiduCloud) 搭建**双形态管理接口**：

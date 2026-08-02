@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_creds.sh"
 
-REGION="${TENCENTCLOUD_REGION:-ap-guangzhou}"
+REGION="${TENCENTCLOUD_REGION:-ap-shanghai}"
 if command -v security >/dev/null 2>&1; then
   REGION=$(security find-generic-password -s "tencent-cloud" -a "tccli-region" -w 2>/dev/null || echo "${REGION}")
 fi
