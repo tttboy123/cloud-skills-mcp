@@ -2166,6 +2166,68 @@ func TestTencentMPSTTSWebSocketValidatesDocumentedInputs(t *testing.T) {
 	}
 }
 
+func TestTencentTTSWebSocketSignatureMatchesOfficialCanonicalAlgorithm(t *testing.T) {
+	signedURL, err := signTencentTTSWebSocketURL(
+		"wss://tts.cloud.tencent.com/stream_ws",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"AppId": 1300460000, "Codec": "pcm", "EnableSubtitle": true, "SampleRate": 16000, "Speed": 0, "VoiceType": 101001, "Volume": 0},
+		"hello",
+		time.Unix(1688610905, 0).UTC(),
+		"b78ae3ba-1ba5-11ee-a106-768645a5c72a",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if got, want := query.Get("Signature"), "E1QvAtEl7SevcQLgk3TCXRieJ5A="; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if query.Get("Action") != "TextToStreamAudioWS" || query.Get("Expired") != "1688697305" || query.Get("SessionId") == "" || query.Get("Text") != "hello" || query.Get("EnableSubtitle") != "true" {
+		t.Fatalf("query=%v", query)
+	}
+}
+
+func TestTencentTTSWebSocketValidatesDocumentedInputs(t *testing.T) {
+	credentials := TencentCredentials{SecretID: "id", SecretKey: "key"}
+	valid := map[string]any{"AppId": 1300460000, "Codec": "pcm"}
+	baseURL := "wss://tts.cloud.tencent.com/stream_ws"
+	if _, err := signTencentTTSWebSocketURL(baseURL, TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, valid, "hello", time.Unix(1688610905, 0), "session"); err == nil || !strings.Contains(err.Error(), "temporary-token") {
+		t.Fatalf("temporary token error=%v", err)
+	}
+	if _, err := signTencentTTSWebSocketURL(baseURL+"?Signature=caller", credentials, valid, "hello", time.Unix(1688610905, 0), "session"); err == nil {
+		t.Fatal("caller query was accepted")
+	}
+	invalidParameters := []map[string]any{
+		{},
+		{"AppId": 1300460000},
+		{"AppId": "not-an-int", "Codec": "pcm"},
+		{"AppId": "99999999999999999999", "Codec": "pcm"},
+		{"AppId": 1300460000, "Codec": "wav"},
+		{"AppId": 1300460000, "Codec": "pcm", "SampleRate": 22050},
+		{"AppId": 1300460000, "Codec": "pcm", "Volume": 11},
+		{"AppId": 1300460000, "Codec": "pcm", "Speed": 6.01},
+		{"AppId": 1300460000, "Codec": "pcm", "EmotionCategory": "surprised"},
+		{"AppId": 1300460000, "Codec": "pcm", "EmotionIntensity": 49},
+		{"AppId": 1300460000, "Codec": "pcm", "SegmentRate": 3},
+		{"AppId": 1300460000, "Codec": "pcm", "Signature": "caller"},
+		{"AppId": 1300460000, "Codec": "pcm", "unknown": "value"},
+	}
+	for _, parameters := range invalidParameters {
+		if _, err := validateTencentTTSParameters(parameters); err == nil {
+			t.Fatalf("invalid parameters accepted: %#v", parameters)
+		}
+	}
+	for _, text := range []any{"", strings.Repeat("x", 1801), strings.Repeat("中", 601), []string{"not", "one"}} {
+		if _, err := tencentTTSRequestText(text); err == nil {
+			t.Fatalf("invalid TTS body accepted: %#v", text)
+		}
+	}
+}
+
 func TestTencentMPSAudioFrameUsesDocumentedNetworkByteOrder(t *testing.T) {
 	frame, err := encodeTencentMPSAudioFrame(1, true, 0x0102030405060708, "user", []byte{0xde, 0xad})
 	if err != nil {
@@ -2715,6 +2777,83 @@ func TestTencentMPSTTSWebSocketDoesNotPublishProviderFailure(t *testing.T) {
 		URL: "wss://mps.cloud.tencent.com/tts/v1/1258344699", Parameters: map[string]any{"voiceId": "voice"}, Body: "hello", ResponseFile: outputFile,
 	})
 	if err == nil || !strings.Contains(err.Error(), "code 5000") {
+		t.Fatalf("provider failure error=%v", err)
+	}
+	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
+		t.Fatalf("failed output was published: %v", statErr)
+	}
+}
+
+func TestTencentTTSWebSocketAdapterPublishesAudioAndMessages(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "speech.pcm")
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"code":0,"message":"success","session_id":"session-tts","request_id":"request-tts","message_id":"message-1","final":0,"result":{"subtitles":null}}`),
+			[]byte("audio-1"),
+			[]byte(`{"code":0,"message":"success","session_id":"session-tts","request_id":"request-tts","message_id":"message-2","final":0,"result":{"subtitles":[{"Text":"hello","BeginTime":0,"EndTime":100}]}}`),
+			[]byte("audio-2"),
+			[]byte(`{"code":0,"message":"success","session_id":"session-tts","request_id":"request-tts","message_id":"message-3","final":1,"result":{"subtitles":null}}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}},
+		Now:         func() time.Time { return time.Unix(1688610905, 0).UTC() },
+		VoiceID:     func() string { return "session-tts" },
+		WebSocketDial: func(_ context.Context, signedURL string) (tencentWebSocketConnection, error) {
+			parsed, err := url.Parse(signedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Query().Get("Signature") == "" || parsed.Query().Get("Text") != "hello" || parsed.Query().Get("SessionId") != "session-tts" {
+				t.Fatalf("signed query=%v", parsed.Query())
+			}
+			return connection, nil
+		},
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "tts-ws", Service: "tts", Operation: "SynthesizeSpeech", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/stream_ws", Parameters: map[string]any{"AppId": 1300460000, "Codec": "pcm", "SampleRate": 16000, "EnableSubtitle": true},
+		Body: "hello", ResponseFile: outputFile, MaxResponseFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != "audio-1audio-2" || result.RequestID != "request-tts" || !bytes.Contains(result.Output, []byte(`"messages"`)) || !bytes.Contains(result.Output, []byte(`"format":"pcm"`)) || !bytes.Contains(result.Output, []byte(`"sample_rate":16000`)) {
+		t.Fatalf("audio=%q result=%#v", audio, result)
+	}
+	if len(connection.writes) != 0 {
+		t.Fatalf("unexpected writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentTTSWebSocketDoesNotPublishProviderFailure(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "failed.mp3")
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"code":0,"message":"success","session_id":"session-tts","request_id":"request-tts","message_id":"message-1","final":0}`),
+			[]byte("partial-audio"),
+			[]byte(`{"code":10001,"message":"invalid VoiceType","session_id":"session-tts","request_id":"request-tts","message_id":"message-2","final":0}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1688610905, 0).UTC() },
+		VoiceID:     func() string { return "session-tts" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "tts-ws", Service: "tts", Operation: "SynthesizeSpeech", Method: http.MethodGet,
+		URL: "wss://tts.cloud.tencent.com/stream_ws", Parameters: map[string]any{"AppId": 1300460000, "Codec": "mp3"}, Body: "hello", ResponseFile: outputFile,
+	})
+	if err == nil || !strings.Contains(err.Error(), "code 10001") {
 		t.Fatalf("provider failure error=%v", err)
 	}
 	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
