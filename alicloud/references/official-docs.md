@@ -8,6 +8,10 @@
 - DataHub resource operations, `DATAHUB` HMAC-SHA1 signature, and STS header: https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz
 - OpenSearch V3 search/push `OPENSEARCH` HMAC-SHA1 signature: https://www.alibabacloud.com/help/en/open-search/high-performance-searchedition/signature-method-of-opensearch-api-v3
 - OpenSearch SDK STS `X-Opensearch-Security-Token` behavior: https://www.alibabacloud.com/help/en/open-search/high-performance-searchedition/sample-code-for-the-python-client
+- MaxCompute current public, VPC, interconnected service and Tunnel endpoints: https://www.alibabacloud.com/help/en/maxcompute/user-guide/endpoints
+- MaxCompute `MaxCompute/2022-01-04` control-plane OpenAPI overview: https://www.alibabacloud.com/help/en/maxcompute/user-guide/api-maxcompute-2022-01-04-overview
+- Official PyODPS ODPS V2/V4 canonical request, derived-key, Authorization, and STS implementation pinned at the audited revision: https://github.com/aliyun/aliyun-odps-python-sdk/blob/558462b8d61b43c73016837f32c68b2ddfad2cdf/odps/accounts.py
+- Official PyODPS release history documenting V4 signing as the default since 0.12.4: https://github.com/aliyun/aliyun-odps-python-sdk/releases
 - OSS V4 Authorization signature: https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4
 - Simple Log Service v1 request signature: https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures
 - Simple Log Service v1/v4 authentication selection and region requirement: https://www.alibabacloud.com/help/en/sls/developer-reference/initializing-the-sls-python-sdk
@@ -23,4 +27,4 @@
 - OpenAPI MCP Server guide: https://help.aliyun.com/en/openapi/user-guide/openapi-mcp-server-guide
 - OSS GetObject and Range download: https://www.alibabacloud.com/help/en/oss/developer-reference/getobject
 
-The universal adapter signs current general OpenAPI requests with ACS3, product APIs that still document legacy RPC or ROA V2 with HMAC-SHA1, OSS data-plane requests with OSS4, SLS data-plane requests with v1 or v4, MNS requests with its service-specific HMAC-SHA1 protocol, and Tablestore protobuf data-plane requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.
+The universal adapter signs current general OpenAPI requests with ACS3, product APIs that still document legacy RPC or ROA V2 with HMAC-SHA1, MaxCompute project/data/Tunnel requests with ODPS V2 or V4, OSS data-plane requests with OSS4, SLS data-plane requests with v1 or v4, MNS requests with its service-specific HMAC-SHA1 protocol, and Tablestore protobuf data-plane requests with OTS v2 or v4. It never executes Alibaba Cloud CLI.

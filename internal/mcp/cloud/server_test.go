@@ -401,6 +401,8 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "roa", Service: "pds", Operation: "ListDrives", APIVersion: "v2", Method: "POST", URL: "https://123.api.aliyunpds.com/v2/drive/list"},
 		{Provider: ProviderAlicloud, AuthScheme: "datahub", Service: "datahub", Operation: "ListProjects", Method: "GET", URL: "https://dh-cn-hangzhou.aliyuncs.com/projects"},
 		{Provider: ProviderAlicloud, AuthScheme: "opensearch", Service: "opensearch", Operation: "Search", Method: "GET", URL: "https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/demo/search?query=config%3Dstart%3A0"},
+		{Provider: ProviderAlicloud, AuthScheme: "odps", Service: "maxcompute", Operation: "ListProjects", Method: "GET", URL: "https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects"},
+		{Provider: ProviderAlicloud, AuthScheme: "odps4", Service: "maxcompute", Operation: "ListProjects", Region: "cn-hangzhou", Method: "GET", URL: "https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api/projects"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -448,6 +450,16 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	opensearch.Headers = map[string]string{"X-Opensearch-Nonce": "caller"}
 	if err := validateInvocation(opensearch, nil); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("OpenSearch caller nonce error=%v", err)
+	}
+	odps4 := requests[10]
+	odps4.Region = ""
+	if err := validateInvocation(odps4, nil); err == nil || !strings.Contains(err.Error(), "region") {
+		t.Fatalf("ODPS4 missing region error=%v", err)
+	}
+	odps4 = requests[10]
+	odps4.Headers = map[string]string{"Authorization-Sts-Token": "caller"}
+	if err := validateInvocation(odps4, nil); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("ODPS4 caller token error=%v", err)
 	}
 }
 

@@ -1,16 +1,16 @@
 ---
 name: alicloud
-description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
+description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, MaxCompute, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Function Compute, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
 ---
 
 # Alibaba Cloud
 
-Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI with ACS3, legacy RPC/ROA V2, DataHub resource APIs, OSS, SLS, MNS, and Tablestore protocols. It never executes Alibaba Cloud CLI.
+Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs general OpenAPI with ACS3, legacy RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS V2/V4, OSS, SLS, MNS, and Tablestore protocols. It never executes Alibaba Cloud CLI.
 
 ## Workflow
 
 1. Call `cloud_provider_status` with `provider="alicloud"`; treat `available` as HTTP adapter readiness and `credential_status=unverified` as pending live authentication.
-2. Use `alicloud_api_discover` for official OpenAPI/ACS3/RPC/ROA/OSS4/SLS/MNS/OTS references, then verify method, endpoint, action, version, query, headers, and body in the product API metadata.
+2. Use `alicloud_api_discover` for official OpenAPI and product-protocol references, then verify method, endpoint, action, version, query, headers, and body in the product API metadata.
 3. Use `alicloud_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `alicloud_api_mutate(force=true)`.
 5. Secret-resource operations require the separate sensitive gate. STS role/session credentials, login profiles, AccessKey creation, and other credential issuance/export actions are never exposed by the gateway.
@@ -18,11 +18,11 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 
 ## MCP arguments
 
-- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `oss4` for OSS; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
+- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `odps4` for current MaxCompute project/data/Tunnel APIs and `odps` for their legacy V2 signature; `oss4` for OSS; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
 - `service`: product/signing code, such as `ecs`, `rds`, `vpc`, `ram`, or `oss`.
 - `operation`: exact action name used by ACS3 headers and read/write classification.
 - `api_version`: required for ACS3, RPC, and ROA, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
-- `region`: required by OSS4, SLS4, and OTS4 and recommended as operation context.
+- `region`: required by ODPS4, OSS4, SLS4, and OTS4 and recommended as operation context.
 - `method` and `url`: exact official Alibaba Cloud HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` or `body_file` for request payloads.
 - `response_file`: new approved-root file for OSS objects, exports, or other large responses. Use the documented `Range` header above the configured per-call limit; existing files are never overwritten.
@@ -36,6 +36,8 @@ Legacy ROA example: `alicloud_api_read(auth_scheme="roa", service="pds", operati
 DataHub example: `alicloud_api_read(auth_scheme="datahub", service="datahub", operation="ListProjects", method="GET", url="https://dh-cn-hangzhou.aliyuncs.com/projects")`. The adapter defaults `x-datahub-client-version` to `1.1` (override with `api_version`), signs the exact resource path/query, and internally adds Date, optional RAM `x-datahub-security-token`, and `DATAHUB` authorization. Project, topic, shard, connector, record, and subscription endpoints use the same scheme.
 
 OpenSearch example: `alicloud_api_read(auth_scheme="opensearch", service="opensearch", operation="Search", method="GET", url="https://opensearch-cn-hangzhou.aliyuncs.com/v3/openapi/apps/<app>/search", parameters={"query":"config=start:0&&query=default:'term'"})`. The adapter RFC3986-canonicalizes non-empty search parameters, generates the required timestamp-plus-random nonce, and adds ISO-8601 Date, optional `X-Opensearch-Security-Token`, and `OPENSEARCH` authorization. Body requests receive the documented lowercase hexadecimal `Content-MD5`; non-GET request query parameters are not part of the OpenSearch push-resource signature.
+
+MaxCompute example: `alicloud_api_read(auth_scheme="odps4", service="maxcompute", operation="ListProjects", region="cn-hangzhou", method="GET", url="https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects")`. Use the exact public, VPC, or interconnected endpoint documented for the project region; Tunnel calls use the matching `dt.<region>.maxcompute.aliyun.com` endpoint. The adapter signs the canonical ODPS resource (the service endpoint's `/api` base is not part of that resource), derives the current V4 key from date/region/service, and internally adds Date, optional RAM `Authorization-Sts-Token`, and `ODPS` authorization. Use `auth_scheme="odps"` only for an official endpoint that still requires the legacy V2 HMAC-SHA1 signature. Do not auto-retry a mutation with the other scheme.
 
 SLS example: `alicloud_api_read(auth_scheme="sls4", service="sls", operation="ListLogstores", region="cn-hangzhou", method="GET", url="https://<project>.cn-hangzhou.log.aliyuncs.com/logstores")`. For protobuf log ingestion, pass the encoded body through `body_file` and its documented non-auth headers such as `Content-Type` and `x-log-bodyrawsize`; signing headers are server-controlled.
 

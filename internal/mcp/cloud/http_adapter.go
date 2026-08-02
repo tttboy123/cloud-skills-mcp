@@ -36,6 +36,8 @@ const (
 	authSchemeAlibabaROAV2      = "roa"
 	authSchemeAlibabaDataHub    = "datahub"
 	authSchemeAlibabaOpenSearch = "opensearch"
+	authSchemeAlibabaODPS       = "odps"
+	authSchemeAlibabaODPSV4     = "odps4"
 	authSchemeAlibabaOSSV4      = "oss4"
 	authSchemeAlibabaSLS        = "sls"
 	authSchemeAlibabaSLSV4      = "sls4"
@@ -317,7 +319,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+oss4+sls+sls4+mns+ots+ots4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -331,6 +333,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"roa_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism",
 		"datahub_api":    "https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz",
 		"opensearch_api": "https://www.alibabacloud.com/help/en/open-search/high-performance-searchedition/signature-method-of-opensearch-api-v3",
+		"odps_signature": "https://github.com/aliyun/aliyun-odps-python-sdk/blob/558462b8d61b43c73016837f32c68b2ddfad2cdf/odps/accounts.py",
+		"odps_endpoints": "https://www.alibabacloud.com/help/en/maxcompute/user-guide/endpoints",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
@@ -340,8 +344,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, oss4, sls, sls4, mns, ots, or ots4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -387,6 +391,14 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 	case authSchemeAlibabaOpenSearch:
 		now := adapter.config.Now().UTC()
 		if err := signAlibabaOpenSearch(request, credentials, now, alibabaOpenSearchNonce(now, adapter.config.Nonce())); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaODPS:
+		if err := signAlibabaODPSV2(request, credentials, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaODPSV4:
+		if err := signAlibabaODPSV4(request, credentials, invocation.Region, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeAlibabaOSSV4:
@@ -973,6 +985,141 @@ func alibabaOpenSearchNonce(now time.Time, seed string) string {
 	digest := sha256.Sum256([]byte(seed))
 	random := (int(digest[0])<<16|int(digest[1])<<8|int(digest[2]))%900000 + 100000
 	return fmt.Sprintf("%010d%06d", now.UTC().Unix(), random)
+}
+
+func signAlibabaODPSV2(request *http.Request, credentials AlibabaCredentials, now time.Time) error {
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud ODPS requires complete AKSK material")
+	}
+	canonical, err := prepareAlibabaODPSRequest(request, now)
+	if err != nil {
+		return err
+	}
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(canonical)))
+	request.Header.Set("Authorization", "ODPS "+credentials.AccessKeyID+":"+signature)
+	setAlibabaODPSSTSToken(request, credentials.SecurityToken)
+	return nil
+}
+
+func signAlibabaODPSV4(request *http.Request, credentials AlibabaCredentials, region string, now time.Time) error {
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud ODPS4 requires complete AKSK material")
+	}
+	if !identifierPattern.MatchString(region) {
+		return fmt.Errorf("Alibaba Cloud ODPS4 requires a valid region")
+	}
+	canonical, err := prepareAlibabaODPSRequest(request, now)
+	if err != nil {
+		return err
+	}
+	date := now.UTC().Format("20060102")
+	region = strings.ToLower(region)
+	dateKey := hmacBytes(sha256.New, []byte("aliyun_v4"+credentials.AccessKeySecret), []byte(date))
+	regionKey := hmacBytes(sha256.New, dateKey, []byte(region))
+	serviceKey := hmacBytes(sha256.New, regionKey, []byte("odps"))
+	signingKey := hmacBytes(sha256.New, serviceKey, []byte("aliyun_v4_request"))
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, signingKey, []byte(canonical)))
+	credential := credentials.AccessKeyID + "/" + date + "/" + region + "/odps/aliyun_v4_request"
+	request.Header.Set("Authorization", "ODPS "+credential+":"+signature)
+	setAlibabaODPSSTSToken(request, credentials.SecurityToken)
+	return nil
+}
+
+func prepareAlibabaODPSRequest(request *http.Request, now time.Time) (string, error) {
+	if request == nil || request.URL == nil {
+		return "", fmt.Errorf("Alibaba Cloud ODPS request is missing")
+	}
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+	if request.Header.Get("Date") == "" {
+		request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	}
+	return canonicalAlibabaODPSRequest(request)
+}
+
+func canonicalAlibabaODPSRequest(request *http.Request) (string, error) {
+	decodedQuery, err := url.PathUnescape(request.URL.RawQuery)
+	if err != nil {
+		return "", fmt.Errorf("decode Alibaba Cloud ODPS query: %w", err)
+	}
+	values, err := url.ParseQuery(decodedQuery)
+	if err != nil {
+		return "", fmt.Errorf("parse Alibaba Cloud ODPS query: %w", err)
+	}
+	queryNames := make([]string, 0, len(values))
+	for name, entries := range values {
+		if len(entries) != 1 {
+			return "", fmt.Errorf("Alibaba Cloud ODPS query parameter %q must have exactly one value", name)
+		}
+		queryNames = append(queryNames, name)
+	}
+	sort.Strings(queryNames)
+	queryParts := make([]string, 0, len(queryNames))
+	for _, name := range queryNames {
+		value := values[name][0]
+		if value == "" {
+			queryParts = append(queryParts, name)
+		} else {
+			queryParts = append(queryParts, name+"="+value)
+		}
+	}
+
+	resource := request.URL.Path
+	if isAlibabaODPSServiceEndpoint(request.URL.Hostname()) {
+		if resource == "/api" {
+			resource = ""
+		} else if strings.HasPrefix(resource, "/api/") {
+			resource = strings.TrimPrefix(resource, "/api")
+		}
+	}
+	if len(queryParts) > 0 {
+		resource += "?" + strings.Join(queryParts, "&")
+	}
+
+	headersToSign := map[string]string{
+		"content-md5":  request.Header.Get("Content-MD5"),
+		"content-type": request.Header.Get("Content-Type"),
+		"date":         request.Header.Get("Date"),
+	}
+	for name, entries := range request.Header {
+		lowerName := strings.ToLower(name)
+		if strings.HasPrefix(lowerName, "x-odps") && len(entries) > 0 {
+			headersToSign[lowerName] = entries[0]
+		}
+	}
+	for _, name := range queryNames {
+		if strings.HasPrefix(name, "x-odps-") {
+			headersToSign[name] = values[name][0]
+		}
+	}
+	headerNames := make([]string, 0, len(headersToSign))
+	for name := range headersToSign {
+		headerNames = append(headerNames, name)
+	}
+	sort.Strings(headerNames)
+	lines := []string{request.Method}
+	for _, name := range headerNames {
+		if strings.HasPrefix(name, "x-odps-") {
+			lines = append(lines, name+":"+headersToSign[name])
+		} else {
+			lines = append(lines, headersToSign[name])
+		}
+	}
+	lines = append(lines, resource)
+	return strings.Join(lines, "\n"), nil
+}
+
+func isAlibabaODPSServiceEndpoint(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return strings.HasPrefix(host, "service.") &&
+		(strings.HasSuffix(host, ".maxcompute.aliyun.com") || strings.HasSuffix(host, ".maxcompute.aliyun-inc.com"))
+}
+
+func setAlibabaODPSSTSToken(request *http.Request, token string) {
+	if token != "" {
+		request.Header.Set("Authorization-Sts-Token", token)
+	}
 }
 
 func signTencentTC3(request *http.Request, payloadHash string, credentials TencentCredentials, invocation Invocation, now time.Time) error {

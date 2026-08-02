@@ -1076,6 +1076,110 @@ func TestAlibabaOpenSearchAdapterSignsPushBodyAndInjectsSTS(t *testing.T) {
 	}
 }
 
+func TestAlibabaODPSV4MatchesOfficialPyODPSVector(t *testing.T) {
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects/demo/instances?x-odps-option=enabled&curr_project=demo&empty=",
+		strings.NewReader("test"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-MD5", "098f6bcd4621d373cade4e832627b4f6")
+	request.Header.Set("x-odps-test", "value")
+	if err := signAlibabaODPSV4(request, AlibabaCredentials{
+		AccessKeyID: "testid", AccessKeySecret: "testsecret",
+	}, "cn-hangzhou", time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "ODPS testid/20260803/cn-hangzhou/odps/aliyun_v4_request:Ask3eewTpb1WwlfFqN/C8vOGJFs="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+	if got, want := request.Header.Get("Date"), "Mon, 03 Aug 2026 01:02:03 GMT"; got != want {
+		t.Fatalf("Date=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaODPSV2MatchesOfficialPyODPSVector(t *testing.T) {
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects/demo/instances?x-odps-option=enabled&curr_project=demo&empty=",
+		strings.NewReader("test"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-MD5", "098f6bcd4621d373cade4e832627b4f6")
+	request.Header.Set("x-odps-test", "value")
+	if err := signAlibabaODPSV2(request, AlibabaCredentials{
+		AccessKeyID: "testid", AccessKeySecret: "testsecret",
+	}, time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "ODPS testid:u9CWBy6JSAunsHVNgGlJuHRsRSg="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaODPSCanonicalRequestMatchesPyODPSQueryDecoding(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects?literal=a%252Fb", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Date", "Mon, 03 Aug 2026 01:02:03 GMT")
+	canonical, err := canonicalAlibabaODPSRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonical, "GET\n\n\nMon, 03 Aug 2026 01:02:03 GMT\n/projects?literal=a/b"; got != want {
+		t.Fatalf("canonical=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaODPSSigningRejectsInvalidInputs(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://dt.cn-hangzhou.maxcompute.aliyun.com/projects/demo?tag=a&tag=b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signAlibabaODPSV2(request, AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "secret"}, time.Now()); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("repeated query error=%v", err)
+	}
+	request, err = http.NewRequest(http.MethodGet, "https://dt.cn-hangzhou.maxcompute.aliyun.com/projects/demo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signAlibabaODPSV2(request, AlibabaCredentials{}, time.Now()); err == nil || !strings.Contains(err.Error(), "AKSK") {
+		t.Fatalf("missing AKSK error=%v", err)
+	}
+}
+
+func TestAlibabaODPSV4AdapterSignsTunnelRequestAndInjectsSTS(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if got, want := request.Header.Get("Authorization-Sts-Token"), "ram-token"; got != want {
+			t.Fatalf("Authorization-Sts-Token=%q want=%q", got, want)
+		}
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "ODPS ak/20260803/cn-hangzhou/odps/aliyun_v4_request:") {
+			t.Fatalf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		return httpResponse(200, `{}`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "secret", SecurityToken: "ram-token"}},
+		HTTP:        doer,
+		Now:         func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "odps4", Service: "maxcompute", Operation: "DownloadTable",
+		Region: "cn-hangzhou", Method: http.MethodGet,
+		URL: "https://dt.cn-hangzhou.maxcompute.aliyun.com/projects/demo/tables/table?downloadid=session",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {
