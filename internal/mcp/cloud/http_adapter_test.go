@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
@@ -15,6 +16,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 type ecdsaSignaturePair struct {
@@ -312,6 +316,129 @@ func TestAWSSigV4aPolicyValidatesSchemeRegionSetAndProtectedHeaders(t *testing.T
 	valid.RegionSet = "*"
 	if err := validateInvocation(valid, nil); err == nil || !strings.Contains(err.Error(), "region_set") {
 		t.Fatalf("non-AWS region_set error=%v", err)
+	}
+}
+
+func TestAWSSigV4ChunkedMatchesOfficialS3Vector(t *testing.T) {
+	now := time.Date(2013, 5, 24, 0, 0, 0, 0, time.UTC)
+	request, err := http.NewRequest(http.MethodPut, "https://s3.amazonaws.com/examplebucket/chunkObject.txt", strings.NewReader(strings.Repeat("a", 65*1024)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Amz-Storage-Class", "REDUCED_REDUNDANCY")
+	if err := configureAWSSigV4ChunkedRequest(request, defaultAWSChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	credentials := aws.Credentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
+	if err := awsv4.NewSigner().SignHTTP(t.Context(), credentials, request, awsSigV4StreamingPayload, "s3", "us-east-1", now); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := awsSeedSignature(request.Header.Get("Authorization"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := hex.EncodeToString(seed), "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9"; got != want {
+		t.Fatalf("seed signature=%s want=%s", got, want)
+	}
+	request.Body = newAWSSigV4ChunkedReader(request.Body, 65*1024, credentials, "s3", "us-east-1", now, seed, defaultAWSChunkSize)
+	encoded, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, signature := range []string{
+		"ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648",
+		"0055627c9e194cb4542bae2aa5492e3c1575bbb81b612b7d234b86a503ef5497",
+		"b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9",
+	} {
+		if !bytes.Contains(encoded, []byte("chunk-signature="+signature)) {
+			t.Fatalf("official chunk signature %s missing", signature)
+		}
+	}
+	if got, want := int64(len(encoded)), request.ContentLength; got != want || got != 66824 {
+		t.Fatalf("encoded length=%d request length=%d want=66824", got, request.ContentLength)
+	}
+}
+
+func TestAWSSigV4ChunkedAdapterSignsAndStreamsBody(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.Header.Get("X-Amz-Content-Sha256") != awsSigV4StreamingPayload || request.Header.Get("Content-Encoding") != "aws-chunked" {
+			t.Fatalf("streaming headers=%v", request.Header)
+		}
+		if !bytes.Contains(body, []byte("chunk-signature=")) || !bytes.HasSuffix(body, []byte("\r\n")) {
+			t.Fatalf("encoded body=%q", body)
+		}
+		return httpResponse(200, `{"ok":true}`), nil
+	})
+	adapter := NewAWSRESTAdapter(AWSRESTConfig{
+		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}}, HTTP: doer,
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4", PayloadMode: "aws-chunked", Method: "PUT",
+		URL: "https://bucket.s3.us-east-1.amazonaws.com/object", Service: "s3", Operation: "put-object", Region: "us-east-1", Body: "payload",
+	})
+	if err != nil || string(result.Output) != `{"ok":true}` {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAWSSigV4ChunkedPolicyRejectsUnsafeCombinationsAndHeaders(t *testing.T) {
+	valid := Invocation{
+		Provider: ProviderAWS, AuthScheme: "sigv4", PayloadMode: "aws-chunked", Service: "s3", Operation: "put-object",
+		Method: "PUT", URL: "https://bucket.s3.us-east-1.amazonaws.com/object", Region: "us-east-1", Body: "payload",
+	}
+	if err := validateInvocation(valid, nil); err != nil {
+		t.Fatalf("valid aws-chunked request rejected: %v", err)
+	}
+	for _, mutate := range []func(*Invocation){
+		func(request *Invocation) { request.AuthScheme = "sigv4a"; request.RegionSet = "*" },
+		func(request *Invocation) { request.Service = "ec2" },
+		func(request *Invocation) { request.Method = "POST" },
+		func(request *Invocation) { request.Body = nil },
+		func(request *Invocation) { request.Headers = map[string]string{"Content-Length": "1"} },
+		func(request *Invocation) { request.Headers = map[string]string{"X-Amz-Decoded-Content-Length": "1"} },
+		func(request *Invocation) { request.Headers = map[string]string{"Transfer-Encoding": "chunked"} },
+	} {
+		request := valid
+		mutate(&request)
+		if err := validateInvocation(request, nil); err == nil {
+			t.Fatalf("unsafe aws-chunked request accepted: %#v", request)
+		}
+	}
+	valid.Provider = ProviderGCP
+	valid.AuthScheme = ""
+	valid.Service = ""
+	valid.Region = ""
+	valid.URL = "https://storage.googleapis.com/upload/storage/v1/b/b/o"
+	if err := validateInvocation(valid, nil); err == nil || !strings.Contains(err.Error(), "payload_mode") {
+		t.Fatalf("non-AWS payload_mode error=%v", err)
+	}
+}
+
+func TestAWSSigV4ChunkedHelpersRejectMalformedInputAndPreserveEncoding(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPut, "https://s3.amazonaws.com/bucket/key", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Encoding", "gzip")
+	if err := configureAWSSigV4ChunkedRequest(request, defaultAWSChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get("Content-Encoding"); got != "aws-chunked,gzip" {
+		t.Fatalf("content encoding=%q", got)
+	}
+	if _, err := awsSeedSignature("AWS4-HMAC-SHA256 Signature=not-hex"); err == nil {
+		t.Fatal("accepted malformed seed signature")
+	}
+	if _, err := awsChunkedEncodedLength(1, 1024); err == nil {
+		t.Fatal("accepted undersized chunks")
+	}
+	empty, err := awsChunkedEncodedLength(0, defaultAWSChunkSize)
+	if err != nil || empty != 86 {
+		t.Fatalf("empty encoded length=%d err=%v", empty, err)
 	}
 }
 

@@ -68,6 +68,7 @@ type Invocation struct {
 	AuthScheme   string
 	AuthVersion  string
 	APIVersion   string
+	PayloadMode  string
 	Method       string
 	URL          string
 	Parameters   map[string]any
@@ -105,6 +106,7 @@ type AuditEvent struct {
 	AuthVersion  string         `json:"auth_version,omitempty"`
 	AuthScheme   string         `json:"auth_scheme,omitempty"`
 	APIVersion   string         `json:"api_version,omitempty"`
+	PayloadMode  string         `json:"payload_mode,omitempty"`
 	Sensitive    bool           `json:"sensitive"`
 	Outcome      string         `json:"outcome"`
 	RequestID    string         `json:"request_id,omitempty"`

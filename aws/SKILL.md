@@ -23,12 +23,15 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
 - `region_set`: required only for SigV4a, as a comma-separated official region set such as `us-east-1,us-west-*`. It is not a token or credential.
+- `payload_mode`: use `aws-chunked` only for SigV4 S3 `PutObject` or `UploadPart` streaming bodies. The server creates the 64 KiB chunk framing and chained signatures.
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
 - `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root.
 - `response_file`: optional new approved-root file for large/binary responses. Use the documented `Range` header for objects larger than the configured per-call limit; existing files are never overwritten.
 
 Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="describe-instances", region="us-east-1", method="POST", url="https://ec2.us-east-1.amazonaws.com/", headers={"Content-Type":"application/x-www-form-urlencoded"}, body="Action=DescribeInstances&Version=2016-11-15&MaxResults=20")`.
+
+Example streaming upload: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-chunked", service="s3", operation="put-object", region="us-east-1", method="PUT", url="https://bucket.s3.us-east-1.amazonaws.com/object", body_file="/approved/uploads/object.bin", force=true)`.
 
 ## Credentials
 

@@ -31,7 +31,7 @@ and [Baidu BOS GetObject](https://cloud.baidu.com/doc/BOS/s/xkc5pcmcj).
 
 | Provider | Implemented | Still requiring implementation or proof |
 |---|---|---|
-| AWS | SigV4 header-signed HTTPS; SigV4a multi-region ECDSA header signing; AWS SDK default IAM/AKSK/STS chain | AWS event-stream/chunked payload signing; service-by-service live vectors |
+| AWS | SigV4 header-signed HTTPS; SigV4 S3 `aws-chunked` streaming payload signing; SigV4a multi-region ECDSA header signing; AWS SDK default IAM/AKSK/STS chain | AWS event-stream signing, signed trailing headers and SigV4a chunked payload signing; service-by-service live vectors |
 | Azure | Entra bearer REST through non-CLI service principal, workload identity, or managed identity; public and sovereign endpoint/audience routing | Official data planes that have no Entra authorization path; long-lived streaming/WebSocket protocols; service-by-service live vectors |
 | Google Cloud | ADC OAuth bearer REST on `googleapis.com`; public Discovery documents | APIs with no REST/HTTP transcoding; gRPC streaming and WebSocket transports; service-by-service live vectors |
 | Alibaba Cloud | ACS3 OpenAPI and OSS4 REST; credentials-go RAM/OIDC/ECS/AKSK/STS chain | Product-specific legacy signatures or non-HTTP transports not covered by ACS3/OSS4; service-by-service live vectors |

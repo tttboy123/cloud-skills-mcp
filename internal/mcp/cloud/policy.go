@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -129,6 +130,18 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.Provider != ProviderAWS && request.RegionSet != "" {
 		return fmt.Errorf("region_set is supported only by AWS SigV4a")
 	}
+	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
+	if payloadMode != "" {
+		if request.Provider != ProviderAWS || payloadMode != awsPayloadModeChunked {
+			return fmt.Errorf("unsupported payload_mode %q", request.PayloadMode)
+		}
+		if normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) != authSchemeAWSSigV4 || !strings.EqualFold(request.Service, "s3") {
+			return fmt.Errorf("aws-chunked requires AWS SigV4 and service s3")
+		}
+		if !strings.EqualFold(request.Method, http.MethodPut) || (request.Body == nil && request.BodyFile == "") {
+			return fmt.Errorf("aws-chunked requires a PUT request body")
+		}
+	}
 	for name, value := range map[string]string{
 		"region": request.Region, "project": request.Project, "subscription": request.Subscription,
 	} {
@@ -225,9 +238,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 
 func isProtectedHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "authorization", "proxy-authorization", "host",
+	case "authorization", "proxy-authorization", "host", "content-length", "transfer-encoding",
 		"x-api-key", "api-key", "cookie", "set-cookie", "x-http-method-override", "x-method-override",
-		"x-amz-date", "x-amz-security-token", "x-amz-region-set", "x-amz-content-sha256",
+		"x-amz-date", "x-amz-security-token", "x-amz-region-set", "x-amz-content-sha256", "x-amz-decoded-content-length", "x-amz-trailer",
 		"x-acs-action", "x-acs-version", "x-acs-date", "x-acs-signature-nonce", "x-acs-content-sha256", "x-acs-security-token",
 		"x-oss-date", "x-oss-content-sha256", "x-oss-security-token",
 		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",

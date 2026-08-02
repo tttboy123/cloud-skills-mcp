@@ -116,6 +116,12 @@ AWS S3 Multi-Region Access Point 使用 `auth_scheme=sigv4a` 和官方 region se
 {"name":"aws_api_read","arguments":{"auth_scheme":"sigv4a","service":"s3","operation":"get-object","region_set":"us-east-1,us-west-*","method":"GET","url":"https://<alias>.accesspoint.s3-global.amazonaws.com/object","response_file":"/approved/downloads/object.bin"}}
 ```
 
+S3 `PutObject`/`UploadPart` 的 SigV4 流式上传使用 `payload_mode=aws-chunked`。服务端固定使用官方建议的 64 KiB chunk，并生成链式签名；签名头不能由 MCP 调用方传入：
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-chunked","service":"s3","operation":"put-object","region":"us-east-1","method":"PUT","url":"https://<bucket>.s3.us-east-1.amazonaws.com/object","body_file":"/approved/uploads/object.bin","force":true}}
+```
+
 Azure 查询：
 
 ```json

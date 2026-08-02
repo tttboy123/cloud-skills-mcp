@@ -73,6 +73,10 @@ remain available through the guarded resource gateway.
 - AWS SigV4a derives the documented ECDSA P-256 key from the same
   operator-owned AKSK/IAM chain and requires a validated `region_set`; it never
   exposes the derived private key and does not enable presigned URLs.
+- AWS SigV4 S3 streaming uploads accept only an approved request body and
+  generate `aws-chunked` framing, content lengths, seed and chained chunk
+  signatures in-process; callers cannot provide signing or transfer-length
+  headers.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.

@@ -148,17 +148,39 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
 		return InvocationResult{}, fmt.Errorf("AWS credential provider returned incomplete AKSK material")
 	}
+	payloadMode := strings.ToLower(strings.TrimSpace(invocation.PayloadMode))
+	decodedContentLength := request.ContentLength
+	if payloadMode == awsPayloadModeChunked {
+		if scheme != authSchemeAWSSigV4 || !strings.EqualFold(invocation.Service, "s3") || !strings.EqualFold(invocation.Method, http.MethodPut) {
+			return InvocationResult{}, fmt.Errorf("aws-chunked requires AWS SigV4, service s3, and method PUT")
+		}
+		if err := configureAWSSigV4ChunkedRequest(request, defaultAWSChunkSize); err != nil {
+			return InvocationResult{}, err
+		}
+		payloadHash = awsSigV4StreamingPayload
+	} else if payloadMode != "" {
+		return InvocationResult{}, fmt.Errorf("unsupported AWS payload_mode %q", invocation.PayloadMode)
+	}
 	if strings.EqualFold(invocation.Service, "s3") {
 		request.Header.Set("X-Amz-Content-Sha256", payloadHash)
 	}
+	signingTime := adapter.config.Now().UTC()
 	if scheme == authSchemeAWSSigV4 {
 		awsCredentials := aws.Credentials{
 			AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken,
 		}
-		if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, payloadHash, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now().UTC()); err != nil {
+		if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, payloadHash, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), signingTime); err != nil {
 			return InvocationResult{}, fmt.Errorf("sign AWS SigV4 request: %w", err)
 		}
-	} else if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, adapter.config.Now().UTC()); err != nil {
+		if payloadMode == awsPayloadModeChunked {
+			seed, err := awsSeedSignature(request.Header.Get("Authorization"))
+			if err != nil {
+				return InvocationResult{}, err
+			}
+			request.Body = newAWSSigV4ChunkedReader(request.Body, decodedContentLength, awsCredentials, "s3", strings.ToLower(invocation.Region), signingTime, seed, defaultAWSChunkSize)
+			request.GetBody = nil
+		}
+	} else if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, signingTime); err != nil {
 		return InvocationResult{}, fmt.Errorf("sign AWS SigV4a request: %w", err)
 	}
 	return invokeSignedHTTP(adapter.config.HTTP, adapter.config.MaxBodyBytes, request, invocation, "AWS API")
