@@ -39,6 +39,8 @@ const (
 	authSchemeAlibabaODPS       = "odps"
 	authSchemeAlibabaODPSV4     = "odps4"
 	authSchemeAlibabaFC         = "fc"
+	authSchemeAlibabaFC3        = "fc3"
+	authSchemeAlibabaFCCustom   = "fc-custom"
 	authSchemeAlibabaOSSV4      = "oss4"
 	authSchemeAlibabaSLS        = "sls"
 	authSchemeAlibabaSLSV4      = "sls4"
@@ -320,7 +322,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+fc+oss4+sls+sls4+mns+ots+ots4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+fc+fc3+fc-custom+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -338,6 +340,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"odps_endpoints": "https://www.alibabacloud.com/help/en/maxcompute/user-guide/endpoints",
 		"fc_signature":   "https://www.alibabacloud.com/help/en/functioncompute/signature-authentication",
 		"fc_endpoints":   "https://www.alibabacloud.com/help/en/functioncompute/endpoints",
+		"fc3_trigger":    "https://www.alibabacloud.com/help/en/functioncompute/fc/configure-signature-authentication-for-http-triggers",
+		"fc_custom":      "https://www.alibabacloud.com/help/en/functioncompute/configure-signature-authentication-for-custom-domain-names",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
@@ -347,8 +351,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, oss4, sls, sls4, mns, ots, or ots4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -406,6 +410,14 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeAlibabaFC:
 		if err := signAlibabaFC(request, credentials, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaFC3:
+		if err := signAlibabaFC3(request, credentials, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaFCCustom:
+		if err := signAlibabaFCCustomDomain(request, credentials, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeAlibabaOSSV4:
@@ -1195,6 +1207,121 @@ func canonicalAlibabaFCResource(target *url.URL) string {
 	}
 	sort.Strings(parts)
 	return path + "\n" + strings.Join(parts, "\n")
+}
+
+func signAlibabaFC3(request *http.Request, credentials AlibabaCredentials, now time.Time) error {
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud Function Compute ACS3 trigger requires complete AKSK material")
+	}
+	request.Header.Set("X-Acs-Date", now.UTC().Format("2006-01-02T15:04:05Z"))
+	request.Header.Set("X-Acs-Security-Token", credentials.SecurityToken)
+	authorization, err := alibabaFC3Authorization(request, credentials)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", authorization)
+	return nil
+}
+
+func alibabaFC3Authorization(request *http.Request, credentials AlibabaCredentials) (string, error) {
+	canonicalQuery, err := canonicalAlibabaSingleValueQuery(request.URL.Query(), true)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize Alibaba Cloud Function Compute ACS3 trigger query: %w", err)
+	}
+	canonicalURI := request.URL.EscapedPath()
+	if canonicalURI == "" {
+		canonicalURI = "/"
+	}
+	canonicalURI = strings.NewReplacer("$", "%24", "+", "%20", "*", "%2A", "%7E", "~").Replace(canonicalURI)
+	canonicalHeaders, signedHeaders := canonicalAlibabaFC3Headers(request.Header)
+	canonicalRequest := strings.ToUpper(request.Method) + "\n" + canonicalURI + "\n" + canonicalQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n"
+	stringToSign := "ACS3-HMAC-SHA256\n" + sha256Hex([]byte(canonicalRequest))
+	signature := hmacHex(sha256.New, []byte(credentials.AccessKeySecret), []byte(stringToSign))
+	return "ACS3-HMAC-SHA256 Credential=" + credentials.AccessKeyID + ",SignedHeaders=" + signedHeaders + ",Signature=" + signature, nil
+}
+
+func canonicalAlibabaFC3Headers(headers http.Header) (string, string) {
+	values := make(map[string]string)
+	for name, entries := range headers {
+		lowerName := strings.ToLower(name)
+		if (strings.HasPrefix(lowerName, "x-acs-") || lowerName == "host" || lowerName == "content-type") && len(entries) > 0 {
+			values[lowerName] = strings.TrimSpace(entries[0])
+		}
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var canonical strings.Builder
+	for _, name := range names {
+		canonical.WriteString(name)
+		canonical.WriteByte(':')
+		canonical.WriteString(values[name])
+		canonical.WriteByte('\n')
+	}
+	return canonical.String(), strings.Join(names, ";")
+}
+
+func signAlibabaFCCustomDomain(request *http.Request, credentials AlibabaCredentials, now time.Time) error {
+	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+		return fmt.Errorf("Alibaba Cloud Function Compute custom-domain signing requires complete AKSK material")
+	}
+	request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Acs-Security-Token", credentials.SecurityToken)
+	}
+	resource, err := canonicalAlibabaFCCustomResource(request.URL)
+	if err != nil {
+		return err
+	}
+	canonicalHeaders := canonicalPrefixedHeaders(request.Header, "x-acs-")
+	stringToSign := strings.ToUpper(request.Method) + "\n" + request.Header.Get("Accept") + "\n" + request.Header.Get("Content-MD5") + "\n" + request.Header.Get("Content-Type") + "\n" + request.Header.Get("Date") + "\n"
+	if canonicalHeaders != "" {
+		stringToSign += canonicalHeaders + "\n"
+	}
+	stringToSign += resource
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("Authorization", "acs "+credentials.AccessKeyID+":"+signature)
+	return nil
+}
+
+func canonicalAlibabaFCCustomResource(target *url.URL) (string, error) {
+	query, err := canonicalAlibabaSingleValueQuery(target.Query(), false)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize Alibaba Cloud Function Compute custom-domain query: %w", err)
+	}
+	resource := target.EscapedPath()
+	if resource == "" {
+		resource = "/"
+	}
+	if query != "" {
+		resource += "?" + query
+	}
+	return resource, nil
+}
+
+func canonicalAlibabaSingleValueQuery(values url.Values, encodeValue bool) (string, error) {
+	names := make([]string, 0, len(values))
+	for name, entries := range values {
+		if len(entries) != 1 {
+			return "", fmt.Errorf("query parameter %q must have exactly one value", name)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		value := values[name][0]
+		if encodeValue {
+			parts = append(parts, name+"="+uriEncode(value, true))
+		} else if value == "" {
+			parts = append(parts, name)
+		} else {
+			parts = append(parts, name+"="+value)
+		}
+	}
+	return strings.Join(parts, "&"), nil
 }
 
 func signTencentTC3(request *http.Request, payloadHash string, credentials TencentCredentials, invocation Invocation, now time.Time) error {

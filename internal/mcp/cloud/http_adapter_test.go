@@ -1246,6 +1246,85 @@ func TestAlibabaFCAdapterSignsBodyAndSTS(t *testing.T) {
 	}
 }
 
+func TestAlibabaFC3AdapterMatchesOfficialOpenAPIUtilVector(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		want := "ACS3-HMAC-SHA256 Credential=testid,SignedHeaders=content-type;x-acs-date;x-acs-security-token,Signature=e85a61d8ac3b1e0fd94f9c7e747668ad95794edffb52137947195c40b484c855"
+		if got := request.Header.Get("Authorization"); got != want {
+			t.Fatalf("authorization=%q want=%q", got, want)
+		}
+		if request.Header.Get("X-Acs-Date") != "2026-08-03T01:02:03Z" || request.Header.Get("X-Acs-Security-Token") != "ram-token" {
+			t.Fatalf("headers=%v", request.Header)
+		}
+		return httpResponse(200, `ok`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials: staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "testid", AccessKeySecret: "testsecret", SecurityToken: "ram-token"}},
+		HTTP:        doer,
+		Now:         func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "fc3", Service: "fc", Operation: "InvokeHTTPTrigger",
+		Method: http.MethodPost, URL: "https://xx.cn-shanghai.fcapp.run/hello?foo=bar", Body: "hello world",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAlibabaFCCustomDomainAdapterMatchesOfficialHMACFormula(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if got, want := request.Header.Get("Authorization"), "acs testid:wHPkxQA9V4QHS7RHi9EguBgpgoY="; got != want {
+			t.Fatalf("authorization=%q want=%q", got, want)
+		}
+		return httpResponse(200, `ok`), nil
+	})
+	adapter := NewAlibabaRESTAdapter(AlibabaRESTConfig{
+		Credentials:  staticAlibabaCredentialsProvider{AlibabaCredentials{AccessKeyID: "testid", AccessKeySecret: "testsecret", SecurityToken: "ram-token"}},
+		HTTP:         doer,
+		AllowedHosts: []string{"functions.example.com"},
+		Now:          func() time.Time { return time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC) },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "fc-custom", Service: "fc", Operation: "InvokeCustomDomain",
+		Method: http.MethodPost, URL: "https://functions.example.com/hello?foo=bar&empty=", Body: "hello world",
+		Headers: map[string]string{"Accept": "application/json"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAlibabaFCCustomDomainWithoutCanonicalHeaders(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://functions.example.com/hello", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signAlibabaFCCustomDomain(request, AlibabaCredentials{AccessKeyID: "testid", AccessKeySecret: "testsecret"}, time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "acs testid:qoM5xk9WFeQBqm1LGDEJ0As1nwE="; got != want {
+		t.Fatalf("authorization=%q want=%q", got, want)
+	}
+}
+
+func TestAlibabaFCTriggerSignersRejectRepeatedQueryNames(t *testing.T) {
+	credentials := AlibabaCredentials{AccessKeyID: "testid", AccessKeySecret: "testsecret"}
+	fc3, err := http.NewRequest(http.MethodGet, "https://xx.cn-shanghai.fcapp.run/hello?tag=a&tag=b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signAlibabaFC3(fc3, credentials, time.Now()); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("FC3 repeated query error=%v", err)
+	}
+	custom, err := http.NewRequest(http.MethodGet, "https://functions.example.com/hello?tag=a&tag=b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signAlibabaFCCustomDomain(custom, credentials, time.Now()); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("FC custom repeated query error=%v", err)
+	}
+}
+
 func TestAlibabaSLSV1MatchesOfficialSDKVector(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/logstores", nil)
 	if err != nil {

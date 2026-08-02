@@ -404,6 +404,7 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "odps", Service: "maxcompute", Operation: "ListProjects", Method: "GET", URL: "https://service.cn-hangzhou.maxcompute.aliyun.com/api/projects"},
 		{Provider: ProviderAlicloud, AuthScheme: "odps4", Service: "maxcompute", Operation: "ListProjects", Region: "cn-hangzhou", Method: "GET", URL: "https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api/projects"},
 		{Provider: ProviderAlicloud, AuthScheme: "fc", Service: "fc", Operation: "ListServices", Method: "GET", URL: "https://123.cn-hangzhou.fc.aliyuncs.com/2016-08-15/services"},
+		{Provider: ProviderAlicloud, AuthScheme: "fc3", Service: "fc", Operation: "InvokeHTTPTrigger", Method: "POST", URL: "https://xx.cn-shanghai.fcapp.run/hello?foo=bar"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {
@@ -466,6 +467,28 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 	fc.Headers = map[string]string{"X-Fc-Security-Token": "caller"}
 	if err := validateInvocation(fc, nil); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("FC caller token error=%v", err)
+	}
+	fc3 := requests[12]
+	fc3.Headers = map[string]string{"X-Acs-Date": "caller"}
+	if err := validateInvocation(fc3, nil); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("FC3 caller date error=%v", err)
+	}
+}
+
+func TestInvocationBoundaryAllowsExactFunctionComputeCustomDomain(t *testing.T) {
+	request := Invocation{
+		Provider: ProviderAlicloud, AuthScheme: "fc-custom", Service: "fc", Operation: "InvokeCustomDomain",
+		Method: "POST", URL: "https://functions.example.com/hello",
+	}
+	if err := validateInvocationWithEndpointHosts(request, nil, []string{"functions.example.com"}); err != nil {
+		t.Fatalf("operator-approved Function Compute custom domain rejected: %v", err)
+	}
+	if err := validateInvocation(request, nil); err == nil {
+		t.Fatal("unapproved Function Compute custom domain accepted")
+	}
+	request.AuthScheme = "fc3"
+	if err := validateInvocationWithEndpointHosts(request, nil, []string{"functions.example.com"}); err == nil || !strings.Contains(err.Error(), "fcapp.run") {
+		t.Fatalf("FC3 accepted on a custom domain: %v", err)
 	}
 }
 
