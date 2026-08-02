@@ -34,7 +34,7 @@ and [Baidu BOS GetObject](https://cloud.baidu.com/doc/BOS/s/xkc5pcmcj).
 | AWS | SigV4 and SigV4a header-signed HTTPS; SigV4/SigV4a S3 `aws-chunked` streaming payload signing with optional signed CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 trailer; finite SigV4 HTTP EventStream request signing and raw response-file streaming; AWS SDK default IAM/AKSK/STS chain | Interactive WebSocket sessions; service-by-service live vectors |
 | Azure | Entra bearer REST through non-CLI service principal, workload identity, or managed identity; public and sovereign endpoint/audience routing; Azure Maps public/geographic endpoint scope; Azure Health Data Services and legacy API for FHIR service audiences plus the shared DICOM audience | Official data planes that have no Entra authorization path; long-lived streaming/WebSocket protocols; service-by-service live vectors |
 | Google Cloud | ADC OAuth bearer REST on `googleapis.com`; public Discovery documents | APIs with no REST/HTTP transcoding; gRPC streaming and WebSocket transports; service-by-service live vectors |
-| Alibaba Cloud | ACS3 OpenAPI; legacy RPC/ROA V2; DataHub `DATAHUB` and OpenSearch V3 `OPENSEARCH` HMAC-SHA1; MaxCompute project/data/Tunnel ODPS V2/V4; classic Function Compute `FC`, current `fcapp.run` Trigger ACS3, and custom-domain Trigger POP HMAC-SHA1; OSS4; SLS v1/v4; MNS/SMQ; and Tablestore OTS v2/v4; credentials-go RAM/OIDC/ECS/AKSK/STS chain | Product-specific signatures or non-HTTP transports outside implemented families; service-by-service live vectors |
+| Alibaba Cloud | ACS3 OpenAPI; legacy RPC/ROA V2; DataHub `DATAHUB` and OpenSearch V3 `OPENSEARCH` HMAC-SHA1; MaxCompute project/data/Tunnel ODPS V2/V4; classic Function Compute `FC`, current `fcapp.run` Trigger ACS3, and custom-domain Trigger POP HMAC-SHA1; OSS V1/V4 Header authentication; SLS v1/v4; MNS/SMQ; and Tablestore OTS v2/v4; credentials-go RAM/OIDC/ECS/AKSK/STS chain | Product-specific signatures or non-HTTP transports outside implemented families; service-by-service live vectors |
 | Tencent Cloud | TC3 API 3.0 and COS REST signatures; AKSK/CAM temporary credentials | Legacy/product-specific signatures outside TC3/COS; long-lived streaming/WebSocket protocols; service-by-service live vectors |
 | Baidu AI Cloud | BCE auth v1 and v2 signed HTTPS; AKSK/IAM-STS session token | Product-specific legacy signatures or non-HTTP transports outside BCE v1/v2; service-by-service live vectors |
 
@@ -42,6 +42,12 @@ Credential minting/export and caller-supplied signed URLs, SAS, bearer tokens,
 API keys, or Authorization headers remain intentionally outside the public MCP
 surface. The only credential entrypoints are operator-controlled AKSK,
 temporary AKSK/session tokens, or official IAM identity chains.
+
+OSS POST policy signatures and presigned URL signatures are also intentionally
+excluded: both create transferable, time-bounded authorization artifacts for a
+different client. All OSS resource operations that do not require delegated
+authorization remain callable with the implemented V1/V4 Header signers,
+including PutObject and multipart upload operations behind the write gate.
 
 ## Explicit unavailable or credential-bound mappings
 

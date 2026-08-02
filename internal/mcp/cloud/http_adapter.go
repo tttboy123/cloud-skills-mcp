@@ -41,6 +41,7 @@ const (
 	authSchemeAlibabaFC         = "fc"
 	authSchemeAlibabaFC3        = "fc3"
 	authSchemeAlibabaFCCustom   = "fc-custom"
+	authSchemeAlibabaOSS        = "oss"
 	authSchemeAlibabaOSSV4      = "oss4"
 	authSchemeAlibabaSLS        = "sls"
 	authSchemeAlibabaSLSV4      = "sls4"
@@ -322,7 +323,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+fc+fc3+fc-custom+oss4+sls+sls4+mns+ots+ots4",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+fc+fc3+fc-custom+oss+oss4+sls+sls4+mns+ots+ots4",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -342,6 +343,7 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"fc_endpoints":   "https://www.alibabacloud.com/help/en/functioncompute/endpoints",
 		"fc3_trigger":    "https://www.alibabacloud.com/help/en/functioncompute/fc/configure-signature-authentication-for-http-triggers",
 		"fc_custom":      "https://www.alibabacloud.com/help/en/functioncompute/configure-signature-authentication-for-custom-domain-names",
+		"oss_signature":  "https://www.alibabacloud.com/help/en/oss/developer-reference/include-signatures-in-the-authorization-header",
 		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
 		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
 		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
@@ -351,8 +353,8 @@ func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss4, sls, sls4, mns, ots, or ots4")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, ots, or ots4")
 	}
 	if scheme == authSchemeAlibabaMNS && (invocation.Body != nil || invocation.BodyFile != "") && !hasHeader(invocation.Headers, "content-type") {
 		invocation.Headers = cloneStringMap(invocation.Headers)
@@ -418,6 +420,10 @@ func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeAlibabaFCCustom:
 		if err := signAlibabaFCCustomDomain(request, credentials, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeAlibabaOSS:
+		if err := signAlibabaOSSV1(request, credentials, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	case authSchemeAlibabaOSSV4:
@@ -1391,6 +1397,111 @@ func signAlibabaOSSV4(request *http.Request, credentials AlibabaCredentials, reg
 	authorization += ",Signature=" + signature
 	request.Header.Set("Authorization", authorization)
 	return nil
+}
+
+func signAlibabaOSSV1(request *http.Request, credentials AlibabaCredentials, now time.Time) error {
+	request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	if credentials.SecurityToken != "" {
+		request.Header.Set("X-Oss-Security-Token", credentials.SecurityToken)
+	}
+	date := request.Header.Get("Date")
+	if ossDate := request.Header.Get("X-Oss-Date"); ossDate != "" {
+		date = ossDate
+	}
+	canonicalHeaders := canonicalPrefixedHeaders(request.Header, "x-oss-")
+	stringToSign := strings.Join([]string{
+		request.Method,
+		request.Header.Get("Content-MD5"),
+		request.Header.Get("Content-Type"),
+		date,
+	}, "\n") + "\n"
+	if canonicalHeaders != "" {
+		stringToSign += canonicalHeaders + "\n"
+	}
+	stringToSign += canonicalAlibabaOSSV1Resource(request.URL)
+	signature := base64.StdEncoding.EncodeToString(hmacBytes(sha1.New, []byte(credentials.AccessKeySecret), []byte(stringToSign)))
+	request.Header.Set("Authorization", "OSS "+credentials.AccessKeyID+":"+signature)
+	return nil
+}
+
+func canonicalAlibabaOSSV1Resource(target *url.URL) string {
+	if target == nil {
+		return "/"
+	}
+	host := strings.ToLower(target.Hostname())
+	bucket := ""
+	for _, marker := range []string{".oss-", ".oss."} {
+		if index := strings.Index(host, marker); index > 0 {
+			bucket = host[:index]
+			break
+		}
+	}
+	path := target.Path
+	if path == "" {
+		path = "/"
+	}
+	if bucket == "" && (strings.HasPrefix(host, "oss-") || strings.HasPrefix(host, "oss.")) {
+		trimmed := strings.TrimPrefix(path, "/")
+		if index := strings.IndexByte(trimmed, '/'); index >= 0 {
+			bucket = trimmed[:index]
+			path = "/" + trimmed[index+1:]
+		} else if trimmed != "" {
+			bucket = trimmed
+			path = "/"
+		}
+	}
+	resource := ""
+	if bucket != "" {
+		resource = "/" + bucket
+		if !strings.HasPrefix(path, "/") {
+			resource += "/"
+		}
+	}
+	resource += path
+	if resource == "" || resource == "//" {
+		resource = "/"
+	}
+	query := target.Query()
+	parts := make([]string, 0)
+	for name, entries := range query {
+		if !isAlibabaOSSV1Subresource(name) {
+			continue
+		}
+		value := ""
+		if len(entries) > 0 {
+			value = entries[0]
+		}
+		if value == "" {
+			parts = append(parts, name)
+		} else {
+			parts = append(parts, name+"="+value)
+		}
+	}
+	sort.Strings(parts)
+	if len(parts) > 0 {
+		resource += "?" + strings.Join(parts, "&")
+	}
+	return resource
+}
+
+func isAlibabaOSSV1Subresource(name string) bool {
+	if strings.HasPrefix(name, "x-oss-") {
+		return true
+	}
+	_, ok := alibabaOSSV1Subresources[name]
+	return ok
+}
+
+var alibabaOSSV1Subresources = map[string]struct{}{
+	"DeleteVectorIndex": {}, "GetVectorIndex": {}, "ListVectorIndexes": {}, "PutVectorIndex": {},
+	"accessPoint": {}, "accessPointConfigForObjectProcess": {}, "accessPointForObjectProcess": {}, "accessPointPolicy": {}, "accessPointPolicyForObjectProcess": {},
+	"acl": {}, "append": {}, "bucketArchiveDirectRead": {}, "bucketInfo": {}, "callback": {}, "callback-var": {}, "cleanRestoredObject": {}, "cloudboxes": {}, "cname": {}, "comp": {}, "continuation-token": {}, "cors": {},
+	"delete": {}, "encryption": {}, "httpsConfig": {}, "img": {}, "inventory": {}, "inventoryId": {}, "legalHold": {}, "lifecycle": {}, "live": {}, "location": {}, "logging": {}, "metaQuery": {},
+	"objectMeta": {}, "objectWorm": {}, "overwriteConfig": {}, "partNumber": {}, "policy": {}, "policyStatus": {}, "position": {}, "publicAccessBlock": {}, "qos": {}, "redundancyTransition": {}, "referer": {},
+	"regionList": {}, "regions": {}, "replication": {}, "replicationLocation": {}, "replicationProgress": {}, "requestPayment": {}, "resourceGroup": {}, "restore": {}, "retention": {}, "rtc": {}, "seal": {}, "security-token": {}, "sequential": {},
+	"startTime": {}, "stat": {}, "status": {}, "style": {}, "styleName": {}, "symlink": {}, "tagging": {}, "transferAcceleration": {}, "uploadId": {}, "uploads": {}, "userDefinedLogFieldsConfig": {}, "versionId": {}, "versioning": {}, "versions": {}, "vod": {}, "website": {},
+	"worm": {}, "wormExtend": {}, "wormId": {}, "x-oss-process": {}, "x-oss-write-get-object-response": {},
+	"response-cache-control": {}, "response-content-disposition": {}, "response-content-encoding": {}, "response-content-language": {}, "response-content-type": {}, "response-expires": {},
 }
 
 func signAlibabaSLSV1(request *http.Request, credentials AlibabaCredentials, apiVersion string, now time.Time) error {

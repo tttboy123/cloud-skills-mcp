@@ -107,8 +107,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3)
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss4, sls, sls4, mns, ots, or ots4")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, ots, or ots4")
 		}
 		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2 || scheme == authSchemeAlibabaROAV2) && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
@@ -197,6 +197,16 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			host := strings.ToLower(parsed.Hostname())
 			if host != "fcapp.run" && !strings.HasSuffix(host, ".fcapp.run") {
 				return fmt.Errorf("Alibaba Cloud FC3 requires an official fcapp.run HTTP trigger endpoint")
+			}
+		}
+		if scheme == authSchemeAlibabaOSS {
+			for name := range request.Headers {
+				if isAlibabaOSSV1ControlledHeader(name) {
+					return fmt.Errorf("caller-supplied protected Alibaba Cloud OSS V1 header %q is forbidden", name)
+				}
+			}
+			if err := validateAlibabaOSSV1Target(request.URL); err != nil {
+				return err
 			}
 		}
 		if scheme == authSchemeAlibabaOSSV4 && !identifierPattern.MatchString(request.Region) {
@@ -686,6 +696,39 @@ func isAlibabaFCTriggerControlledHeader(name string) bool {
 	default:
 		return false
 	}
+}
+
+func isAlibabaOSSV1ControlledHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "date", "x-oss-date", "x-oss-security-token":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateAlibabaOSSV1Target(rawURL string) error {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid Alibaba Cloud OSS V1 URL")
+	}
+	host := strings.ToLower(target.Hostname())
+	isOSSEndpoint := false
+	for _, label := range strings.Split(host, ".") {
+		if label == "oss" || strings.HasPrefix(label, "oss-") {
+			isOSSEndpoint = true
+			break
+		}
+	}
+	if !isOSSEndpoint || !(strings.HasSuffix(host, ".aliyuncs.com") || strings.HasSuffix(host, ".aliyuncs.com.cn") || strings.HasSuffix(host, ".alibabacloud.com")) {
+		return fmt.Errorf("Alibaba Cloud OSS V1 requires an official OSS endpoint whose bucket is encoded in the host or path")
+	}
+	for name, entries := range target.Query() {
+		if isAlibabaOSSV1Subresource(name) && len(entries) > 1 {
+			return fmt.Errorf("Alibaba Cloud OSS V1 does not allow repeated signed query parameter %q", name)
+		}
+	}
+	return nil
 }
 
 func validAdditionalEndpointHost(host string) bool {

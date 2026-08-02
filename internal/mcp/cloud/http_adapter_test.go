@@ -1387,6 +1387,7 @@ func TestAlibabaProductSpecificSignersInjectSTSAndSendHTTPS(t *testing.T) {
 	}{
 		{scheme: "sls", url: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", prefix: "LOG aliyun-ak:", token: "X-Acs-Security-Token"},
 		{scheme: "sls4", region: "cn-hangzhou", url: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", prefix: "SLS4-HMAC-SHA256 Credential=aliyun-ak/", token: "X-Acs-Security-Token"},
+		{scheme: "oss", url: "https://bucket.oss-cn-hangzhou.aliyuncs.com/object?acl", prefix: "OSS aliyun-ak:", token: "X-Oss-Security-Token"},
 		{scheme: "mns", url: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues", prefix: "MNS aliyun-ak:", token: "Security-Token"},
 	}
 	for _, test := range tests {
@@ -1636,6 +1637,48 @@ func TestAlibabaOSS4AndTencentCOSDataPlaneSchemes(t *testing.T) {
 	authorization := cosRequest.Header.Get("Authorization")
 	if !strings.Contains(authorization, "q-header-list=date;host;x-cos-security-token") || !strings.Contains(authorization, "q-url-param-list=response-content-type") || !strings.Contains(authorization, "q-signature=") {
 		t.Fatalf("COS authorization=%q", authorization)
+	}
+}
+
+func TestAlibabaOSSV1MatchesOfficialGoSDKFixedVector(t *testing.T) {
+	request, err := http.NewRequest(http.MethodPut, "https://examplebucket.oss-cn-hangzhou.aliyuncs.com/nelson?acl&prefix=ignored", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-MD5", "eB5eJF1ptWaXm4bijSPyxw==")
+	request.Header.Set("Content-Type", "text/html")
+	request.Header.Set("X-Oss-Date", "Wed, 28 Dec 2022 10:27:41 GMT")
+	request.Header.Set("X-Oss-Meta-Author", "alice")
+	request.Header.Set("X-Oss-Meta-Magic", "abracadabra")
+
+	if err := signAlibabaOSSV1(request, AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "sk"}, time.Date(2022, 12, 28, 10, 27, 41, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := request.Header.Get("Authorization"), "OSS ak:/afkugFbmWDQ967j1vr6zygBLQk="; got != want {
+		t.Fatalf("authorization=%q, want %q", got, want)
+	}
+	if got, want := canonicalAlibabaOSSV1Resource(request.URL), "/examplebucket/nelson?acl"; got != want {
+		t.Fatalf("canonical resource=%q, want %q", got, want)
+	}
+}
+
+func TestAlibabaOSSV1SignsSTSAndCurrentSDKSubresources(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://examplebucket.oss-cn-hangzhou.aliyuncs.com/?resourceGroup&non-resource=ignored", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2022, 12, 28, 10, 27, 41, 0, time.UTC)
+	if err := signAlibabaOSSV1(request, AlibabaCredentials{AccessKeyID: "ak", AccessKeySecret: "sk", SecurityToken: "sts-token"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get("X-Oss-Security-Token"); got != "sts-token" {
+		t.Fatalf("security token=%q", got)
+	}
+	if got := canonicalAlibabaOSSV1Resource(request.URL); got != "/examplebucket/?resourceGroup" {
+		t.Fatalf("canonical resource=%q", got)
+	}
+	if got := request.Header.Get("Authorization"); !strings.HasPrefix(got, "OSS ak:") {
+		t.Fatalf("authorization=%q", got)
 	}
 }
 

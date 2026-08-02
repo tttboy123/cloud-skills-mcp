@@ -319,6 +319,9 @@ func TestInvocationBoundaryRejectsCredentialExfiltrationAndUnboundedInput(t *tes
 		{Provider: ProviderAlicloud, Service: "oss", Operation: "PutObject", Parameters: map[string]any{"Body": "file:///etc/passwd"}},
 		{Provider: ProviderAlicloud, AuthScheme: "sls", Service: "sls", Operation: "ListLogstores", Method: "GET", URL: "https://project.cn-hangzhou.log.aliyuncs.com/logstores", Headers: map[string]string{"X-Log-Date": "20260803T010203Z"}},
 		{Provider: ProviderAlicloud, AuthScheme: "mns", Service: "mns", Operation: "ListQueues", Method: "GET", URL: "https://123456789.mns.cn-hangzhou.aliyuncs.com/queues", Headers: map[string]string{"Security-Token": "credential"}},
+		{Provider: ProviderAlicloud, AuthScheme: "oss", Service: "oss", Operation: "GetObject", Method: "GET", URL: "https://bucket.oss-cn-hangzhou.aliyuncs.com/object", Headers: map[string]string{"Date": "Wed, 28 Dec 2022 10:27:41 GMT"}},
+		{Provider: ProviderAlicloud, AuthScheme: "oss", Service: "oss", Operation: "GetObject", Method: "GET", URL: "https://ecs.cn-hangzhou.aliyuncs.com/object"},
+		{Provider: ProviderAlicloud, AuthScheme: "oss", Service: "oss", Operation: "GetBucketAcl", Method: "GET", URL: "https://bucket.oss-cn-hangzhou.aliyuncs.com/?acl&acl=duplicate"},
 		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/?SignatureNonce=caller"},
 		{Provider: ProviderAlicloud, AuthScheme: "rpc", Service: "baas", Operation: "DescribeFabricOrganization", APIVersion: "2018-12-21", Method: "GET", URL: "https://baas.aliyuncs.com/", Parameters: map[string]any{"Action": "CallerOverride"}},
 		{Provider: ProviderGCP, Method: "GET", URL: "https://compute.googleapis.com/v1/projects", Audience: "https://management.azure.com"},
@@ -405,6 +408,7 @@ func TestInvocationBoundaryAllowsAlibabaProductSpecificHTTPSAuthSchemes(t *testi
 		{Provider: ProviderAlicloud, AuthScheme: "odps4", Service: "maxcompute", Operation: "ListProjects", Region: "cn-hangzhou", Method: "GET", URL: "https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api/projects"},
 		{Provider: ProviderAlicloud, AuthScheme: "fc", Service: "fc", Operation: "ListServices", Method: "GET", URL: "https://123.cn-hangzhou.fc.aliyuncs.com/2016-08-15/services"},
 		{Provider: ProviderAlicloud, AuthScheme: "fc3", Service: "fc", Operation: "InvokeHTTPTrigger", Method: "POST", URL: "https://xx.cn-shanghai.fcapp.run/hello?foo=bar"},
+		{Provider: ProviderAlicloud, AuthScheme: "oss", Service: "oss", Operation: "GetObject", Method: "GET", URL: "https://bucket.oss-cn-hangzhou.aliyuncs.com/object?versionId=1"},
 	}
 	for _, request := range requests {
 		if err := validateInvocation(request, nil); err != nil {

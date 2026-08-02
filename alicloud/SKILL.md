@@ -1,6 +1,6 @@
 ---
 name: alicloud
-description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS, Function Compute FC, OSS4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, MaxCompute, Function Compute, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
+description: Operate or inspect Alibaba Cloud resources through ACS3, RPC/ROA V2, DataHub, OpenSearch, MaxCompute ODPS, Function Compute FC, OSS V1/V4, SLS, MNS, or OTS signed HTTPS in cloud-skills-mcp. Use for Alibaba Cloud, Aliyun, ECS, DataHub, OpenSearch, MaxCompute, Function Compute, OSS, SLS, MNS, Tablestore, RDS, VPC, RAM, ACK, Model Studio, BaaS, PDS, or a documented Alibaba Cloud API.
 ---
 
 # Alibaba Cloud
@@ -18,7 +18,7 @@ Use the unified MCP server for Alibaba Cloud HTTP APIs. The gateway signs genera
 
 ## MCP arguments
 
-- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `odps4` for current MaxCompute project/data/Tunnel APIs and `odps` for their legacy V2 signature; `fc` for classic Function Compute resources and old `/2016-08-15/proxy/...` triggers, `fc3` for current `fcapp.run` HTTP triggers, and `fc-custom` for signature-enabled custom domains; `oss4` for OSS; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
+- `auth_scheme`: `acs3` (default) for current general OpenAPI; `rpc|roa` for legacy V2 APIs; `datahub` for DataHub; `opensearch` for OpenSearch V3 AccessKey APIs; `odps4` for current MaxCompute project/data/Tunnel APIs and `odps` for their legacy V2 signature; `fc` for classic Function Compute resources and old `/2016-08-15/proxy/...` triggers, `fc3` for current `fcapp.run` HTTP triggers, and `fc-custom` for signature-enabled custom domains; `oss4` (recommended) or `oss` (V1) for OSS Header-signed operations; `sls|sls4` for SLS; `mns` for Simple Message Queue; `ots|ots4` for Tablestore.
 - `service`: product/signing code, such as `ecs`, `rds`, `vpc`, `ram`, or `oss`.
 - `operation`: exact action name used by ACS3 headers and read/write classification.
 - `api_version`: required for ACS3, RPC, and ROA, such as `2014-05-26`; optional for SLS/MNS/OTS, whose official defaults are `0.6.0`, `2015-06-06`, and `2015-12-31`.
@@ -44,6 +44,8 @@ Classic Function Compute example: `alicloud_api_read(auth_scheme="fc", service="
 Current HTTP Trigger example: `alicloud_api_read(auth_scheme="fc3", service="fc", operation="InvokeHTTPTrigger", method="POST", url="https://<trigger-id>.<region>.fcapp.run/hello", parameters={"foo":"bar"}, body="hello world")`. This is the current official ACS3-HMAC-SHA256 Trigger protocol: the adapter signs the method, escaped path, single-valued query, `Content-Type`, `X-Acs-Date`, and optional `X-Acs-Security-Token` with the official empty payload field; it does not add OpenAPI Action/Version headers. Repeated query names are rejected because the official signing SDK represents each name with one value.
 
 Signature-enabled Function Compute custom domains use `auth_scheme="fc-custom"`, the custom HTTPS URL, and the documented `acs` HMAC-SHA1 canonical request. The operator must first add that exact hostname to `CLOUD_SKILLS_ALIBABA_ALLOWED_ENDPOINT_HOSTS`; MCP arguments cannot expand the allowlist. `fc-custom` signs `Accept`, optional `Content-MD5`, `Content-Type`, Date, RAM STS token, escaped path, and sorted single-valued query. Caller-supplied presign and credential parameters remain forbidden for all three schemes.
+
+OSS example: `alicloud_api_read(auth_scheme="oss4", service="oss", operation="GetObject", region="cn-hangzhou", method="GET", url="https://<bucket>.oss-cn-hangzhou.aliyuncs.com/<object>", response_file="<approved-root>/object")`. Use `auth_scheme="oss"` only when an active integration still requires V1 HMAC-SHA1 Header authentication. V1 derives the bucket from the official virtual-hosted endpoint (or the first path component on an official path-style endpoint), signs only the documented case-sensitive subresource/query names, and injects Date plus optional RAM `X-Oss-Security-Token`; repeated signed query names are rejected. V4 requires `region`. POST policy signatures and presigned URLs deliberately remain outside the MCP surface because they create transferable authorization artifacts; use normal Header-signed PutObject/multipart operations through the approval gate instead.
 
 SLS example: `alicloud_api_read(auth_scheme="sls4", service="sls", operation="ListLogstores", region="cn-hangzhou", method="GET", url="https://<project>.cn-hangzhou.log.aliyuncs.com/logstores")`. For protobuf log ingestion, pass the encoded body through `body_file` and its documented non-auth headers such as `Content-Type` and `x-log-bodyrawsize`; signing headers are server-controlled.
 
