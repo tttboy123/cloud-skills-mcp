@@ -46,7 +46,7 @@ func classifyRead(provider Provider, request Invocation) bool {
 	case ProviderAWS, ProviderAlicloud, ProviderTencent:
 		action := strings.ToLower(strings.TrimSpace(request.Operation))
 		for _, prefix := range []string{
-			"describe", "list", "get", "head", "search", "query", "check", "show", "read", "inspect", "lookup", "count", "enumerate", "recognize", "transcribe", "translate",
+			"describe", "list", "get", "head", "search", "query", "check", "show", "read", "inspect", "lookup", "count", "enumerate", "recognize", "transcribe", "translate", "synthesize",
 		} {
 			if strings.HasPrefix(action, prefix) {
 				return true
@@ -78,14 +78,19 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		return fmt.Errorf("credential issuance or export operations are not exposed through the MCP gateway")
 	}
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-	webSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentMPSWS)
+	webSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS)
 	if webSocketScheme {
-		if tencentScheme == authSchemeTencentASRWS {
+		switch tencentScheme {
+		case authSchemeTencentASRWS:
 			if err := validateTencentASRWebSocketInvocation(request); err != nil {
 				return err
 			}
-		} else {
+		case authSchemeTencentMPSWS:
 			if err := validateTencentMPSWebSocketInvocation(request); err != nil {
+				return err
+			}
+		case authSchemeTencentMPSTTSWS:
+			if err := validateTencentMPSTTSWebSocketInvocation(request); err != nil {
 				return err
 			}
 		}
@@ -243,8 +248,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Tencent Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentCOS {
-			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, mps-ws, or cos")
+		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentCOS {
+			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, mps-ws, mps-tts-ws, or cos")
 		}
 		if (scheme == authSchemeTencentTC3 || scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256) && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Tencent Cloud API signing requires a valid api_version")
@@ -294,6 +299,13 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				}
 			}
 		}
+		if scheme == authSchemeTencentMPSTTSWS {
+			for name := range request.Parameters {
+				if isTencentMPSControlledParameter(name) {
+					return fmt.Errorf("caller-supplied Tencent Cloud MPS TTS WebSocket signing parameter %q is forbidden", name)
+				}
+			}
+		}
 	}
 	if request.Provider != ProviderAWS && request.RegionSet != "" {
 		return fmt.Errorf("region_set is supported only by AWS SigV4a")
@@ -304,7 +316,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !webSocketScheme {
+	streamControlScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentMPSWS)
+	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported WebSocket auth_scheme")
 	}
 	if (request.StreamUserID != "" || request.StreamFormat != 0) && !(request.Provider == ProviderTencent && tencentScheme == authSchemeTencentMPSWS) {

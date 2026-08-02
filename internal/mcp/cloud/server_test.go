@@ -436,6 +436,30 @@ func TestInvocationBoundaryAllowsOnlyGuardedTencentMPSWebSocket(t *testing.T) {
 	}
 }
 
+func TestInvocationBoundaryAllowsOnlyGuardedTencentMPSTTSWebSocket(t *testing.T) {
+	root := t.TempDir()
+	request := Invocation{
+		Provider: ProviderTencent, AuthScheme: "mps-tts-ws", Service: "mps", Operation: "SynthesizeSpeech", Method: http.MethodGet,
+		URL: "wss://mps.cloud.tencent.com/tts/v1/1258344699", Parameters: map[string]any{"voiceId": "voice-id", "format": "mp3"},
+		Body: "hello", ResponseFile: filepath.Join(root, "speech.mp3"),
+	}
+	if err := validateInvocation(request, []string{root}); err != nil {
+		t.Fatalf("guarded MPS TTS WebSocket rejected: %v", err)
+	}
+	invalid := []Invocation{request, request, request, request, request, request}
+	invalid[0].URL += "?signature=caller"
+	invalid[1].Method = http.MethodPost
+	invalid[2].Headers = map[string]string{"Origin": "https://example.com"}
+	invalid[3].Body = nil
+	invalid[4].ResponseFile = ""
+	invalid[5].Parameters = map[string]any{"voiceId": "voice-id", "timeoutSec": 121}
+	for _, candidate := range invalid {
+		if err := validateInvocation(candidate, []string{root}); err == nil {
+			t.Fatalf("unsafe MPS TTS WebSocket invocation accepted: %#v", candidate)
+		}
+	}
+}
+
 func TestInvocationBoundaryAllowsOfficialAzureAndBaiduDataPlaneEndpoints(t *testing.T) {
 	requests := []Invocation{
 		{Provider: ProviderAzure, Method: "GET", URL: "https://store.azconfig.io/kv?api-version=2026-04-01"},

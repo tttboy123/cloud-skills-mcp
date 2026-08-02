@@ -1839,6 +1839,69 @@ func TestTencentMPSGeneratedNonceIsExactlyTenDigits(t *testing.T) {
 	}
 }
 
+func TestTencentMPSTTSWebSocketSignatureIncludesEmptyPayloadHash(t *testing.T) {
+	signedURL, err := signTencentMPSTTSWebSocketURL(
+		"wss://mps.cloud.tencent.com/tts/v1/1258344699",
+		TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"},
+		map[string]any{"voiceId": "voice/test+id", "format": "pcm", "sampleRate": 16000, "language": "zh", "timeoutSec": 30},
+		time.Unix(1782289476, 0).UTC(),
+		"6751517593",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := parsed.Query().Get("signature"), "4aa9c1cbf3562116a664f0a823552386786625b7bc40d97d12bb34b74ac2f9a9"; got != want {
+		t.Fatalf("signature=%q, want %q", got, want)
+	}
+	if parsed.Query().Get("voiceId") != "voice/test+id" || parsed.Query().Get("expired") != "1782293076" {
+		t.Fatalf("query=%v", parsed.Query())
+	}
+}
+
+func TestTencentMPSTTSWebSocketValidatesDocumentedInputs(t *testing.T) {
+	credentials := TencentCredentials{SecretID: "id", SecretKey: "key"}
+	if _, err := signTencentMPSTTSWebSocketURL("wss://mps.cloud.tencent.com/tts/v1/1258344699", TencentCredentials{SecretID: "id", SecretKey: "key", Token: "session"}, map[string]any{"voiceId": "voice"}, time.Unix(1782289476, 0), "6751517593"); err == nil {
+		t.Fatal("temporary token was accepted")
+	}
+	if _, err := signTencentMPSTTSWebSocketURL("wss://mps.cloud.tencent.com/tts/v1/1258344699", credentials, map[string]any{"voiceId": "voice"}, time.Unix(1782289476, 0), "short"); err == nil {
+		t.Fatal("invalid nonce was accepted")
+	}
+	invalidParameters := []map[string]any{
+		{},
+		{"voiceId": "voice", "format": "raw"},
+		{"voiceId": "voice", "sampleRate": 0},
+		{"voiceId": "voice", "timeoutSec": 121},
+		{"voiceId": "voice", "speed": "fast"},
+		{"voiceId": "voice", "signature": "caller"},
+		{"voiceId": "voice", "unknown": "value"},
+	}
+	for _, parameters := range invalidParameters {
+		if err := validateTencentMPSTTSParameters(parameters); err == nil {
+			t.Fatalf("invalid parameters accepted: %#v", parameters)
+		}
+	}
+	if segments, err := tencentTTSTextSegments([]string{"one", "two"}); err != nil || len(segments) != 2 {
+		t.Fatalf("segments=%v err=%v", segments, err)
+	}
+	for _, body := range []any{[]any{}, []any{"ok", 1}, strings.Repeat("x", 5001), map[string]any{"Text": "no"}} {
+		if _, err := tencentTTSTextSegments(body); err == nil {
+			t.Fatalf("invalid TTS body accepted: %#v", body)
+		}
+	}
+	if defaultTencentMPSChunkBytes(1) != 1280 || defaultTencentMPSChunkBytes(2) != 640 {
+		t.Fatal("unexpected MPS PCM defaults")
+	}
+	for format, want := range map[string]string{"mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac", "pcm": "application/octet-stream"} {
+		if got := tencentTTSAudioContentType(format); got != want {
+			t.Fatalf("content type for %s=%q, want %q", format, got, want)
+		}
+	}
+}
+
 func TestTencentMPSAudioFrameUsesDocumentedNetworkByteOrder(t *testing.T) {
 	frame, err := encodeTencentMPSAudioFrame(1, true, 0x0102030405060708, "user", []byte{0xde, 0xad})
 	if err != nil {
@@ -1850,8 +1913,9 @@ func TestTencentMPSAudioFrameUsesDocumentedNetworkByteOrder(t *testing.T) {
 }
 
 type fakeTencentWebSocketConnection struct {
-	reads  [][]byte
-	writes []struct {
+	reads     [][]byte
+	readTypes []tencentWebSocketMessageType
+	writes    []struct {
 		messageType tencentWebSocketMessageType
 		data        []byte
 	}
@@ -1863,7 +1927,12 @@ func (connection *fakeTencentWebSocketConnection) Read(context.Context) (tencent
 	}
 	data := connection.reads[0]
 	connection.reads = connection.reads[1:]
-	return tencentWebSocketMessageText, data, nil
+	messageType := tencentWebSocketMessageText
+	if len(connection.readTypes) > 0 {
+		messageType = connection.readTypes[0]
+		connection.readTypes = connection.readTypes[1:]
+	}
+	return messageType, data, nil
 }
 
 func (connection *fakeTencentWebSocketConnection) Write(_ context.Context, messageType tencentWebSocketMessageType, data []byte) error {
@@ -1965,6 +2034,82 @@ func TestTencentMPSWebSocketAdapterStreamsFramedAudioInternally(t *testing.T) {
 	}
 	if connection.writes[0].data[1] != 0 || connection.writes[1].data[1] != 1 {
 		t.Fatalf("MPS IsEnd flags=%d,%d", connection.writes[0].data[1], connection.writes[1].data[1])
+	}
+}
+
+func TestTencentMPSTTSWebSocketAdapterPublishesAudioInternally(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "speech.pcm")
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"NotificationType":"Handshake","TaskId":"task-tts","HandshakeResult":{"Code":0,"Message":"success","Format":"pcm","SampleRate":16000}}`),
+			[]byte("audio-1"),
+			[]byte("audio-2"),
+			[]byte(`{"NotificationType":"ProcessEof","TaskId":"task-tts","ProcessEofInfo":{"Code":0,"Message":"finished normally"}}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "AKIDEXAMPLE", SecretKey: "testsecret"}},
+		Now:         func() time.Time { return time.Unix(1782289476, 0).UTC() },
+		MPSNonce:    func() string { return "6751517593" },
+		WebSocketDial: func(_ context.Context, signedURL string) (tencentWebSocketConnection, error) {
+			parsed, err := url.Parse(signedURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Query().Get("signature") == "" || parsed.Query().Get("voiceId") != "voice/test+id" {
+				t.Fatalf("signed query=%v", parsed.Query())
+			}
+			return connection, nil
+		},
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "mps-tts-ws", Service: "mps", Operation: "SynthesizeSpeech", Method: http.MethodGet,
+		URL: "wss://mps.cloud.tencent.com/tts/v1/1258344699", Parameters: map[string]any{"voiceId": "voice/test+id", "format": "pcm", "sampleRate": 16000},
+		Body: []any{"hello", "world"}, ResponseFile: outputFile, MaxResponseFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != "audio-1audio-2" || result.RequestID != "task-tts" || !bytes.Contains(result.Output, []byte(`"format":"pcm"`)) || !bytes.Contains(result.Output, []byte(`"sample_rate":16000`)) {
+		t.Fatalf("audio=%q result=%#v", audio, result)
+	}
+	if len(connection.writes) != 3 || string(connection.writes[0].data) != `{"Text":"hello","Final":false}` || string(connection.writes[1].data) != `{"Text":"world","Final":false}` || string(connection.writes[2].data) != `{"Text":"","Final":true}` {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+}
+
+func TestTencentMPSTTSWebSocketDoesNotPublishProviderFailure(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "failed.mp3")
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`{"NotificationType":"Handshake","TaskId":"task-tts","HandshakeResult":{"Code":0,"Message":"success","Format":"mp3","SampleRate":22050}}`),
+			[]byte("partial-audio"),
+			[]byte(`{"NotificationType":"ProcessEof","TaskId":"task-tts","ProcessEofInfo":{"Code":5000,"Message":"failed"}}`),
+		},
+		readTypes: []tencentWebSocketMessageType{tencentWebSocketMessageText, tencentWebSocketMessageBinary, tencentWebSocketMessageText},
+	}
+	adapter := NewTencentRESTAdapter(TencentRESTConfig{
+		Credentials: staticTencentCredentialsProvider{TencentCredentials{SecretID: "id", SecretKey: "key"}},
+		Now:         func() time.Time { return time.Unix(1782289476, 0).UTC() },
+		MPSNonce:    func() string { return "6751517593" },
+		WebSocketDial: func(context.Context, string) (tencentWebSocketConnection, error) {
+			return connection, nil
+		},
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderTencent, AuthScheme: "mps-tts-ws", Service: "mps", Operation: "SynthesizeSpeech", Method: http.MethodGet,
+		URL: "wss://mps.cloud.tencent.com/tts/v1/1258344699", Parameters: map[string]any{"voiceId": "voice"}, Body: "hello", ResponseFile: outputFile,
+	})
+	if err == nil || !strings.Contains(err.Error(), "code 5000") {
+		t.Fatalf("provider failure error=%v", err)
+	}
+	if _, statErr := os.Stat(outputFile); !os.IsNotExist(statErr) {
+		t.Fatalf("failed output was published: %v", statErr)
 	}
 }
 

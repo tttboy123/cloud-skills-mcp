@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,7 @@ import (
 
 var tencentASRWebSocketPath = regexp.MustCompile(`^/asr/v2/[0-9]{5,20}$`)
 var tencentMPSWebSocketPath = regexp.MustCompile(`^/wss/v1/[0-9]{5,20}$`)
+var tencentMPSTTSWebSocketPath = regexp.MustCompile(`^/tts/v1/[0-9]{5,20}$`)
 var tencentASRParameterName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 var tencentVoiceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 var tencentMPSNoncePattern = regexp.MustCompile(`^[1-9][0-9]{9}$`)
@@ -72,6 +74,32 @@ func validateTencentMPSWebSocketInvocation(invocation Invocation) error {
 		return fmt.Errorf("Tencent Cloud MPS WebSocket stream_format must be 1 (PCM 16 kHz) or 2 (PCM 8 kHz)")
 	}
 	return validateTencentMPSParameters(invocation.Parameters)
+}
+
+func validateTencentMPSTTSWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires method GET for the HTTP upgrade")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "mps.cloud.tencent.com") || target.Port() != "" || !tencentMPSTTSWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires wss://mps.cloud.tencent.com/tts/v1/<appid> without caller query parameters")
+	}
+	if invocation.Body == nil || invocation.BodyFile != "" {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires inline text body and does not accept body_file")
+	}
+	if invocation.ResponseFile == "" {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires response_file for binary audio")
+	}
+	if len(invocation.Headers) != 0 {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket does not accept caller-supplied handshake headers")
+	}
+	if invocation.StreamChunkBytes != 0 || invocation.StreamIntervalMS != 0 || invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket does not accept audio-upload stream controls")
+	}
+	if _, err := tencentTTSTextSegments(invocation.Body); err != nil {
+		return err
+	}
+	return validateTencentMPSTTSParameters(invocation.Parameters)
 }
 
 func validateTencentMPSUserID(userID string) error {
@@ -298,6 +326,55 @@ func signTencentMPSWebSocketURL(rawURL string, credentials TencentCredentials, i
 	return target.String(), nil
 }
 
+func signTencentMPSTTSWebSocketURL(rawURL string, credentials TencentCredentials, input map[string]any, now time.Time, nonce string) (string, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse Tencent Cloud MPS TTS WebSocket URL: %w", err)
+	}
+	if !strings.EqualFold(target.Scheme, "wss") || !strings.EqualFold(target.Hostname(), "mps.cloud.tencent.com") || target.Port() != "" || !tencentMPSTTSWebSocketPath.MatchString(target.EscapedPath()) || target.RawQuery != "" || target.User != nil || target.Fragment != "" {
+		return "", fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires wss://mps.cloud.tencent.com/tts/v1/<appid> without caller query parameters")
+	}
+	if credentials.SecretID == "" || credentials.SecretKey == "" {
+		return "", fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires complete SecretId/SecretKey credentials")
+	}
+	if credentials.Token != "" {
+		return "", fmt.Errorf("Tencent Cloud MPS TTS WebSocket does not document CAM temporary-token authentication")
+	}
+	if !tencentMPSNoncePattern.MatchString(nonce) {
+		return "", fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires a generated 10-digit nonce")
+	}
+	if err := validateTencentMPSTTSParameters(input); err != nil {
+		return "", err
+	}
+
+	parameters := make(map[string]string, len(input)+5)
+	for name, value := range input {
+		values, _ := stringValues(value)
+		parameters[name] = values[0]
+	}
+	timestamp := now.UTC().Unix()
+	parameters["timeStamp"] = strconv.FormatInt(timestamp, 10)
+	parameters["expired"] = strconv.FormatInt(timestamp+60*60, 10)
+	parameters["secretId"] = credentials.SecretID
+	parameters["nonce"] = nonce
+	canonicalQuery := encodeTencentMPSParameters(parameters)
+	canonicalRequest := "post\n" + target.EscapedPath() + "\n" + canonicalQuery + "\n" +
+		"content-type:application/json; charset=utf-8\n" +
+		"host:mps.cloud.tencent.com\n\n" +
+		"content-type;host\n" + sha256Hex(nil)
+	date := now.UTC().Format("2006-01-02")
+	scope := date + "/mps/tc3_request"
+	stringToSign := "TC3-HMAC-SHA256\n" + strconv.FormatInt(timestamp, 10) + "\n" + scope + "\n" + sha256Hex([]byte(canonicalRequest))
+	secretDate := hmacBytes(sha256.New, []byte("TC3"+credentials.SecretKey), []byte(date))
+	secretService := hmacBytes(sha256.New, secretDate, []byte("mps"))
+	secretSigning := hmacBytes(sha256.New, secretService, []byte("tc3_request"))
+	parameters["signature"] = hmacHex(sha256.New, secretSigning, []byte(stringToSign))
+	target.Scheme = "wss"
+	target.Host = "mps.cloud.tencent.com"
+	target.RawQuery = encodeTencentMPSParameters(parameters)
+	return target.String(), nil
+}
+
 func validateTencentMPSParameters(input map[string]any) error {
 	parameters := make(map[string]string, len(input))
 	for name, value := range input {
@@ -330,6 +407,86 @@ func validateTencentMPSParameters(input map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func validateTencentMPSTTSParameters(input map[string]any) error {
+	parameters := make(map[string]string, len(input))
+	for name, value := range input {
+		if isTencentMPSControlledParameter(name) {
+			return fmt.Errorf("caller-supplied Tencent Cloud MPS TTS WebSocket signing parameter %q is forbidden", name)
+		}
+		switch name {
+		case "voiceId", "format", "sampleRate", "language", "timeoutSec", "speed", "vol", "resId":
+		default:
+			return fmt.Errorf("Tencent Cloud MPS TTS WebSocket query parameter %q is not documented", name)
+		}
+		values, err := stringValues(value)
+		if err != nil || len(values) != 1 {
+			return fmt.Errorf("Tencent Cloud MPS TTS WebSocket query parameter %q must be scalar", name)
+		}
+		parameters[name] = values[0]
+	}
+	if strings.TrimSpace(parameters["voiceId"]) == "" {
+		return fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires voiceId")
+	}
+	if value, present := parameters["format"]; present {
+		switch strings.ToLower(value) {
+		case "pcm", "mp3", "wav", "flac", "opus", "ulaw", "alaw":
+		default:
+			return fmt.Errorf("Tencent Cloud MPS TTS WebSocket format is unsupported")
+		}
+	}
+	if value, present := parameters["sampleRate"]; present {
+		parsed, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || parsed == 0 {
+			return fmt.Errorf("Tencent Cloud MPS TTS WebSocket sampleRate must be a positive uint32")
+		}
+	}
+	if value, present := parameters["timeoutSec"]; present {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 1 || parsed > 120 {
+			return fmt.Errorf("Tencent Cloud MPS TTS WebSocket timeoutSec must be between 1 and 120")
+		}
+	}
+	for _, name := range []string{"speed", "vol"} {
+		if value, present := parameters[name]; present {
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				return fmt.Errorf("Tencent Cloud MPS TTS WebSocket %s must be a finite number", name)
+			}
+		}
+	}
+	return nil
+}
+
+func tencentTTSTextSegments(body any) ([]string, error) {
+	var segments []string
+	switch typed := body.(type) {
+	case string:
+		segments = []string{typed}
+	case []string:
+		segments = append([]string(nil), typed...)
+	case []any:
+		segments = make([]string, len(typed))
+		for index, value := range typed {
+			text, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("Tencent Cloud MPS TTS WebSocket body segments must be strings")
+			}
+			segments[index] = text
+		}
+	default:
+		return nil, fmt.Errorf("Tencent Cloud MPS TTS WebSocket body must be a string or string array")
+	}
+	if len(segments) == 0 || len(segments) > 256 {
+		return nil, fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires 1 to 256 text segments")
+	}
+	for _, text := range segments {
+		if text == "" || !utf8.ValidString(text) || utf8.RuneCountInString(text) > 5000 {
+			return nil, fmt.Errorf("Tencent Cloud MPS TTS WebSocket text segments must be valid UTF-8 with 1 to 5000 characters")
+		}
+	}
+	return segments, nil
 }
 
 func isTencentMPSControlledParameter(name string) bool {
@@ -794,6 +951,170 @@ func tencentMPSStreamContext(ctx context.Context, invocation Invocation, adapter
 	return context.WithTimeout(ctx, duration)
 }
 
+type tencentMPSTTSMessage struct {
+	NotificationType string `json:"NotificationType"`
+	TaskID           string `json:"TaskId"`
+	HandshakeResult  struct {
+		Code       int    `json:"Code"`
+		Message    string `json:"Message"`
+		Format     string `json:"Format"`
+		SampleRate uint32 `json:"SampleRate"`
+	} `json:"HandshakeResult"`
+	ProcessEofInfo struct {
+		Code    int    `json:"Code"`
+		Message string `json:"Message"`
+	} `json:"ProcessEofInfo"`
+}
+
+type tencentMPSTTSReadResult struct {
+	taskID string
+	err    error
+}
+
+func invokeTencentMPSTTSWebSocket(ctx context.Context, adapter *TencentRESTAdapter, credentials TencentCredentials, invocation Invocation) (InvocationResult, error) {
+	segments, err := tencentTTSTextSegments(invocation.Body)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	signedURL, err := signTencentMPSTTSWebSocketURL(invocation.URL, credentials, invocation.Parameters, adapter.config.Now().UTC(), adapter.config.MPSNonce())
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	dialContext, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
+	connection, err := adapter.config.WebSocketDial(dialContext, signedURL)
+	cancelDial()
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer connection.Close()
+
+	sink, err := newTencentWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer sink.abort()
+
+	handshakeContext, cancelHandshake := context.WithTimeout(ctx, adapter.config.Timeout)
+	messageType, handshakeData, err := connection.Read(handshakeContext)
+	cancelHandshake()
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("read Tencent Cloud MPS TTS WebSocket handshake")
+	}
+	handshake, err := acceptTencentMPSTTSHandshake(messageType, handshakeData)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+
+	streamContext, cancelStream := tencentMPSTTSStreamContext(ctx, invocation, adapter.config.Timeout)
+	defer cancelStream()
+	readResult := make(chan tencentMPSTTSReadResult, 1)
+	go readTencentMPSTTSWebSocket(streamContext, cancelStream, connection, sink, handshake.TaskID, readResult)
+	if err := sendTencentMPSTTSText(streamContext, connection, segments); err != nil {
+		cancelStream()
+		reader := <-readResult
+		if reader.err != nil {
+			return InvocationResult{}, reader.err
+		}
+		return InvocationResult{}, err
+	}
+	result := <-readResult
+	if result.err != nil {
+		return InvocationResult{}, result.err
+	}
+	output, err := sink.finishAudio(result.taskID, handshake.HandshakeResult.Format, handshake.HandshakeResult.SampleRate)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return InvocationResult{Output: output, RequestID: result.taskID}, nil
+}
+
+func acceptTencentMPSTTSHandshake(messageType tencentWebSocketMessageType, data []byte) (tencentMPSTTSMessage, error) {
+	if messageType != tencentWebSocketMessageText {
+		return tencentMPSTTSMessage{}, fmt.Errorf("Tencent Cloud MPS TTS WebSocket returned a non-text handshake")
+	}
+	var message tencentMPSTTSMessage
+	if err := json.Unmarshal(data, &message); err != nil || message.NotificationType != "Handshake" {
+		return tencentMPSTTSMessage{}, fmt.Errorf("Tencent Cloud MPS TTS WebSocket returned an invalid handshake")
+	}
+	if message.HandshakeResult.Code != 0 {
+		return tencentMPSTTSMessage{}, fmt.Errorf("Tencent Cloud MPS TTS WebSocket returned handshake code %d", message.HandshakeResult.Code)
+	}
+	if strings.TrimSpace(message.TaskID) == "" || strings.TrimSpace(message.HandshakeResult.Format) == "" || message.HandshakeResult.SampleRate == 0 {
+		return tencentMPSTTSMessage{}, fmt.Errorf("Tencent Cloud MPS TTS WebSocket handshake omitted negotiated session fields")
+	}
+	return message, nil
+}
+
+func sendTencentMPSTTSText(ctx context.Context, connection tencentWebSocketConnection, segments []string) error {
+	type request struct {
+		Text  string `json:"Text"`
+		Final bool   `json:"Final"`
+	}
+	for _, segment := range segments {
+		data, _ := json.Marshal(request{Text: segment, Final: false})
+		if err := connection.Write(ctx, tencentWebSocketMessageText, data); err != nil {
+			return fmt.Errorf("write Tencent Cloud MPS TTS text segment")
+		}
+	}
+	final, _ := json.Marshal(request{Text: "", Final: true})
+	if err := connection.Write(ctx, tencentWebSocketMessageText, final); err != nil {
+		return fmt.Errorf("finish Tencent Cloud MPS TTS text stream")
+	}
+	return nil
+}
+
+func readTencentMPSTTSWebSocket(ctx context.Context, cancel context.CancelFunc, connection tencentWebSocketConnection, sink *tencentWebSocketOutputSink, taskID string, result chan<- tencentMPSTTSReadResult) {
+	for {
+		messageType, data, err := connection.Read(ctx)
+		if err != nil {
+			cancel()
+			result <- tencentMPSTTSReadResult{taskID: taskID, err: fmt.Errorf("read Tencent Cloud MPS TTS WebSocket response")}
+			return
+		}
+		if messageType == tencentWebSocketMessageBinary {
+			if err := sink.writeBinary(data); err != nil {
+				cancel()
+				result <- tencentMPSTTSReadResult{taskID: taskID, err: err}
+				return
+			}
+			continue
+		}
+		if messageType != tencentWebSocketMessageText {
+			cancel()
+			result <- tencentMPSTTSReadResult{taskID: taskID, err: fmt.Errorf("Tencent Cloud MPS TTS WebSocket returned an unsupported message type")}
+			return
+		}
+		var message tencentMPSTTSMessage
+		if err := json.Unmarshal(data, &message); err != nil || message.NotificationType != "ProcessEof" {
+			cancel()
+			result <- tencentMPSTTSReadResult{taskID: taskID, err: fmt.Errorf("Tencent Cloud MPS TTS WebSocket returned an invalid notification")}
+			return
+		}
+		if strings.TrimSpace(message.TaskID) == "" || message.TaskID != taskID {
+			cancel()
+			result <- tencentMPSTTSReadResult{taskID: taskID, err: fmt.Errorf("Tencent Cloud MPS TTS WebSocket returned an invalid TaskId")}
+			return
+		}
+		if message.ProcessEofInfo.Code != 0 {
+			cancel()
+			result <- tencentMPSTTSReadResult{taskID: taskID, err: fmt.Errorf("Tencent Cloud MPS TTS WebSocket ended with code %d", message.ProcessEofInfo.Code)}
+			return
+		}
+		result <- tencentMPSTTSReadResult{taskID: taskID}
+		return
+	}
+}
+
+func tencentMPSTTSStreamContext(ctx context.Context, invocation Invocation, adapterTimeout time.Duration) (context.Context, context.CancelFunc) {
+	timeoutSeconds := 30
+	if values, err := stringValues(invocation.Parameters["timeoutSec"]); err == nil && len(values) == 1 {
+		if parsed, parseErr := strconv.Atoi(values[0]); parseErr == nil && parsed >= 1 && parsed <= 120 {
+			timeoutSeconds = parsed
+		}
+	}
+	return context.WithTimeout(ctx, adapterTimeout+time.Duration(timeoutSeconds)*time.Second)
+}
+
 type tencentWebSocketOutputSink struct {
 	buffer        bytes.Buffer
 	temporary     *os.File
@@ -839,7 +1160,18 @@ func newTencentWebSocketOutputSink(invocation Invocation, maxBodyBytes int64) (*
 }
 
 func (sink *tencentWebSocketOutputSink) writeMessage(data []byte) error {
-	messageBytes := int64(len(data) + 1)
+	return sink.write(data, true)
+}
+
+func (sink *tencentWebSocketOutputSink) writeBinary(data []byte) error {
+	return sink.write(data, false)
+}
+
+func (sink *tencentWebSocketOutputSink) write(data []byte, newline bool) error {
+	messageBytes := int64(len(data))
+	if newline {
+		messageBytes++
+	}
 	if sink.written+messageBytes > sink.maxBytes {
 		return fmt.Errorf("Tencent Cloud WebSocket response exceeds %d bytes", sink.maxBytes)
 	}
@@ -850,8 +1182,10 @@ func (sink *tencentWebSocketOutputSink) writeMessage(data []byte) error {
 	if _, err := writer.Write(data); err != nil {
 		return fmt.Errorf("write Tencent Cloud WebSocket response: %w", err)
 	}
-	if _, err := writer.Write([]byte{'\n'}); err != nil {
-		return fmt.Errorf("write Tencent Cloud WebSocket response: %w", err)
+	if newline {
+		if _, err := writer.Write([]byte{'\n'}); err != nil {
+			return fmt.Errorf("write Tencent Cloud WebSocket response: %w", err)
+		}
 	}
 	sink.written += messageBytes
 	return nil
@@ -865,6 +1199,33 @@ func (sink *tencentWebSocketOutputSink) finish(requestID string) ([]byte, error)
 	if sink.temporary == nil {
 		return sink.buffer.Bytes(), nil
 	}
+	return sink.finishFile(map[string]any{
+		"response_file": sink.target,
+		"bytes":         sink.written,
+		"content_type":  "application/x-ndjson",
+		"request_id":    requestID,
+	})
+}
+
+func (sink *tencentWebSocketOutputSink) finishAudio(requestID, format string, sampleRate uint32) ([]byte, error) {
+	if sink.finished {
+		return nil, fmt.Errorf("Tencent Cloud WebSocket response sink already finalized")
+	}
+	if sink.temporary == nil {
+		return nil, fmt.Errorf("Tencent Cloud MPS TTS WebSocket requires response_file")
+	}
+	sink.finished = true
+	return sink.finishFile(map[string]any{
+		"response_file": sink.target,
+		"bytes":         sink.written,
+		"content_type":  tencentTTSAudioContentType(format),
+		"request_id":    requestID,
+		"format":        format,
+		"sample_rate":   sampleRate,
+	})
+}
+
+func (sink *tencentWebSocketOutputSink) finishFile(metadata map[string]any) ([]byte, error) {
 	if err := sink.temporary.Sync(); err != nil {
 		return nil, fmt.Errorf("sync response_file: %w", err)
 	}
@@ -878,17 +1239,25 @@ func (sink *tencentWebSocketOutputSink) finish(requestID string) ([]byte, error)
 		}
 		return nil, fmt.Errorf("publish response_file: %w", err)
 	}
-	metadata, err := json.Marshal(map[string]any{
-		"response_file": sink.target,
-		"bytes":         sink.written,
-		"content_type":  "application/x-ndjson",
-		"request_id":    requestID,
-	})
+	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		os.Remove(sink.target)
 		return nil, fmt.Errorf("encode response_file metadata: %w", err)
 	}
-	return metadata, nil
+	return encoded, nil
+}
+
+func tencentTTSAudioContentType(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "mp3":
+		return "audio/mpeg"
+	case "wav":
+		return "audio/wav"
+	case "flac":
+		return "audio/flac"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func (sink *tencentWebSocketOutputSink) abort() {

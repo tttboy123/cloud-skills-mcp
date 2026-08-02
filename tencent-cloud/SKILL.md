@@ -1,16 +1,16 @@
 ---
 name: tencent-cloud
-description: Operate or inspect any Tencent Cloud resource through TC3, API 3.0 v1, legacy qcloud API 2017, COS signed HTTPS, or internally connected ASR/MPS WSS in cloud-skills-mcp. Use for Tencent Cloud, CVM, Lighthouse, COS, CDB, VPC, CAM, TKE, CloudBase, ASR, MPS, or any documented Tencent Cloud API.
+description: Operate or inspect any Tencent Cloud resource through TC3, API 3.0 v1, legacy qcloud API 2017, COS signed HTTPS, or internally connected ASR/MPS recognition and MPS TTS WSS in cloud-skills-mcp. Use for Tencent Cloud, CVM, Lighthouse, COS, CDB, VPC, CAM, TKE, CloudBase, ASR, MPS, TTS, or any documented Tencent Cloud API.
 ---
 
 # Tencent Cloud
 
-Use the unified MCP gateway for API 3.0 product actions, still-active qcloud API 2017 actions, COS REST operations, and finite ASR or MPS WebSocket audio streams. It calculates all signatures in-process, opens WSS connections internally, and never executes TCCLI or returns signed connection URLs.
+Use the unified MCP gateway for API 3.0 product actions, still-active qcloud API 2017 actions, COS REST operations, finite ASR/MPS recognition streams, and MPS streaming TTS. It calculates all signatures in-process, opens WSS connections internally, and never executes TCCLI or returns signed connection URLs.
 
 ## Workflow
 
 1. Call `cloud_provider_status` with `provider="tencent"`; treat `available` as HTTP adapter readiness and `credential_status=unverified` as pending live authentication.
-2. Use `tencent_api_discover` for official API 3.0/TC3/qcloud/COS/ASR/MPS WSS references, then verify endpoint, version, action, region, parameters, and payload format in the product API reference.
+2. Use `tencent_api_discover` for official API 3.0/TC3/qcloud/COS/ASR/MPS recognition/TTS WSS references, then verify endpoint, version, action, region, parameters, and payload format in the product API reference.
 3. Use `tencent_api_read` only for actions classified as read-only (`Describe*`, `List*`, `Get*`, `Query*`, and similar).
 4. For other actions, obtain explicit human approval for the account, region, resources, action, and effect; then use `tencent_api_mutate(force=true)`.
 5. Secret-resource operations require the separate sensitive gate. STS role/session credentials, SecretId creation, login tokens, and other credential issuance/export actions are never exposed by the gateway.
@@ -18,7 +18,7 @@ Use the unified MCP gateway for API 3.0 product actions, still-active qcloud API
 
 ## MCP arguments
 
-- `auth_scheme`: `tc3` (default and recommended) for API 3.0 JSON/multipart calls; `tc1|tc1-sha256` for the still-documented API 3.0 v1 GET/query or `application/x-www-form-urlencoded` protocol; `qcloud|qcloud-sha256` for still-running legacy product endpoints at `*.api.qcloud.com/v2/index.php`; `cos` for COS REST data plane; `asr-ws` for realtime ASR; `mps-ws` for MPS private-audio recognition/translation.
+- `auth_scheme`: `tc3` (default and recommended) for API 3.0 JSON/multipart calls; `tc1|tc1-sha256` for the still-documented API 3.0 v1 GET/query or `application/x-www-form-urlencoded` protocol; `qcloud|qcloud-sha256` for still-running legacy product endpoints at `*.api.qcloud.com/v2/index.php`; `cos` for COS REST data plane; `asr-ws` for realtime ASR; `mps-ws` for MPS private-audio recognition/translation; `mps-tts-ws` for MPS streaming speech synthesis.
 - `service`: TC3 signing/product code such as `cvm`, `lighthouse`, `cdb`, or `cam`; use `cos` for COS.
 - `operation`: exact action, such as `DescribeInstances`, used by TC3 headers and read/write classification.
 - `api_version`: required for TC3, such as `2017-03-12`.
@@ -38,8 +38,10 @@ ASR WebSocket read: `tencent_api_read(auth_scheme="asr-ws", service="asr", opera
 
 MPS WebSocket read: `tencent_api_read(auth_scheme="mps-ws", service="mps", operation="RecognizeStream", method="GET", url="wss://mps.cloud.tencent.com/wss/v1/<appid>", parameters={"asrDst":"zh","fragmentNotify":0,"timeoutSec":10}, body_file="<approved-root>/audio.pcm", response_file="<approved-root>/mps.ndjson", stream_user_id="speaker-1", stream_format=1)`. Use `asrDst` for recognition only, or omit it and provide both `transSrc` and `transDst` for recognition plus translation. The adapter generates the required 10-digit nonce, applies the MPS-specific TC3 canonical `post` signature internally, wraps PCM in the documented network-byte-order binary frame, marks the final frame `IsEnd=1`, and finishes only on `ProcessEof`. `stream_format=1` is 16 kHz s16 mono and `2` is 8 kHz; the default 40ms frames are 1280 and 640 bytes respectively. `timeoutSec` is optional and retains the official 120-second default; finite-file callers should normally set a bounded 1–300 second value.
 
+MPS TTS read: `tencent_api_read(auth_scheme="mps-tts-ws", service="mps", operation="SynthesizeSpeech", method="GET", url="wss://mps.cloud.tencent.com/tts/v1/<appid>", parameters={"voiceId":"<voice-id>","format":"mp3","sampleRate":22050,"language":"zh","timeoutSec":30}, body=["first text","second text"], response_file="<approved-root>/speech.mp3")`. The body is one non-empty string or 1–256 string segments; each segment is at most 5000 Unicode characters. The adapter signs the MPS TTS-specific TC3 canonical request including `sha256("")`, waits for negotiated format/sample rate, sends each text segment plus the final empty `Final=true` message, writes binary audio only to the approved new file, and atomically publishes it only after `ProcessEof Code=0`. The signed URL and text never appear in audit events.
+
 ## Credentials
 
-Use `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Temporary CAM/STS credentials also use `TENCENTCLOUD_SESSION_TOKEN` or `TENCENTCLOUD_TOKEN` for the HTTP schemes that document Token. The ASR and MPS WebSocket documents specify AppID plus SecretId/SecretKey but no temporary Token field, so `asr-ws` and `mps-ws` fail closed when a CAM session token is configured. Never pass credentials in MCP inputs.
+Use `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` in the MCP server environment. Temporary CAM/STS credentials also use `TENCENTCLOUD_SESSION_TOKEN` or `TENCENTCLOUD_TOKEN` for the HTTP schemes that document Token. The ASR and MPS WebSocket documents specify AppID plus SecretId/SecretKey but no temporary Token field, so `asr-ws`, `mps-ws`, and `mps-tts-ws` fail closed when a CAM session token is configured. Never pass credentials in MCP inputs.
 
 Read [references/official-docs.md](references/official-docs.md) for API 3.0 v1/v3, legacy qcloud API 2017, COS signing, ASR/MPS WSS, and CAM credentials.
