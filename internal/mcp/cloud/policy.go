@@ -36,6 +36,21 @@ func classifyRead(provider Provider, request Invocation) bool {
 		return false
 	}
 	switch provider {
+	case ProviderAzure:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureRealtimeWS {
+			switch strings.ToLower(strings.TrimSpace(request.Operation)) {
+			case "realtimeresponse", "realtimetranscription", "realtimesession":
+				return true
+			default:
+				return false
+			}
+		}
+		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
+		case "GET", "HEAD", "OPTIONS":
+			return true
+		default:
+			return false
+		}
 	case ProviderGCP:
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeGCPGRPC {
 			action := strings.ToLower(strings.TrimSpace(request.Operation))
@@ -48,8 +63,13 @@ func classifyRead(provider Provider, request Invocation) bool {
 			}
 			return false
 		}
-		fallthrough
-	case ProviderAzure, ProviderBaidu:
+		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
+		case "GET", "HEAD", "OPTIONS":
+			return true
+		default:
+			return false
+		}
+	case ProviderBaidu:
 		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
 		case "GET", "HEAD", "OPTIONS":
 			return true
@@ -108,9 +128,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	awsScheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
 	gcpScheme := normalizedAuthScheme(request.AuthScheme, "")
+	azureScheme := normalizedAuthScheme(request.AuthScheme, "")
 	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
+	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	if awsWebSocketScheme {
 		if err := validateAWSTranscribeWebSocketInvocation(request); err != nil {
 			return err
@@ -162,12 +184,20 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateGCPGRPCInvocation(request, allowedEndpointHosts); err != nil {
 			return err
 		}
+	} else if azureRealtimeScheme {
+		if err := validateAzureRealtimeWebSocketInvocation(request); err != nil {
+			return err
+		}
 	} else {
 		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
 		}
 	}
 	switch request.Provider {
+	case ProviderAzure:
+		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS {
+			return fmt.Errorf("Azure auth_scheme must be realtime-ws or omitted for REST")
+		}
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPGRPC {
 			return fmt.Errorf("Google Cloud auth_scheme must be grpc or omitted for REST")
@@ -402,7 +432,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsWebSocketScheme || gcpGRPCScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}

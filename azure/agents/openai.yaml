@@ -1,6 +1,6 @@
 interface:
   display_name: "Azure Cloud"
-  short_description: "Operate Azure REST APIs through guarded Azure Identity"
+  short_description: "Operate Azure REST and Realtime WSS with Azure Identity"
   default_prompt: "Use $azure-cloud to inspect or operate Azure resources safely."
 dependencies:
   tools:

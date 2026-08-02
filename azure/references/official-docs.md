@@ -16,5 +16,6 @@
 - Azure Maps daemon scope (`https://atlas.microsoft.com/.default`): https://learn.microsoft.com/en-us/azure/azure-maps/how-to-secure-daemon-app
 - Azure environment endpoint metadata for public, China, US Government, and other clouds: https://learn.microsoft.com/en-us/powershell/module/Az.Accounts/get-azenvironment
 - Blob Get Blob, Entra authorization, and Range download: https://learn.microsoft.com/en-us/rest/api/storageservices/get-blob
+- Azure OpenAI Realtime WebSocket, GA/preview URLs, Entra scope, and event flow: https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets
 
-The adapter uses only EnvironmentCredential, WorkloadIdentityCredential, and ManagedIdentityCredential. Azure CLI credentials are intentionally excluded.
+The adapter uses only EnvironmentCredential, WorkloadIdentityCredential, and ManagedIdentityCredential. Azure CLI credentials are intentionally excluded. Azure OpenAI Realtime obtains the documented `https://ai.azure.com/.default` token internally, sends it only in the WSS Authorization header, validates JSON event framing and terminal events, and never accepts the API-key alternative.
