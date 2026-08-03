@@ -38,6 +38,14 @@ and private layer 307 downloads to the same-region Starport S3 bucket with
 Authorization removed and atomic response-file publication. Dedicated private
 and Public live gates are implemented but remain pending operator IAM
 credentials and existing repositories; this slice is not yet live-proven.
+Implementation commit `1ed3ab41f64960ca97dfce47774e460ecc7b92a0`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck and
+four-platform release verification in
+[CI run 30831950990](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30831950990).
+Fresh local module verification, formatting, vet, race coverage (80.3% total),
+build, protocol/install smoke, AWS Skill validation, Actionlint, govulncheck,
+four-platform archives, and a ten-second ECR invocation fuzz run (189,200
+executions) also passed.
 
 Azure Container Registry now uses direct HTTPS with the official non-CLI
 Entra-to-ACR OAuth2 exchange and path/method-matched access scopes. It covers
