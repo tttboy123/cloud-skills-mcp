@@ -127,6 +127,22 @@ validators, Actionlint, govulncheck, four-platform archives, a five-second
 Voice Live host fuzz run (130,789 executions), and a five-second Realtime host
 fuzz run (149,503 executions) also passed.
 
+Azure Web PubSub standard/reliable JSON/Protobuf and MQTT WSS clients now
+enforce Microsoft's Private Endpoint and resource-name contracts. Both paths
+accept only a 3-63 character, letter-first single-label
+`<resource>.webpubsub.azure.com` host. Private Endpoint callers keep that
+public resource URL and let VNet DNS resolve it privately; direct
+`privatelink.webpubsub.azure.com`, nested private-DNS-zone names, numeric-first
+resources, custom hosts, and lookalikes fail before Entra or generated client
+token resolution. Implementation commit
+`cac73504b5b2d9c3c2ab56543e48d2cb739f13e2` passed remote macOS, Ubuntu,
+ShellCheck, Actionlint, govulncheck, and four-platform release verification in
+[CI run 30813832471](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30813832471).
+Fresh local module verification, formatting, vet, race coverage (80.1% total),
+build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
+validators, Actionlint, govulncheck, four-platform archives, and a five-second
+shared standard/MQTT endpoint fuzz run (170,545 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
