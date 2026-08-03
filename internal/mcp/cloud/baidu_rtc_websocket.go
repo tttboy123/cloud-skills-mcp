@@ -24,22 +24,35 @@ const (
 	authSchemeBaiduRTCAgentWS = "rtc-aiagent-ws"
 	baiduRTCControlEndpoint   = "https://rtc-aiagent.baidubce.com"
 	baiduRTCWebSocketTarget   = "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime"
-	baiduRTCAudioChunkBytes   = 640
-	baiduRTCAudioInterval     = 20 * time.Millisecond
+	baiduRTCDefaultPacketMS   = 20
+	baiduRTCMaxPacketMS       = 200
+	baiduRTCMaxPacketCount    = 4096
 )
 
 var baiduRTCInstanceIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 
 type baiduRTCAgentPlan struct {
-	AppID         string
-	InstanceType  string
-	Config        map[string]any
-	DeviceID      string
-	UserID        string
-	Messages      []string
-	MaxMessages   int
-	Timeout       time.Duration
-	TerminalEvent string
+	AppID              string
+	InstanceType       string
+	Config             map[string]any
+	AudioCodec         string
+	OpusPacketTimeMS   int
+	OpusPacketLengths  []int
+	OpusPacketMaxBytes int
+	DeviceID           string
+	UserID             string
+	Messages           []string
+	MaxMessages        int
+	Timeout            time.Duration
+	TerminalEvent      string
+}
+
+type baiduRTCAudioPlan struct {
+	Codec          string
+	ChunkBytes     int
+	Interval       time.Duration
+	PacketLengths  []int
+	MaxPacketBytes int
 }
 
 type baiduRTCCreateResponse struct {
@@ -84,28 +97,85 @@ func validateBaiduRTCAgentWebSocketInvocation(invocation Invocation) error {
 	if len(plan.Messages) == 0 && invocation.BodyFile == "" {
 		return fmt.Errorf("Baidu RTC AI Agent requires at least one text message or body_file audio stream")
 	}
-	if invocation.BodyFile != "" {
-		info, statErr := os.Stat(invocation.BodyFile)
-		if statErr != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxRequestFileBytes || info.Size()%baiduRTCAudioChunkBytes != 0 {
-			return fmt.Errorf("Baidu RTC raw16k body_file must be a non-empty regular file of complete 640-byte frames below %d bytes", maxRequestFileBytes)
-		}
-		audioDuration := time.Duration(info.Size()/baiduRTCAudioChunkBytes) * baiduRTCAudioInterval
-		if audioDuration >= plan.Timeout {
-			return fmt.Errorf("Baidu RTC raw16k audio duration must be shorter than timeout_seconds")
-		}
-		if invocation.StreamChunkBytes != 0 && invocation.StreamChunkBytes != baiduRTCAudioChunkBytes {
-			return fmt.Errorf("Baidu RTC raw16k audio requires stream_chunk_bytes 640 when provided")
-		}
-		if invocation.StreamIntervalMS != 0 && invocation.StreamIntervalMS != int(baiduRTCAudioInterval/time.Millisecond) {
-			return fmt.Errorf("Baidu RTC raw16k audio requires stream_interval_ms 20 when provided")
-		}
-	} else if invocation.StreamChunkBytes != 0 || invocation.StreamIntervalMS != 0 {
-		return fmt.Errorf("Baidu RTC stream controls require body_file audio")
+	if _, err := buildBaiduRTCAudioPlan(plan, invocation); err != nil {
+		return err
 	}
 	if invocation.Region != "" || invocation.Project != "" || invocation.Subscription != "" || invocation.Audience != "" || invocation.RegionSet != "" || invocation.PayloadMode != "" || invocation.ChecksumAlgorithm != "" || invocation.ProtobufDescriptorFile != "" || invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
 		return fmt.Errorf("Baidu RTC AI Agent does not accept unrelated provider or transport controls")
 	}
 	return nil
+}
+
+func buildBaiduRTCAudioPlan(plan baiduRTCAgentPlan, invocation Invocation) (baiduRTCAudioPlan, error) {
+	audio := baiduRTCAudioPlan{Codec: plan.AudioCodec}
+	if invocation.BodyFile == "" {
+		if invocation.StreamChunkBytes != 0 || invocation.StreamIntervalMS != 0 || len(plan.OpusPacketLengths) != 0 || plan.OpusPacketMaxBytes != 0 {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC stream controls require body_file audio")
+		}
+		return audio, nil
+	}
+	info, err := os.Stat(invocation.BodyFile)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxRequestFileBytes {
+		return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC %s body_file must be a non-empty regular file below %d bytes", plan.AudioCodec, maxRequestFileBytes)
+	}
+	if plan.AudioCodec == "opus" {
+		if len(plan.OpusPacketLengths) == 0 {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC Opus body_file requires opus_packet_lengths")
+		}
+		if invocation.StreamChunkBytes != 0 {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC variable Opus packets use opus_packet_lengths instead of stream_chunk_bytes")
+		}
+		if invocation.StreamIntervalMS != 0 && invocation.StreamIntervalMS != plan.OpusPacketTimeMS {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC Opus stream_interval_ms must match opus_packet_time_ms")
+		}
+		total := int64(0)
+		maximum := 0
+		for _, length := range plan.OpusPacketLengths {
+			total += int64(length)
+			if length > maximum {
+				maximum = length
+			}
+		}
+		if total != info.Size() {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC opus_packet_lengths must exactly cover body_file")
+		}
+		if plan.OpusPacketMaxBytes > 0 {
+			maximum = plan.OpusPacketMaxBytes
+		}
+		audio.Interval = time.Duration(plan.OpusPacketTimeMS) * time.Millisecond
+		audio.PacketLengths = append([]int(nil), plan.OpusPacketLengths...)
+		audio.MaxPacketBytes = maximum
+	} else {
+		intervalMS := invocation.StreamIntervalMS
+		if intervalMS == 0 {
+			intervalMS = baiduRTCDefaultPacketMS
+		}
+		if intervalMS < baiduRTCDefaultPacketMS || intervalMS > baiduRTCMaxPacketMS {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC audio packets must represent 20-200 ms")
+		}
+		bytesPerMS := map[string]int{"raw": 16, "raw16k": 32, "pcma": 8, "pcmu": 8, "g722": 8}[plan.AudioCodec]
+		if bytesPerMS == 0 {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC fixed-rate audio codec is invalid")
+		}
+		chunkBytes := bytesPerMS * intervalMS
+		if invocation.StreamChunkBytes != 0 && invocation.StreamChunkBytes != chunkBytes {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC %s audio requires stream_chunk_bytes %d for %d-ms packets", plan.AudioCodec, chunkBytes, intervalMS)
+		}
+		if info.Size()%int64(chunkBytes) != 0 {
+			return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC %s body_file must contain complete %d-byte/%d-ms packets", plan.AudioCodec, chunkBytes, intervalMS)
+		}
+		audio.ChunkBytes = chunkBytes
+		audio.Interval = time.Duration(intervalMS) * time.Millisecond
+		audio.MaxPacketBytes = chunkBytes
+	}
+	packetCount := info.Size() / int64(audio.MaxPacketBytes)
+	if len(audio.PacketLengths) != 0 {
+		packetCount = int64(len(audio.PacketLengths))
+	}
+	if time.Duration(packetCount)*audio.Interval >= plan.Timeout {
+		return baiduRTCAudioPlan{}, fmt.Errorf("Baidu RTC %s audio duration must be shorter than timeout_seconds", plan.AudioCodec)
+	}
+	return audio, nil
 }
 
 func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
@@ -117,15 +187,19 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent plan must be bounded JSON")
 	}
 	var raw struct {
-		AppID         string         `json:"app_id"`
-		InstanceType  string         `json:"instance_type"`
-		Config        map[string]any `json:"config"`
-		DeviceID      string         `json:"device_id"`
-		UserID        string         `json:"user_id"`
-		Messages      []string       `json:"messages"`
-		MaxMessages   int            `json:"max_messages"`
-		Timeout       int            `json:"timeout_seconds"`
-		TerminalEvent string         `json:"terminal_event"`
+		AppID              string         `json:"app_id"`
+		InstanceType       string         `json:"instance_type"`
+		Config             map[string]any `json:"config"`
+		AudioCodec         string         `json:"audio_codec"`
+		OpusPacketTimeMS   int            `json:"opus_packet_time_ms"`
+		OpusPacketLengths  []int          `json:"opus_packet_lengths"`
+		OpusPacketMaxBytes int            `json:"opus_packet_max_bytes"`
+		DeviceID           string         `json:"device_id"`
+		UserID             string         `json:"user_id"`
+		Messages           []string       `json:"messages"`
+		MaxMessages        int            `json:"max_messages"`
+		Timeout            int            `json:"timeout_seconds"`
+		TerminalEvent      string         `json:"terminal_event"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -149,11 +223,40 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 	if baiduRTCConfigContainsCredentialMaterial(raw.Config) {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent config contains embedded credential material")
 	}
-	if codec, present := raw.Config["rtc_ac"]; present {
+	if raw.AudioCodec == "" {
+		raw.AudioCodec = "raw16k"
+	}
+	switch raw.AudioCodec {
+	case "raw", "raw16k", "pcma", "pcmu", "g722", "opus":
+	default:
+		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent audio_codec must be raw, raw16k, pcma, pcmu, g722, or opus")
+	}
+	if codec, present := raw.Config["audiocodec"]; present {
 		codecString, ok := codec.(string)
-		if !ok || codecString != "raw16k" {
-			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent config.rtc_ac must be raw16k")
+		if !ok || codecString != raw.AudioCodec {
+			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent config.audiocodec must match audio_codec")
 		}
+	}
+	if raw.AudioCodec == "opus" {
+		if raw.OpusPacketTimeMS == 0 {
+			raw.OpusPacketTimeMS = baiduRTCDefaultPacketMS
+		}
+		if raw.OpusPacketTimeMS != 20 && raw.OpusPacketTimeMS != 40 && raw.OpusPacketTimeMS != 60 {
+			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent opus_packet_time_ms must be 20, 40, or 60")
+		}
+		if len(raw.OpusPacketLengths) > baiduRTCMaxPacketCount {
+			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent accepts at most %d Opus packets", baiduRTCMaxPacketCount)
+		}
+		if raw.OpusPacketMaxBytes < 0 || raw.OpusPacketMaxBytes > maxRequestPayloadBytes {
+			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent opus_packet_max_bytes is out of range")
+		}
+		for _, length := range raw.OpusPacketLengths {
+			if length < 1 || length > maxRequestPayloadBytes || (raw.OpusPacketMaxBytes > 0 && length > raw.OpusPacketMaxBytes) {
+				return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent Opus packet lengths must be positive and no larger than opus_packet_max_bytes")
+			}
+		}
+	} else if raw.OpusPacketTimeMS != 0 || len(raw.OpusPacketLengths) != 0 || raw.OpusPacketMaxBytes != 0 {
+		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent Opus packet controls require audio_codec opus")
 	}
 	if len(raw.Messages) > 64 {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent accepts at most 64 text messages")
@@ -174,6 +277,8 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 	}
 	return baiduRTCAgentPlan{
 		AppID: raw.AppID, InstanceType: raw.InstanceType, Config: raw.Config,
+		AudioCodec: raw.AudioCodec, OpusPacketTimeMS: raw.OpusPacketTimeMS,
+		OpusPacketLengths: raw.OpusPacketLengths, OpusPacketMaxBytes: raw.OpusPacketMaxBytes,
 		DeviceID: raw.DeviceID, UserID: raw.UserID, Messages: raw.Messages,
 		MaxMessages: raw.MaxMessages, Timeout: time.Duration(raw.Timeout) * time.Second,
 		TerminalEvent: raw.TerminalEvent,
@@ -270,6 +375,7 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 		return InvocationResult{}, err
 	}
 	plan, _ := parseBaiduRTCAgentPlan(invocation.Body)
+	audioPlan, _ := buildBaiduRTCAudioPlan(plan, invocation)
 	sink, sinkErr := newWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes, "Baidu RTC AI Agent WebSocket")
 	if sinkErr != nil {
 		return InvocationResult{}, sinkErr
@@ -280,7 +386,7 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 	for name, value := range plan.Config {
 		config[name] = value
 	}
-	config["rtc_ac"] = "raw16k"
+	config["audiocodec"] = plan.AudioCodec
 	configJSON, marshalErr := json.Marshal(config)
 	if marshalErr != nil {
 		return InvocationResult{}, fmt.Errorf("encode Baidu RTC AI Agent config")
@@ -322,7 +428,7 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 		return InvocationResult{}, fmt.Errorf("Baidu RTC AI Agent create response is missing a valid internal token")
 	}
 
-	webSocketURL, buildErr := baiduRTCInternalWebSocketURL(plan.AppID, string(created.InstanceID), created.Context.Token)
+	webSocketURL, buildErr := baiduRTCInternalWebSocketURL(plan.AppID, string(created.InstanceID), created.Context.Token, audioPlan)
 	if buildErr != nil {
 		return InvocationResult{}, buildErr
 	}
@@ -342,7 +448,7 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 	sendResult := make(chan error, 1)
 	readResult := make(chan error, 1)
 	go func() {
-		sendResult <- sendBaiduRTCInputs(sessionCtx, adapter, connection, plan.Messages, invocation.BodyFile)
+		sendResult <- sendBaiduRTCInputs(sessionCtx, adapter, connection, plan.Messages, invocation.BodyFile, audioPlan)
 	}()
 	go func() {
 		readResult <- readBaiduRTCResponses(sessionCtx, connection, sink, plan, secretValues)
@@ -384,14 +490,14 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 	return InvocationResult{Output: output, RequestID: createRequestID}, nil
 }
 
-func sendBaiduRTCInputs(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, messages []string, bodyFile string) error {
+func sendBaiduRTCInputs(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, messages []string, bodyFile string, audioPlan baiduRTCAudioPlan) error {
 	for _, message := range messages {
 		if err := connection.Write(ctx, cloudWebSocketMessageText, []byte(message)); err != nil {
 			return fmt.Errorf("write Baidu RTC AI Agent text query")
 		}
 	}
 	if bodyFile != "" {
-		return streamBaiduRTCAudio(ctx, adapter, connection, bodyFile)
+		return streamBaiduRTCAudio(ctx, adapter, connection, bodyFile, audioPlan)
 	}
 	return nil
 }
@@ -477,16 +583,25 @@ func (adapter *BaiduRESTAdapter) baiduRTCControlRequest(ctx context.Context, cre
 	return data, responseRequestID(response.Header), nil
 }
 
-func baiduRTCInternalWebSocketURL(appID, instanceID, token string) (string, error) {
+func baiduRTCInternalWebSocketURL(appID, instanceID, token string, audioPlan baiduRTCAudioPlan) (string, error) {
 	if !identifierPattern.MatchString(appID) || !baiduRTCInstanceIDPattern.MatchString(instanceID) || !validBaiduRTCSecret(token) {
 		return "", fmt.Errorf("Baidu RTC AI Agent returned invalid internal connection material")
+	}
+	switch audioPlan.Codec {
+	case "raw", "raw16k", "pcma", "pcmu", "g722", "opus":
+	default:
+		return "", fmt.Errorf("Baidu RTC AI Agent returned invalid audio settings")
 	}
 	target, _ := url.Parse(baiduRTCWebSocketTarget)
 	query := url.Values{}
 	query.Set("a", appID)
 	query.Set("id", instanceID)
 	query.Set("t", token)
-	query.Set("ac", "raw16k")
+	query.Set("ac", audioPlan.Codec)
+	if audioPlan.Codec == "opus" && audioPlan.MaxPacketBytes > 0 {
+		query.Set("ptime", fmt.Sprintf("%d", audioPlan.Interval/time.Millisecond))
+		query.Set("plen", fmt.Sprintf("%d", audioPlan.MaxPacketBytes))
+	}
 	target.RawQuery = query.Encode()
 	return target.String(), nil
 }
@@ -515,35 +630,64 @@ func activateBaiduRTCLicense(ctx context.Context, connection cloudWebSocketConne
 	return nil
 }
 
-func streamBaiduRTCAudio(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, path string) error {
+func streamBaiduRTCAudio(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, path string, audioPlan baiduRTCAudioPlan) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open Baidu RTC raw16k audio: %w", err)
+		return fmt.Errorf("open Baidu RTC %s audio: %w", audioPlan.Codec, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxRequestFileBytes || info.Size()%baiduRTCAudioChunkBytes != 0 {
-		return fmt.Errorf("Baidu RTC raw16k body_file must be a non-empty regular file of complete 640-byte frames below %d bytes", maxRequestFileBytes)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxRequestFileBytes || audioPlan.MaxPacketBytes < 1 {
+		return fmt.Errorf("Baidu RTC %s body_file is invalid", audioPlan.Codec)
 	}
-	buffer := make([]byte, baiduRTCAudioChunkBytes)
-	for {
-		read, readErr := io.ReadFull(file, buffer)
-		if readErr == io.EOF {
-			return nil
+	expectedBytes := int64(0)
+	for _, packetLength := range audioPlan.PacketLengths {
+		if packetLength < 1 || packetLength > audioPlan.MaxPacketBytes {
+			return fmt.Errorf("Baidu RTC %s audio packet plan is invalid", audioPlan.Codec)
 		}
-		if readErr == io.ErrUnexpectedEOF {
-			return fmt.Errorf("Baidu RTC raw16k audio must contain complete 640-byte/20-ms frames")
+		expectedBytes += int64(packetLength)
+	}
+	if len(audioPlan.PacketLengths) == 0 {
+		if audioPlan.ChunkBytes < 1 || info.Size()%int64(audioPlan.ChunkBytes) != 0 {
+			return fmt.Errorf("Baidu RTC %s body_file changed after validation", audioPlan.Codec)
 		}
-		if readErr != nil {
-			return fmt.Errorf("read Baidu RTC raw16k audio: %w", readErr)
+		expectedBytes = info.Size()
+	}
+	if expectedBytes != info.Size() {
+		return fmt.Errorf("Baidu RTC %s body_file changed after validation", audioPlan.Codec)
+	}
+	buffer := make([]byte, audioPlan.MaxPacketBytes)
+	writePacket := func(packetLength int) error {
+		read, readErr := io.ReadFull(file, buffer[:packetLength])
+		if readErr != nil || read != packetLength {
+			return fmt.Errorf("read Baidu RTC %s audio packet", audioPlan.Codec)
 		}
 		if writeErr := connection.Write(ctx, cloudWebSocketMessageBinary, buffer[:read]); writeErr != nil {
-			return fmt.Errorf("write Baidu RTC raw16k audio")
+			return fmt.Errorf("write Baidu RTC %s audio", audioPlan.Codec)
 		}
-		if pauseErr := adapter.config.StreamPause(ctx, baiduRTCAudioInterval); pauseErr != nil {
-			return fmt.Errorf("pace Baidu RTC raw16k audio: %w", pauseErr)
+		if pauseErr := adapter.config.StreamPause(ctx, audioPlan.Interval); pauseErr != nil {
+			return fmt.Errorf("pace Baidu RTC %s audio: %w", audioPlan.Codec, pauseErr)
+		}
+		return nil
+	}
+	if len(audioPlan.PacketLengths) != 0 {
+		for _, packetLength := range audioPlan.PacketLengths {
+			if err := writePacket(packetLength); err != nil {
+				return err
+			}
+		}
+	} else {
+		for remaining := info.Size(); remaining > 0; remaining -= int64(audioPlan.ChunkBytes) {
+			if err := writePacket(audioPlan.ChunkBytes); err != nil {
+				return err
+			}
 		}
 	}
+	var trailing [1]byte
+	if read, trailingErr := file.Read(trailing[:]); read != 0 || trailingErr != io.EOF {
+		return fmt.Errorf("Baidu RTC %s body_file changed during streaming", audioPlan.Codec)
+	}
+	return nil
 }
 
 func baiduRTCTerminal(terminalEvent, event string, count, maxMessages int) bool {

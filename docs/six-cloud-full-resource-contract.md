@@ -184,9 +184,12 @@ remain available through the guarded resource gateway.
   credential-free bounded plan, the adapter signs fixed BCE v1 create and stop
   requests, keeps the returned instance token inside the exact WSS URL, and
   processes product license activation from server-only
-  `BCE_RTC_LICENSE_KEY`. The direct AK/SK query connection is forbidden. Every
-  path after create attempts stop, and output is published only after a
-  successful terminal event and stop.
+  `BCE_RTC_LICENSE_KEY`. It supports the six documented WSS audio codecs,
+  forces control-plane `config.audiocodec` to match internal WSS `ac`, and
+  constructs Opus `ptime`/`plen` only from a validated bounded packet plan.
+  The direct AK/SK query connection is forbidden. Every path after create
+  attempts stop, and output is published only after a successful terminal
+  event and stop.
 - New official endpoint exceptions for any provider are operator policy,
   never model input. `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` accepts
   comma-separated exact DNS hostnames only; schemes, ports, paths, IPs, and

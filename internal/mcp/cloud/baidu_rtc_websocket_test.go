@@ -48,6 +48,17 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 	if err := validateInvocation(base, []string{root}); err != nil {
 		t.Fatal(err)
 	}
+	raw16kSixtyMS := valid()
+	sixtyMSFile := filepath.Join(root, "raw16k-60ms.pcm")
+	if err := os.WriteFile(sixtyMSFile, bytes.Repeat([]byte{2}, 1920*2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw16kSixtyMS.BodyFile = sixtyMSFile
+	raw16kSixtyMS.StreamChunkBytes = 1920
+	raw16kSixtyMS.StreamIntervalMS = 60
+	if err := validateInvocation(raw16kSixtyMS, []string{root}); err != nil {
+		t.Fatalf("official 60-ms raw16k frames rejected: %v", err)
+	}
 	if classifyRead(ProviderBaidu, base) {
 		t.Fatal("RTC AI Agent creates a billed instance and must never be read-only")
 	}
@@ -95,7 +106,35 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 		"embedded credential": func(value *Invocation) {
 			value.Body.(map[string]any)["config"] = map[string]any{"tts_url": `DEFAULT{"apikey":"caller-secret"}`}
 		},
-		"codec mismatch":     func(value *Invocation) { value.Body.(map[string]any)["config"] = map[string]any{"rtc_ac": "opus"} },
+		"codec mismatch": func(value *Invocation) {
+			value.Body.(map[string]any)["audio_codec"] = "raw16k"
+			value.Body.(map[string]any)["config"] = map[string]any{"audiocodec": "opus"}
+		},
+		"unsupported codec": func(value *Invocation) { value.Body.(map[string]any)["audio_codec"] = "mp3" },
+		"opus without packet lengths": func(value *Invocation) {
+			value.Body.(map[string]any)["audio_codec"] = "opus"
+		},
+		"opus invalid packet time": func(value *Invocation) {
+			value.Body.(map[string]any)["audio_codec"] = "opus"
+			value.Body.(map[string]any)["opus_packet_time_ms"] = 30
+			value.Body.(map[string]any)["opus_packet_lengths"] = []any{640, 640}
+		},
+		"opus lengths do not cover file": func(value *Invocation) {
+			value.Body.(map[string]any)["audio_codec"] = "opus"
+			value.Body.(map[string]any)["opus_packet_time_ms"] = 20
+			value.Body.(map[string]any)["opus_packet_lengths"] = []any{1279}
+			value.StreamChunkBytes = 0
+		},
+		"opus packet exceeds plen": func(value *Invocation) {
+			value.Body.(map[string]any)["audio_codec"] = "opus"
+			value.Body.(map[string]any)["opus_packet_time_ms"] = 20
+			value.Body.(map[string]any)["opus_packet_lengths"] = []any{640, 640}
+			value.Body.(map[string]any)["opus_packet_max_bytes"] = 639
+			value.StreamChunkBytes = 0
+		},
+		"non opus packet lengths": func(value *Invocation) {
+			value.Body.(map[string]any)["opus_packet_lengths"] = []any{640, 640}
+		},
 		"caller license":     func(value *Invocation) { value.Body.(map[string]any)["lic_key"] = "caller" },
 		"caller access key":  func(value *Invocation) { value.Body.(map[string]any)["access_key_id"] = "caller" },
 		"invalid message":    func(value *Invocation) { value.Body.(map[string]any)["messages"] = []any{"[E]:[LIC]:[ACTIVE]:caller"} },
@@ -131,11 +170,40 @@ func TestBaiduRTCAgentRejectsInvalidPlanBeforeResolvingCredentials(t *testing.T)
 	}
 }
 
+func TestBaiduRTCAgentAcceptsEveryOfficialFixedRateCodec(t *testing.T) {
+	for codec, packetBytes := range map[string]int{
+		"raw": 320, "raw16k": 640, "pcma": 160, "pcmu": 160, "g722": 160,
+	} {
+		t.Run(codec, func(t *testing.T) {
+			root := t.TempDir()
+			audioFile := filepath.Join(root, "audio."+codec)
+			if err := os.WriteFile(audioFile, bytes.Repeat([]byte{1}, packetBytes*2), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			invocation := Invocation{
+				Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+				Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+				Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+				Body: map[string]any{
+					"app_id": "rtc-app-1", "audio_codec": codec,
+					"device_id": "device-1", "user_id": "user-1", "messages": []any{},
+					"max_messages": 2, "timeout_seconds": 2, "terminal_event": "tts_end",
+				},
+				BodyFile: audioFile, ResponseFile: filepath.Join(root, "rtc.ndjson"),
+				StreamChunkBytes: packetBytes, StreamIntervalMS: 20,
+			}
+			if err := validateInvocation(invocation, []string{root}); err != nil {
+				t.Fatalf("official %s codec rejected: %v", codec, err)
+			}
+		})
+	}
+}
+
 func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *testing.T) {
 	root := t.TempDir()
-	audioFile := filepath.Join(root, "audio.pcm")
+	audioFile := filepath.Join(root, "audio.pcmu")
 	responseFile := filepath.Join(root, "rtc.ndjson")
-	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{7}, 1280), 0o600); err != nil {
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{7}, 320), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	credentials := BCECredentials{AccessKeyID: "bce-ak", SecretAccessKey: "bce-secret", SessionToken: "bce-session"}
@@ -161,7 +229,7 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 				return nil, fmt.Errorf("unexpected create body %s", data)
 			}
 			config, ok := body["config"].(string)
-			if !ok || !strings.Contains(config, `"welcome":"hello"`) || !strings.Contains(config, `"rtc_ac":"raw16k"`) {
+			if !ok || !strings.Contains(config, `"welcome":"hello"`) || !strings.Contains(config, `"audiocodec":"pcmu"`) || strings.Contains(config, `"rtc_ac"`) {
 				return nil, fmt.Errorf("config was not serialized as a JSON string: %s", data)
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Bce-Request-Id": []string{"create-request"}}, Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":222,"instance_type":"VoiceChat","context":{"cid":1,"token":"` + instanceToken + `"}}`))}, nil
@@ -194,7 +262,7 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 				return nil, err
 			}
 			query := parsed.Query()
-			if parsed.Scheme != "wss" || parsed.Host != "rtc-aiotgw.exp.bcelive.com" || parsed.Path != "/v1/realtime" || query.Get("a") != "rtc-app-1" || query.Get("id") != "222" || query.Get("t") != instanceToken || query.Get("ac") != "raw16k" || query.Get("ak") != "" || query.Get("sk") != "" {
+			if parsed.Scheme != "wss" || parsed.Host != "rtc-aiotgw.exp.bcelive.com" || parsed.Path != "/v1/realtime" || query.Get("a") != "rtc-app-1" || query.Get("id") != "222" || query.Get("t") != instanceToken || query.Get("ac") != "pcmu" || query.Get("ptime") != "" || query.Get("plen") != "" || query.Get("ak") != "" || query.Get("sk") != "" {
 				return nil, fmt.Errorf("unsafe RTC target %s", target)
 			}
 			return connection, nil
@@ -207,10 +275,11 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 		Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
 		Body: map[string]any{
 			"app_id": "rtc-app-1", "instance_type": "VoiceChat", "config": map[string]any{"welcome": "hello"},
-			"device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:hello"},
+			"audio_codec": "pcmu",
+			"device_id":   "device-1", "user_id": "user-1", "messages": []any{"[T]:hello"},
 			"max_messages": 8, "timeout_seconds": 30, "terminal_event": "tts_end",
 		},
-		BodyFile: audioFile, ResponseFile: responseFile, StreamChunkBytes: 640, StreamIntervalMS: 20, MaxResponseFileBytes: 4096,
+		BodyFile: audioFile, ResponseFile: responseFile, StreamChunkBytes: 160, StreamIntervalMS: 20, MaxResponseFileBytes: 4096,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +293,7 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 	if connection.writes[0].messageType != cloudWebSocketMessageText || !bytes.Contains(connection.writes[0].data, []byte(`"licKey":"`+licenseKey+`"`)) || !bytes.Contains(connection.writes[0].data, []byte(`"devId":"device-1"`)) {
 		t.Fatalf("license activation=%s", connection.writes[0].data)
 	}
-	if connection.writes[1].messageType != cloudWebSocketMessageText || string(connection.writes[1].data) != "[T]:hello" || len(connection.writes[2].data) != 640 || len(connection.writes[3].data) != 640 {
+	if connection.writes[1].messageType != cloudWebSocketMessageText || string(connection.writes[1].data) != "[T]:hello" || len(connection.writes[2].data) != 160 || len(connection.writes[3].data) != 160 {
 		t.Fatalf("protocol writes=%#v", connection.writes)
 	}
 	written, err := os.ReadFile(responseFile)
@@ -238,6 +307,93 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 	}
 	if !bytes.Contains(written, []byte(`{"type":"text","data":"[A]:hello"}`)) || !bytes.Contains(written, []byte(`"data_base64":"`+base64.StdEncoding.EncodeToString([]byte("provider-audio"))+`"`)) || !bytes.Contains(written, []byte(`[E]:[TTS_END_SPEAKING]`)) {
 		t.Fatalf("unexpected NDJSON %s", written)
+	}
+}
+
+func TestBaiduRTCAgentOpusUsesOfficialQueryAndVariablePacketBoundaries(t *testing.T) {
+	root := t.TempDir()
+	audioFile := filepath.Join(root, "audio.opus-packets")
+	responseFile := filepath.Join(root, "rtc.ndjson")
+	packetLengths := []int{17, 29, 23}
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{9}, 69), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	controlCalls := 0
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		controlCalls++
+		data, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		if strings.Contains(request.URL.Path, "generateAIAgentCall") {
+			var body map[string]any
+			if json.Unmarshal(data, &body) != nil {
+				return nil, fmt.Errorf("invalid create body")
+			}
+			config, _ := body["config"].(string)
+			if !strings.Contains(config, `"audiocodec":"opus"`) {
+				return nil, fmt.Errorf("missing official opus config: %s", data)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":333,"context":{"token":"private-opus-token"}}`))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`[E]:[LIC]:[MUST]:activate`),
+			[]byte(`[E]:[LIC]:[RES]:[PASS]:ok`),
+			[]byte(`[E]:[TTS_END_SPEAKING]`),
+		},
+	}
+	var pauses []time.Duration
+	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+		Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "ak", SecretAccessKey: "secret-key"}},
+		HTTP:        doer, RTCLicenseKey: "license-key",
+		RTCWebSocketDial: func(_ context.Context, target string) (cloudWebSocketConnection, error) {
+			parsed, err := url.Parse(target)
+			if err != nil {
+				return nil, err
+			}
+			query := parsed.Query()
+			if query.Get("ac") != "opus" || query.Get("ptime") != "40" || query.Get("plen") != "29" || query.Get("t") != "private-opus-token" {
+				return nil, fmt.Errorf("unexpected opus target %s", target)
+			}
+			return connection, nil
+		},
+		StreamPause: func(_ context.Context, duration time.Duration) error {
+			pauses = append(pauses, duration)
+			return nil
+		},
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+		Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+		Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+		Body: map[string]any{
+			"app_id": "rtc-app-1", "audio_codec": "opus", "opus_packet_time_ms": 40,
+			"opus_packet_lengths": []any{17, 29, 23}, "device_id": "device-1", "user_id": "user-1",
+			"messages": []any{}, "max_messages": 2, "timeout_seconds": 2, "terminal_event": "tts_end",
+		},
+		BodyFile: audioFile, ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controlCalls != 2 || len(connection.writes) != 1+len(packetLengths) {
+		t.Fatalf("control calls=%d writes=%#v", controlCalls, connection.writes)
+	}
+	for index, length := range packetLengths {
+		if got := len(connection.writes[index+1].data); got != length {
+			t.Fatalf("packet %d length=%d want=%d", index, got, length)
+		}
+	}
+	if len(pauses) != len(packetLengths) {
+		t.Fatalf("pauses=%v", pauses)
+	}
+	for _, duration := range pauses {
+		if duration != 40*time.Millisecond {
+			t.Fatalf("unexpected opus pacing %v", pauses)
+		}
 	}
 }
 
@@ -349,6 +505,7 @@ func TestBaiduRTCAgentTerminalModesRejectIntermediateAnswerEvents(t *testing.T) 
 
 func FuzzBaiduRTCAgentPlanRejectsCredentialFields(f *testing.F) {
 	f.Add(`{"app_id":"rtc-app-1","messages":["[T]:hello"],"max_messages":2,"timeout_seconds":2,"terminal_event":"answer"}`)
+	f.Add(`{"app_id":"rtc-app-1","audio_codec":"opus","opus_packet_time_ms":40,"opus_packet_lengths":[17,29],"device_id":"dev","user_id":"user","messages":[],"max_messages":2,"timeout_seconds":2,"terminal_event":"answer"}`)
 	f.Add(`{"app_id":"rtc-app-1","config":{"api_key":"secret"},"messages":["[T]:hello"],"max_messages":2,"timeout_seconds":2}`)
 	f.Add(`{"app_id":"rtc-app-1","config":{"tts_url":"{\"apikey\":\"secret\"}"},"device_id":"dev","user_id":"user","messages":["[T]:hello"],"max_messages":2,"timeout_seconds":2,"terminal_event":"answer"}`)
 	f.Fuzz(func(t *testing.T, raw string) {
@@ -358,7 +515,12 @@ func FuzzBaiduRTCAgentPlanRejectsCredentialFields(f *testing.F) {
 		}
 		plan, err := parseBaiduRTCAgentPlan(body)
 		if err == nil {
-			if plan.AppID == "" || plan.MaxMessages < 1 || plan.MaxMessages > 256 || plan.Timeout < time.Second || plan.Timeout > 300*time.Second || baiduRTCAgentContainsCredentialField(body) || baiduRTCConfigContainsCredentialMaterial(plan.Config) {
+			validCodec := plan.AudioCodec == "raw" || plan.AudioCodec == "raw16k" || plan.AudioCodec == "pcma" || plan.AudioCodec == "pcmu" || plan.AudioCodec == "g722" || plan.AudioCodec == "opus"
+			validOpus := plan.AudioCodec != "opus" && plan.OpusPacketTimeMS == 0 && len(plan.OpusPacketLengths) == 0 && plan.OpusPacketMaxBytes == 0
+			if plan.AudioCodec == "opus" {
+				validOpus = plan.OpusPacketTimeMS == 20 || plan.OpusPacketTimeMS == 40 || plan.OpusPacketTimeMS == 60
+			}
+			if plan.AppID == "" || !validCodec || !validOpus || plan.MaxMessages < 1 || plan.MaxMessages > 256 || plan.Timeout < time.Second || plan.Timeout > 300*time.Second || baiduRTCAgentContainsCredentialField(body) || baiduRTCConfigContainsCredentialMaterial(plan.Config) {
 				t.Fatal("unsafe plan accepted")
 			}
 		}
