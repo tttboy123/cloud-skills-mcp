@@ -110,6 +110,23 @@ build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
 validators, Actionlint, govulncheck, four-platform archives, and a five-second
 endpoint fuzz run (58,666 executions) also passed.
 
+Azure Voice Live now has an explicit public-cloud endpoint contract. The
+official Azure Speech sovereign-cloud tables mark Voice Live unsupported in
+both Azure Government and Azure operated by 21Vianet, so guessed sovereign
+hosts, nested/custom/lookalike hosts, and direct private-DNS-zone names fail
+before token resolution. The same hardening rejects the reserved `privatelink`
+zone label for Azure OpenAI Realtime. Normal public resource hostnames remain
+compatible with Azure Private Link because VNet DNS resolves those unchanged
+names to private endpoints. Implementation commit
+`8865168f9feecb1921ac65ac76182563227b94ae` passed remote macOS, Ubuntu,
+ShellCheck, Actionlint, govulncheck, and four-platform release verification in
+[CI run 30812707583](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30812707583).
+Fresh local module verification, formatting, vet, race coverage (80.1% total),
+build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
+validators, Actionlint, govulncheck, four-platform archives, a five-second
+Voice Live host fuzz run (130,789 executions), and a five-second Realtime host
+fuzz run (149,503 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
