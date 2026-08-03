@@ -268,6 +268,85 @@ func TestLiveBaiduCCRReadOnly(t *testing.T) {
 	t.Logf("provider=baiducloud service=ccr operation=ListTags outcome=succeeded response_bytes=%d request_id=%q", len(text), succeeded.RequestID)
 }
 
+func TestLiveBaiduIoTCoreMQTTReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_MQTT") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_MQTT=1 for a real IAM application-permission MQTT WSS subscription")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Baidu IoT Core MQTT live validation", name)
+		}
+		return value
+	}
+	if strings.TrimSpace(os.Getenv("BCE_SESSION_TOKEN")) != "" || strings.TrimSpace(os.Getenv("BCE_SECURITY_TOKEN")) != "" {
+		t.Fatal("Baidu IoT Core application-permission MQTT documents IAM AK/SK only; clear BCE session-token variables for this live gate")
+	}
+	endpoint := required("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_MQTT_ENDPOINT")
+	topic := required("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_MQTT_TOPIC")
+	clientID := required("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_MQTT_CLIENT_ID")
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "baidu-iotcore-mqtt.ndjson")
+	invocation := Invocation{
+		Provider: ProviderBaidu, Mode: ModeRead, AuthScheme: authSchemeBaiduIoTCoreMQTTWS,
+		Service: "iotcore", Operation: "SubscribeMQTT", Method: http.MethodGet, URL: endpoint,
+		Body: map[string]any{
+			"client_id": clientID, "subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 1}},
+			"max_messages": 1, "timeout_seconds": 60,
+		},
+		ResponseFile: responseFile, MaxResponseFileBytes: 1024 * 1024,
+	}
+	if err := validateBaiduIoTCoreMQTTInvocation(invocation); err != nil {
+		t.Fatalf("Baidu IoT Core live endpoint or subscription plan is invalid: %v", err)
+	}
+	runtime := DefaultRuntime()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "baiducloud_api_read", map[string]any{
+		"auth_scheme": "iotcore-mqtt-ws", "service": "iotcore", "operation": "SubscribeMQTT",
+		"method": "GET", "url": endpoint,
+		"body": map[string]any{
+			"client_id": clientID, "subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 1}},
+			"max_messages": 1, "timeout_seconds": 60,
+		},
+		"response_file": responseFile,
+	})
+	if result.IsError {
+		t.Fatalf("Baidu IoT Core MQTT live read failed: %s", cloudToolText(t, result))
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("read Baidu IoT Core MQTT live response: bytes=%d err=%v", len(data), err)
+	}
+	resultText := cloudToolText(t, result)
+	for _, secret := range []string{os.Getenv("BCE_ACCESS_KEY_ID"), os.Getenv("BCE_SECRET_ACCESS_KEY"), "bceiam@"} {
+		if secret != "" && (strings.Contains(string(data), secret) || strings.Contains(resultText, secret)) {
+			t.Fatal("Baidu IoT Core MQTT live result leaked IAM credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderBaidu && events[index].Mode == ModeRead && events[index].Operation == "SubscribeMQTT" && events[index].AuthScheme == authSchemeBaiduIoTCoreMQTTWS && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Baidu IoT Core MQTT read audit event: %#v", events)
+	}
+	t.Logf("provider=baiducloud service=iotcore operation=SubscribeMQTT outcome=succeeded response_bytes=%d request_id=%q", len(data), succeeded.RequestID)
+}
+
 func TestLiveAlibabaMQMutation(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_ALIBABA_MQ") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_ALIBABA_MQ=1 for an explicitly approved RocketMQ 4.x HTTP consume probe")

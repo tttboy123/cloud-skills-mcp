@@ -122,6 +122,24 @@ fail closed until an official safe blob-redirect contract is available. A
 dedicated read-only ListTags live gate remains pending operator BCE identity
 and an existing Enterprise or Personal repository.
 
+Baidu IoT Core MQTT 3.1.1 over WSS is a first-class data-plane protocol.
+`auth_scheme=iotcore-mqtt-ws` accepts only the exact single-instance
+`wss://<iot-core-id>.iot.gz.baidubce.com/mqtt` endpoint, subprotocol `mqtt`,
+and a credential-free bounded client plan. The server derives the documented
+application-permission CONNECT username/password from BCE IAM AK/SK, with the
+official example vector enforced by a hermetic test; it never exposes those
+derived values. SubscribeMQTT supports up to the documented 100 QoS 0/1
+subscriptions per connection, internally batching eight per SUBSCRIBE request,
+plus bounded observation and atomic NDJSON output. ClientMQTT mutation-gates publish, persistent-session and Will
+behavior. QoS 2, oversized topic/message plans, arbitrary frames, credential
+fields, redirects, query parameters, and lookalike hosts fail closed. The
+default 32 KiB payload bound can be explicitly raised only up to the documented
+128 KiB instance maximum, is enforced on both published and received data, and
+outgoing messages are paced to the documented QoS 0/1 publish rates.
+The official application-permission contract has no STS session-token field, so
+this scheme rejects one rather than dropping it. A dedicated live read gate
+remains pending operator IAM application binding and a staged topic message.
+
 Credential minting/export and caller-supplied signed URLs, SAS, bearer tokens,
 API keys, or Authorization headers remain intentionally outside the public MCP
 surface. The only credential entrypoints are operator-controlled AKSK,

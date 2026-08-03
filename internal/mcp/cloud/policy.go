@@ -103,7 +103,11 @@ func classifyRead(provider Provider, request Invocation) bool {
 			return false
 		}
 	case ProviderBaidu:
-		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeBaiduRTCAgentWS {
+		scheme := normalizedAuthScheme(request.AuthScheme, "")
+		if scheme == authSchemeBaiduIoTCoreMQTTWS {
+			return strings.EqualFold(strings.TrimSpace(request.Operation), "SubscribeMQTT")
+		}
+		if scheme == authSchemeBaiduRTCAgentWS {
 			return false
 		}
 		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
@@ -240,6 +244,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureEventHubsAMQPScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureEventHubsAMQPWS
 	azureACRScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureACR
 	baiduCCRScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduCCR
+	baiduIoTCoreMQTTWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduIoTCoreMQTTWS
 	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
@@ -399,6 +404,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateBaiduCCRInvocation(request, allowedEndpointHosts); err != nil {
 			return err
 		}
+	} else if baiduIoTCoreMQTTWebSocketScheme {
+		if err := validateBaiduIoTCoreMQTTInvocation(request); err != nil {
+			return err
+		}
 	} else if baiduRTCAgentWebSocketScheme {
 		if err := validateBaiduRTCAgentWebSocketInvocation(request); err != nil {
 			return err
@@ -418,8 +427,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Google Cloud auth_scheme must be artifact-registry, firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 		}
 	case ProviderBaidu:
-		if baiduScheme != "" && baiduScheme != authSchemeBaiduCCR && baiduScheme != authSchemeBaiduRTCAgentWS {
-			return fmt.Errorf("Baidu auth_scheme must be ccr-registry, rtc-aiagent-ws, or omitted for BCE signed REST")
+		if baiduScheme != "" && baiduScheme != authSchemeBaiduCCR && baiduScheme != authSchemeBaiduIoTCoreMQTTWS && baiduScheme != authSchemeBaiduRTCAgentWS {
+			return fmt.Errorf("Baidu auth_scheme must be ccr-registry, iotcore-mqtt-ws, rtc-aiagent-ws, or omitted for BCE signed REST")
 		}
 	case ProviderAWS:
 		if !identifierPattern.MatchString(request.Service) {

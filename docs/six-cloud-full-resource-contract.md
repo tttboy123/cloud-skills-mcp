@@ -287,6 +287,20 @@ remain available through the guarded resource gateway.
   `/service/token` Basic exchange and path-derived Bearer capability internal.
   Registry redirects fail closed until an official safe redirect contract is
   verified. `TestLiveBaiduCCRReadOnly` is the opt-in read-only ListTags gate.
+- Baidu IoT Core MQTT 3.1.1 uses `auth_scheme=iotcore-mqtt-ws` and only the
+  exact `wss://<iot-core-id>.iot.gz.baidubce.com/mqtt` endpoint with WebSocket
+  subprotocol `mqtt`. The server derives the documented application-permission
+  username/password from IAM AK/SK, implements CONNECT, up to 100 QoS 0/1
+  subscriptions in provider-compliant eight-entry batches, bounded PUBLISH,
+  PUBACK, PING and DISCONNECT, and never exports the derived
+  credential. `SubscribeMQTT` is read-only with atomic NDJSON output;
+  `ClientMQTT` mutation-gates publishing, persistent sessions and Will plans.
+  The 32 KiB default payload bound can be explicitly raised up to the
+  documented 128 KiB instance maximum and is enforced bidirectionally;
+  outgoing messages are internally paced to the documented QoS 0/1 rates.
+  The documented IAM application format has no STS session-token field, so
+  that credential shape is rejected. `TestLiveBaiduIoTCoreMQTTReadOnly` is the
+  opt-in real broker gate and requires a message staged after subscription.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an
@@ -337,6 +351,9 @@ remain available through the guarded resource gateway.
 - Baidu calls use `bce-auth-v1` by default and can select guarded
   `auth_version=v2` with required service/region fields for APIs that mandate
   the region- and service-scoped v2 signature.
+- Baidu IoT Core MQTT uses the separate `iotcore-mqtt-ws` application-permission
+  signature and exact WSS transport; it does not expose a generic MQTT tunnel,
+  raw signed URL, caller-provided password, or arbitrary broker host.
 - Baidu RTC AI Agent uses `auth_scheme=rtc-aiagent-ws`: the MCP body is a
   credential-free bounded plan, the adapter signs fixed BCE v1 create and stop
   requests, keeps the returned instance token inside the exact WSS URL, and
