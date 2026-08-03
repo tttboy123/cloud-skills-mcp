@@ -19,7 +19,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS + Web PubSub 标准/可靠 JSON/Protobuf 与 MQTT 3.1.1/5.0 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
-| Google Cloud | Google Auth ADC + `googleapis.com` REST / gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
+| Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2 | BCE AK/SK、IAM/STS temporary AK/SK/session token |
@@ -230,13 +230,19 @@ GCP 查询：
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
 
-GCP 没有 REST transcoding 的 gRPC 方法使用 `auth_scheme=grpc`，仍然是 server 直接发起官方 HTTP/2 Request，不调用 `gcloud` 或其他云 CLI。`body_file` 是由官方 protobuf schema 编码的一条或多条消息，每条前面添加标准的 `0x00 + 4-byte big-endian length`；`response_file` 保存校验过 framing 且 `grpc-status=0` 的原始 framed protobuf，成功前不会发布目标文件：
+GCP 没有 REST transcoding 的 gRPC 方法使用 `auth_scheme=grpc`，仍然是 server 直接发起官方 HTTP/2 Request，不调用 `gcloud`、`grpcurl`、`protoc` 或其他 CLI。原始模式的 `body_file` 是由官方 protobuf schema 编码的一条或多条消息，每条前面添加标准的 `0x00 + 4-byte big-endian length`；`response_file` 保存校验过 framing 且 `grpc-status=0` 的原始 framed protobuf，成功前不会发布目标文件：
 
 ```json
 {"name":"gcp_api_read","arguments":{"auth_scheme":"grpc","service":"speech","operation":"StreamingRecognize","method":"POST","url":"https://speech.googleapis.com/google.cloud.speech.v2.Speech/StreamingRecognize","project":"<project>","headers":{"x-goog-request-params":"recognizer=projects/<project>/locations/global/recognizers/_"},"body_file":"/approved/grpc/speech-request.grpc","response_file":"/approved/grpc/speech-response.grpc","stream_interval_ms":100}}
 ```
 
-这个原始传输入口覆盖 unary、client-streaming、server-streaming 和有限 bidirectional-streaming；消息字段和单消息大小仍必须遵守具体 RPC 的官方 protobuf contract，例如 Speech-to-Text v2 的首条配置/后续音频顺序以及每条音频请求 15 KB 限制。当前实现不把任意 JSON 猜测转换成 protobuf，因此协议覆盖与 schema 级易用性分别记录在 coverage matrix 中。
+同一个入口也支持 `payload_mode=protobuf-json`。operator 把由官方 proto 生成、包含 imports 的二进制 `google.protobuf.FileDescriptorSet` 放在批准目录；server 从 URL 的 `/fully.qualified.Service/Method` 精确解析方法和 input/output 类型，把 unary/server-streaming 的单个 ProtoJSON object 或 client/bidirectional 的 1–256 个 object 转成确定性 protobuf frame，并把最多 256 条响应原子写成 NDJSON。它不猜测 JSON schema；未知请求字段、未知或嵌套（包括 `google.protobuf.Any`）响应 wire 字段、缺失/重复 unary 响应都会整次失败：
+
+```json
+{"name":"gcp_api_read","arguments":{"auth_scheme":"grpc","payload_mode":"protobuf-json","service":"speech","operation":"StreamingRecognize","method":"POST","url":"https://speech.googleapis.com/google.cloud.speech.v2.Speech/StreamingRecognize","project":"<project>","headers":{"x-goog-request-params":"recognizer=projects/<project>/locations/global/recognizers/_"},"protobuf_descriptor_file":"/approved/schemas/speech-v2.protoset","body":[{"recognizer":"projects/<project>/locations/global/recognizers/_","streamingConfig":{"config":{"autoDecodingConfig":{},"languageCodes":["en-US"]}}},{"audio":"<base64-audio-chunk>"}],"response_file":"/approved/grpc/speech-response.ndjson","stream_interval_ms":100}}
+```
+
+原始和 schema-driven 两种模式都覆盖 unary、client-streaming、server-streaming 和有限 bidirectional-streaming；消息顺序和产品级大小仍必须遵守具体 RPC contract，例如 Speech-to-Text v2 的首条配置/后续音频规则和 15 KB 音频消息限制。64 位整数按官方 ProtoJSON 规则保持为十进制字符串，descriptor 内容不会发送给 Google 或进入 MCP 输出。
 
 Vertex AI / Gemini Enterprise Agent Platform Live API 使用 `auth_scheme=vertex-live-ws`。server 只连接官方 global、regional 或 `us|eu` multi-region aiplatform WSS endpoint，通过 ADC 获取 `cloud-platform` OAuth token，并且只把 token 放进内部 Upgrade header。`body.messages` 第一条必须是与 `project`/`region` 一致的完整 `setup.model`，收到 `setupComplete` 后才会发送 `clientContent`、`realtimeInput` 或 caller 预备的 `toolResponse`；可选 `tool_handlers` 会根据服务端 `functionCalls[].name` 选择有限、无凭证的响应模板，并把服务端生成的 `id` 精确回填到 `functionResponses[]`。未知函数、重复 ID 或超过 `max_calls` 都会使本次会话失败且不发布输出。Live session 会产生云端推理成本并可携带工具响应，因此固定走 mutation gate：
 

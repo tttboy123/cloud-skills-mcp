@@ -56,31 +56,32 @@ type DiscoveryRequest struct {
 }
 
 type Invocation struct {
-	Provider          Provider
-	Mode              InvocationMode
-	Service           string
-	Operation         string
-	Region            string
-	RegionSet         string
-	Project           string
-	Subscription      string
-	Audience          string
-	AuthScheme        string
-	AuthVersion       string
-	APIVersion        string
-	PayloadMode       string
-	ChecksumAlgorithm string
-	Method            string
-	URL               string
-	Parameters        map[string]any
-	Headers           map[string]string
-	Body              any
-	BodyFile          string
-	ResponseFile      string
-	StreamChunkBytes  int
-	StreamIntervalMS  int
-	StreamUserID      string
-	StreamFormat      int
+	Provider               Provider
+	Mode                   InvocationMode
+	Service                string
+	Operation              string
+	Region                 string
+	RegionSet              string
+	Project                string
+	Subscription           string
+	Audience               string
+	AuthScheme             string
+	AuthVersion            string
+	APIVersion             string
+	PayloadMode            string
+	ChecksumAlgorithm      string
+	Method                 string
+	URL                    string
+	Parameters             map[string]any
+	Headers                map[string]string
+	Body                   any
+	BodyFile               string
+	ProtobufDescriptorFile string
+	ResponseFile           string
+	StreamChunkBytes       int
+	StreamIntervalMS       int
+	StreamUserID           string
+	StreamFormat           int
 	// MaxResponseFileBytes is runtime policy, not caller-controlled MCP input.
 	MaxResponseFileBytes int64
 }

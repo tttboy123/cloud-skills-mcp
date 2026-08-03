@@ -13,6 +13,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestGCPGRPCInvocationBoundarySupportsGenericHTTP2Methods(t *testing.T) {
@@ -53,6 +59,296 @@ func TestGCPGRPCInvocationBoundarySupportsGenericHTTP2Methods(t *testing.T) {
 			mutate(&candidate)
 			if err := validateInvocation(candidate, []string{directory}); err == nil {
 				t.Fatal("invalid GCP gRPC invocation accepted")
+			}
+		})
+	}
+}
+
+func TestGCPGRPCInvocationBoundarySupportsSchemaDrivenProtoJSON(t *testing.T) {
+	directory := t.TempDir()
+	descriptorFile := writeGCPGRPCTestDescriptorSet(t, directory)
+	responseFile := filepath.Join(directory, "response.ndjson")
+	request := Invocation{
+		Provider: ProviderGCP, Mode: ModeRead, AuthScheme: "grpc", Service: "test", Operation: "Echo",
+		Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Echo",
+		PayloadMode: "protobuf-json", ProtobufDescriptorFile: descriptorFile,
+		Body: map[string]any{"name": "Lune", "resourceId": "9007199254740993"}, ResponseFile: responseFile,
+	}
+	if err := validateInvocation(request, []string{directory}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, mutate := range map[string]func(*Invocation){
+		"missing descriptor": func(value *Invocation) { value.ProtobufDescriptorFile = "" },
+		"descriptor outside roots": func(value *Invocation) {
+			outside := t.TempDir()
+			value.ProtobufDescriptorFile = writeGCPGRPCTestDescriptorSet(t, outside)
+		},
+		"descriptor directory": func(value *Invocation) { value.ProtobufDescriptorFile = directory },
+		"missing body":         func(value *Invocation) { value.Body = nil },
+		"raw body file":        func(value *Invocation) { value.BodyFile = descriptorFile },
+		"credential body":      func(value *Invocation) { value.Body = map[string]any{"accessToken": "caller"} },
+		"descriptor in raw mode": func(value *Invocation) {
+			value.PayloadMode = ""
+			value.Body = nil
+			value.BodyFile = descriptorFile
+		},
+		"other provider": func(value *Invocation) {
+			value.Provider = ProviderAWS
+			value.AuthScheme = "sigv4"
+			value.Region = "us-east-1"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			mutate(&candidate)
+			if err := validateInvocation(candidate, []string{directory}); err == nil {
+				t.Fatal("unsafe schema-driven gRPC invocation accepted")
+			}
+		})
+	}
+}
+
+func TestGCPAdapterEncodesAndDecodesSchemaDrivenProtoJSONOverHTTP2(t *testing.T) {
+	directory := t.TempDir()
+	descriptorFile := writeGCPGRPCTestDescriptorSet(t, directory)
+	responseFile := filepath.Join(directory, "response.ndjson")
+	wantRequest := protowire.AppendTag(nil, 1, protowire.BytesType)
+	wantRequest = protowire.AppendString(wantRequest, "Lune")
+	wantRequest = protowire.AppendTag(wantRequest, 2, protowire.VarintType)
+	wantRequest = protowire.AppendVarint(wantRequest, 9007199254740993)
+	responsePayload := protowire.AppendTag(nil, 1, protowire.BytesType)
+	responsePayload = protowire.AppendString(responsePayload, "hello")
+	responsePayload = protowire.AppendTag(responsePayload, 2, protowire.VarintType)
+	responsePayload = protowire.AppendVarint(responsePayload, 9007199254740993)
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		data, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !bytes.Equal(data, appendGRPCFrame(nil, wantRequest)) {
+			return nil, fmt.Errorf("request body=%x want=%x", data, appendGRPCFrame(nil, wantRequest))
+		}
+		if request.Header.Get("Authorization") != "Bearer adc-token" || request.Header.Get("Content-Type") != "application/grpc+proto" {
+			return nil, fmt.Errorf("request headers=%#v", request.Header)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, ProtoMajor: 2,
+			Header: http.Header{"Content-Type": []string{"application/grpc+proto"}, "X-Goog-Request-Id": []string{"request-json-1"}},
+			Body:   io.NopCloser(bytes.NewReader(appendGRPCFrame(nil, responsePayload))), Trailer: http.Header{"Grpc-Status": []string{"0"}},
+		}, nil
+	})
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{Tokens: &staticTokenProvider{token: "adc-token"}, GRPCHTTP: doer})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Mode: ModeRead, AuthScheme: "grpc", Service: "test", Operation: "Echo",
+		Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Echo",
+		PayloadMode: "protobuf-json", ProtobufDescriptorFile: descriptorFile,
+		Body:         map[string]any{"name": "Lune", "resourceId": "9007199254740993"},
+		ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if json.Unmarshal(bytes.TrimSpace(data), &decoded) != nil || decoded["message"] != "hello" || decoded["resourceId"] != "9007199254740993" {
+		t.Fatalf("response=%s decoded=%v", data, decoded)
+	}
+	if result.RequestID != "request-json-1" || !bytes.Contains(result.Output, []byte(`"content_type":"application/x-ndjson"`)) || strings.Contains(string(result.Output), "adc-token") || strings.Contains(string(result.Output), descriptorFile) || !bytes.Contains(result.Output, []byte(responseFile)) {
+		t.Fatalf("result=%s request_id=%q", result.Output, result.RequestID)
+	}
+}
+
+func TestGCPAdapterSchemaDrivenProtoJSONSupportsFiniteBidirectionalStreams(t *testing.T) {
+	directory := t.TempDir()
+	descriptorFile := writeGCPGRPCTestDescriptorSet(t, directory)
+	responseFile := filepath.Join(directory, "stream.ndjson")
+	responseOne := appendGRPCTestResponsePayload(nil, "one", 1)
+	responseTwo := appendGRPCTestResponsePayload(nil, "two", 2)
+	pauses := 0
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		data, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		requestOne := protowire.AppendTag(nil, 1, protowire.BytesType)
+		requestOne = protowire.AppendString(requestOne, "one")
+		requestOne = protowire.AppendTag(requestOne, 2, protowire.VarintType)
+		requestOne = protowire.AppendVarint(requestOne, 1)
+		requestTwo := protowire.AppendTag(nil, 1, protowire.BytesType)
+		requestTwo = protowire.AppendString(requestTwo, "two")
+		requestTwo = protowire.AppendTag(requestTwo, 2, protowire.VarintType)
+		requestTwo = protowire.AppendVarint(requestTwo, 2)
+		want := appendGRPCFrame(nil, requestOne)
+		want = appendGRPCFrame(want, requestTwo)
+		if !bytes.Equal(data, want) {
+			return nil, fmt.Errorf("request body=%x want=%x", data, want)
+		}
+		responseData := appendGRPCFrame(nil, responseOne)
+		responseData = appendGRPCFrame(responseData, responseTwo)
+		return &http.Response{StatusCode: 200, ProtoMajor: 2, Header: http.Header{"Content-Type": []string{"application/grpc+proto"}}, Body: io.NopCloser(bytes.NewReader(responseData)), Trailer: http.Header{"Grpc-Status": []string{"0"}}}, nil
+	})
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{
+		Tokens: &staticTokenProvider{token: "token"}, GRPCHTTP: doer,
+		StreamPause: func(context.Context, time.Duration) error { pauses++; return nil },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Mode: ModeRead, AuthScheme: "grpc", Service: "test", Operation: "Chat",
+		Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Chat",
+		PayloadMode: "protobuf-json", ProtobufDescriptorFile: descriptorFile,
+		Body:         []any{map[string]any{"name": "one", "resourceId": "1"}, map[string]any{"name": "two", "resourceId": "2"}},
+		ResponseFile: responseFile, StreamIntervalMS: 1, MaxResponseFileBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(data), []byte{'\n'})
+	if pauses != 1 || len(lines) != 2 || !bytes.Contains(lines[0], []byte(`"message":"one"`)) || !bytes.Contains(lines[0], []byte(`"resourceId":"1"`)) || !bytes.Contains(lines[1], []byte(`"message":"two"`)) || !bytes.Contains(lines[1], []byte(`"resourceId":"2"`)) {
+		t.Fatalf("pauses=%d response=%s", pauses, data)
+	}
+}
+
+func TestGCPGRPCProtoJSONDerivesAllFourRPCShapesFromMethodDescriptor(t *testing.T) {
+	descriptors := gcpGRPCTestDescriptorSetBytes(t)
+	validObject := map[string]any{"name": "one"}
+	validArray := []any{map[string]any{"name": "one"}, map[string]any{"name": "two"}}
+	for name, test := range map[string]struct {
+		method          string
+		clientStreaming bool
+		serverStreaming bool
+		validBody       any
+		invalidBody     any
+		wantFrames      int
+	}{
+		"unary":         {method: "Echo", validBody: validObject, invalidBody: validArray, wantFrames: 1},
+		"client stream": {method: "Upload", clientStreaming: true, validBody: validArray, invalidBody: validObject, wantFrames: 2},
+		"server stream": {method: "Watch", serverStreaming: true, validBody: validObject, invalidBody: validArray, wantFrames: 1},
+		"bidirectional": {method: "Chat", clientStreaming: true, serverStreaming: true, validBody: validArray, invalidBody: validObject, wantFrames: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			schema, err := parseGCPGRPCProtoJSONSchema(descriptors, "https://example.googleapis.com/test.v1.TestService/"+test.method)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if schema.method.IsStreamingClient() != test.clientStreaming || schema.method.IsStreamingServer() != test.serverStreaming {
+				t.Fatalf("method shape client=%v server=%v", schema.method.IsStreamingClient(), schema.method.IsStreamingServer())
+			}
+			framed, err := encodeGCPGRPCProtoJSONRequest(test.validBody, schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countGCPGRPCTestFrames(t, framed) != test.wantFrames {
+				t.Fatalf("encoded frame count does not match method shape: %x", framed)
+			}
+			if _, err := encodeGCPGRPCProtoJSONRequest(test.invalidBody, schema); err == nil {
+				t.Fatal("request body with the wrong method shape was accepted")
+			}
+		})
+	}
+}
+
+func TestGCPGRPCProtoJSONRejectsInvalidSchemaOrRequestBeforeCredentialsAndNetwork(t *testing.T) {
+	for name, configure := range map[string]func(*testing.T, string, *Invocation){
+		"invalid descriptor": func(t *testing.T, directory string, invocation *Invocation) {
+			path := filepath.Join(directory, "invalid.protoset")
+			if err := os.WriteFile(path, []byte("not-a-descriptor"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			invocation.ProtobufDescriptorFile = path
+		},
+		"method missing from descriptor": func(_ *testing.T, _ string, invocation *Invocation) {
+			invocation.Operation = "Missing"
+			invocation.URL = "https://example.googleapis.com/test.v1.TestService/Missing"
+		},
+		"unknown request field": func(_ *testing.T, _ string, invocation *Invocation) {
+			invocation.Body = map[string]any{"unknown": true}
+		},
+		"array for unary": func(_ *testing.T, _ string, invocation *Invocation) {
+			invocation.Body = []any{map[string]any{"name": "one"}}
+		},
+		"object for client stream": func(_ *testing.T, _ string, invocation *Invocation) {
+			invocation.Operation = "Chat"
+			invocation.URL = "https://example.googleapis.com/test.v1.TestService/Chat"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			tokens := &staticTokenProvider{token: "must-not-be-used"}
+			doerCalled := false
+			adapter := NewGCPRESTAdapter(GCPRESTConfig{
+				Tokens: tokens,
+				GRPCHTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+					doerCalled = true
+					return nil, fmt.Errorf("must not be called")
+				}),
+			})
+			invocation := Invocation{
+				Provider: ProviderGCP, Mode: ModeRead, AuthScheme: "grpc", Service: "test", Operation: "Echo",
+				Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Echo",
+				PayloadMode: "protobuf-json", ProtobufDescriptorFile: writeGCPGRPCTestDescriptorSet(t, directory),
+				Body: map[string]any{"name": "Lune"}, ResponseFile: filepath.Join(directory, "response.ndjson"),
+			}
+			configure(t, directory, &invocation)
+			_, err := adapter.Invoke(t.Context(), invocation)
+			if err == nil || tokens.calls != 0 || doerCalled {
+				t.Fatalf("err=%v token calls=%d doer=%v", err, tokens.calls, doerCalled)
+			}
+		})
+	}
+}
+
+func TestGCPGRPCProtoJSONFailuresNeverPublishResponseFile(t *testing.T) {
+	validPayload := appendGRPCTestResponsePayload(nil, "hello", 1)
+	unknownPayload := append(append([]byte(nil), validPayload...), protowire.AppendTag(nil, 99, protowire.VarintType)...)
+	unknownPayload = protowire.AppendVarint(unknownPayload, 1)
+	nestedUnknown := protowire.AppendTag(nil, 99, protowire.VarintType)
+	nestedUnknown = protowire.AppendVarint(nestedUnknown, 1)
+	nestedUnknownPayload := append(append([]byte(nil), validPayload...), protowire.AppendTag(nil, 3, protowire.BytesType)...)
+	nestedUnknownPayload = protowire.AppendBytes(nestedUnknownPayload, nestedUnknown)
+	anyPayload := protowire.AppendTag(nil, 1, protowire.BytesType)
+	anyPayload = protowire.AppendString(anyPayload, "type.googleapis.com/test.v1.Child")
+	anyPayload = protowire.AppendTag(anyPayload, 2, protowire.BytesType)
+	anyPayload = protowire.AppendBytes(anyPayload, nestedUnknown)
+	anyUnknownPayload := append(append([]byte(nil), validPayload...), protowire.AppendTag(nil, 4, protowire.BytesType)...)
+	anyUnknownPayload = protowire.AppendBytes(anyUnknownPayload, anyPayload)
+	for name, responseData := range map[string][]byte{
+		"malformed protobuf":     appendGRPCFrame(nil, []byte{0xff}),
+		"unknown wire field":     appendGRPCFrame(nil, unknownPayload),
+		"nested unknown field":   appendGRPCFrame(nil, nestedUnknownPayload),
+		"Any unknown field":      appendGRPCFrame(nil, anyUnknownPayload),
+		"missing unary response": nil,
+		"multiple unary responses": func() []byte {
+			data := appendGRPCFrame(nil, validPayload)
+			return appendGRPCFrame(data, validPayload)
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			responseFile := filepath.Join(directory, "failed.ndjson")
+			adapter := NewGCPRESTAdapter(GCPRESTConfig{
+				Tokens: &staticTokenProvider{token: "token"},
+				GRPCHTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 200, ProtoMajor: 2, Header: http.Header{"Content-Type": []string{"application/grpc+proto"}}, Body: io.NopCloser(bytes.NewReader(responseData)), Trailer: http.Header{"Grpc-Status": []string{"0"}}}, nil
+				}),
+			})
+			_, err := adapter.Invoke(t.Context(), Invocation{
+				Provider: ProviderGCP, Mode: ModeRead, AuthScheme: "grpc", Service: "test", Operation: "Echo",
+				Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Echo",
+				PayloadMode: "protobuf-json", ProtobufDescriptorFile: writeGCPGRPCTestDescriptorSet(t, directory),
+				Body: map[string]any{"name": "Lune"}, ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+			})
+			if err == nil {
+				t.Fatal("invalid schema-driven response accepted")
+			}
+			if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
+				t.Fatalf("failed response published output: %v", statErr)
 			}
 		})
 	}
@@ -156,6 +452,10 @@ func TestGCPAdapterStreamsRawGRPCOverADCAuthenticatedHTTP2(t *testing.T) {
 
 func TestGCPGRPCFailuresNeverPublishResponseFile(t *testing.T) {
 	for name, response := range map[string]*http.Response{
+		"grpc-web content type": {
+			StatusCode: http.StatusOK, ProtoMajor: 2, Header: http.Header{"Content-Type": []string{"application/grpc-web+proto"}},
+			Body: io.NopCloser(bytes.NewReader(appendGRPCFrame(nil, []byte("response")))), Trailer: http.Header{"Grpc-Status": []string{"0"}},
+		},
 		"http1 response": {
 			StatusCode: http.StatusOK, ProtoMajor: 1, Header: http.Header{"Content-Type": []string{"application/grpc+proto"}},
 			Body: io.NopCloser(bytes.NewReader(appendGRPCFrame(nil, []byte("response")))), Trailer: http.Header{"Grpc-Status": []string{"0"}},
@@ -243,4 +543,128 @@ func appendGRPCFrame(target, payload []byte) []byte {
 	binary.BigEndian.PutUint32(header[1:], uint32(len(payload)))
 	target = append(target, header...)
 	return append(target, payload...)
+}
+
+func appendGRPCTestResponsePayload(target []byte, message string, resourceID uint64) []byte {
+	target = protowire.AppendTag(target, 1, protowire.BytesType)
+	target = protowire.AppendString(target, message)
+	target = protowire.AppendTag(target, 2, protowire.VarintType)
+	return protowire.AppendVarint(target, resourceID)
+}
+
+func countGCPGRPCTestFrames(t testing.TB, framed []byte) int {
+	t.Helper()
+	count := 0
+	for len(framed) != 0 {
+		if len(framed) < 5 || framed[0] != 0 {
+			t.Fatalf("invalid test gRPC frames: %x", framed)
+		}
+		length := int(binary.BigEndian.Uint32(framed[1:5]))
+		if length > len(framed)-5 {
+			t.Fatalf("truncated test gRPC frame: %x", framed)
+		}
+		framed = framed[5+length:]
+		count++
+	}
+	return count
+}
+
+func writeGCPGRPCTestDescriptorSet(t *testing.T, directory string) string {
+	t.Helper()
+	data := gcpGRPCTestDescriptorSetBytes(t)
+	path := filepath.Join(directory, "service.protoset")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func gcpGRPCTestDescriptorSetBytes(t testing.TB) []byte {
+	t.Helper()
+	optional := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	stringType := descriptorpb.FieldDescriptorProto_TYPE_STRING
+	int64Type := descriptorpb.FieldDescriptorProto_TYPE_INT64
+	messageType := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE
+	request := &descriptorpb.DescriptorProto{
+		Name: proto.String("Request"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			{Name: proto.String("name"), JsonName: proto.String("name"), Number: proto.Int32(1), Label: &optional, Type: &stringType},
+			{Name: proto.String("resource_id"), JsonName: proto.String("resourceId"), Number: proto.Int32(2), Label: &optional, Type: &int64Type},
+		},
+	}
+	response := &descriptorpb.DescriptorProto{
+		Name: proto.String("Response"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			{Name: proto.String("message"), JsonName: proto.String("message"), Number: proto.Int32(1), Label: &optional, Type: &stringType},
+			{Name: proto.String("resource_id"), JsonName: proto.String("resourceId"), Number: proto.Int32(2), Label: &optional, Type: &int64Type},
+			{Name: proto.String("child"), JsonName: proto.String("child"), Number: proto.Int32(3), Label: &optional, Type: &messageType, TypeName: proto.String(".test.v1.Child")},
+			{Name: proto.String("metadata"), JsonName: proto.String("metadata"), Number: proto.Int32(4), Label: &optional, Type: &messageType, TypeName: proto.String(".google.protobuf.Any")},
+		},
+	}
+	child := &descriptorpb.DescriptorProto{
+		Name: proto.String("Child"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			{Name: proto.String("value"), JsonName: proto.String("value"), Number: proto.Int32(1), Label: &optional, Type: &stringType},
+		},
+	}
+	set := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{protodesc.ToFileDescriptorProto(anypb.File_google_protobuf_any_proto), {
+		Name: proto.String("test/v1/service.proto"), Package: proto.String("test.v1"), Syntax: proto.String("proto3"),
+		Dependency:  []string{"google/protobuf/any.proto"},
+		MessageType: []*descriptorpb.DescriptorProto{request, response, child},
+		Service: []*descriptorpb.ServiceDescriptorProto{{
+			Name: proto.String("TestService"),
+			Method: []*descriptorpb.MethodDescriptorProto{
+				{Name: proto.String("Echo"), InputType: proto.String(".test.v1.Request"), OutputType: proto.String(".test.v1.Response")},
+				{Name: proto.String("Upload"), InputType: proto.String(".test.v1.Request"), OutputType: proto.String(".test.v1.Response"), ClientStreaming: proto.Bool(true)},
+				{Name: proto.String("Watch"), InputType: proto.String(".test.v1.Request"), OutputType: proto.String(".test.v1.Response"), ServerStreaming: proto.Bool(true)},
+				{Name: proto.String("Chat"), InputType: proto.String(".test.v1.Request"), OutputType: proto.String(".test.v1.Response"), ClientStreaming: proto.Bool(true), ServerStreaming: proto.Bool(true)},
+			},
+		}},
+	}}}
+	data, err := proto.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func FuzzGCPGRPCProtoJSONDescriptorSetNeverPanics(f *testing.F) {
+	f.Add(gcpGRPCTestDescriptorSetBytes(f), "https://example.googleapis.com/test.v1.TestService/Echo")
+	f.Add([]byte("not-a-descriptor"), "https://example.googleapis.com/test.v1.TestService/Echo")
+	f.Add([]byte{}, "not-a-url")
+	f.Fuzz(func(t *testing.T, data []byte, rawURL string) {
+		if len(data) > maxGCPGRPCDescriptorBytes {
+			return
+		}
+		schema, err := parseGCPGRPCProtoJSONSchema(data, rawURL)
+		if err == nil && (schema.method == nil || schema.types == nil) {
+			t.Fatal("successful descriptor parse returned an incomplete schema")
+		}
+	})
+}
+
+func FuzzGCPGRPCProtoJSONRequestNeverPanics(f *testing.F) {
+	schema, err := parseGCPGRPCProtoJSONSchema(gcpGRPCTestDescriptorSetBytes(f), "https://example.googleapis.com/test.v1.TestService/Echo")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add([]byte(`{"name":"Lune","resourceId":"9007199254740993"}`))
+	f.Add([]byte(`{"unknown":true}`))
+	f.Add([]byte(`not-json`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) > maxRequestPayloadBytes {
+			return
+		}
+		var body any
+		if json.Unmarshal(raw, &body) != nil {
+			body = json.RawMessage(raw)
+		}
+		framed, err := encodeGCPGRPCProtoJSONRequest(body, schema)
+		if err != nil {
+			return
+		}
+		if len(framed) == 0 || validateGCPGRPCRequest(bytes.NewReader(framed)) != nil {
+			t.Fatalf("successful request encoding returned invalid frames: %x", framed)
+		}
+	})
 }

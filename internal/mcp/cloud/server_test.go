@@ -115,7 +115,7 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
 		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
-			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_user_id", "stream_format", "audience", "auth_version"} {
+			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "protobuf_descriptor_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_user_id", "stream_format", "audience", "auth_version"} {
 				if _, ok := tool.InputSchema.Properties[field]; !ok {
 					t.Errorf("%s must expose HTTP field %s", tool.Name, field)
 				}
@@ -191,6 +191,28 @@ func TestInvocationParsingAndAdapterErrorsAreSoft(t *testing.T) {
 	result := callCloudTool(t, c, "aws_api_read", awsHTTPArguments("describe-instances"))
 	if !result.IsError || !strings.Contains(cloudToolText(t, result), "provider unavailable") {
 		t.Fatalf("adapter error=%#v", result)
+	}
+}
+
+func TestUnifiedMCPContractRoutesGCPProtoJSONDescriptorFile(t *testing.T) {
+	root := t.TempDir()
+	descriptorFile := writeGCPGRPCTestDescriptorSet(t, root)
+	responseFile := filepath.Join(root, "response.ndjson")
+	fake := &fakeAdapter{invokeOut: []byte(`{"ok":true}`)}
+	adapters := allFakeAdapters()
+	adapters[ProviderGCP] = fake
+	c := newTestClient(t, Runtime{Adapters: adapters, AllowedFileRoots: []string{root}, AllowMutations: true, Audit: func(context.Context, AuditEvent) error { return nil }})
+	result := callCloudTool(t, c, "gcp_api_mutate", map[string]any{
+		"service": "test", "operation": "Echo", "auth_scheme": "grpc", "payload_mode": "protobuf-json",
+		"method": "POST", "url": "https://example.googleapis.com/test.v1.TestService/Echo",
+		"protobuf_descriptor_file": descriptorFile, "body": map[string]any{"name": "Lune"}, "response_file": responseFile, "force": true,
+	})
+	if result.IsError || len(fake.invocations) != 1 {
+		t.Fatalf("result=%#v invocations=%#v", result, fake.invocations)
+	}
+	invocation := fake.invocations[0]
+	if invocation.ProtobufDescriptorFile != descriptorFile || invocation.PayloadMode != "protobuf-json" || invocation.Body == nil || filepath.Base(invocation.ResponseFile) != filepath.Base(responseFile) {
+		t.Fatalf("invocation=%#v", invocation)
 	}
 }
 

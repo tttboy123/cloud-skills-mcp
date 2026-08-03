@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,8 +17,11 @@ import (
 )
 
 const (
-	authSchemeGCPGRPC      = "grpc"
-	maxGCPGRPCMessageBytes = 16 * 1024 * 1024
+	authSchemeGCPGRPC           = "grpc"
+	gcpGRPCPayloadModeProtoJSON = "protobuf-json"
+	maxGCPGRPCMessageBytes      = 16 * 1024 * 1024
+	maxGCPGRPCDescriptorBytes   = 16 * 1024 * 1024
+	maxGCPGRPCJSONMessages      = 256
 )
 
 var gcpGRPCMethodPathPattern = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_.]{0,254}/[A-Za-z][A-Za-z0-9_]{0,127}$`)
@@ -43,14 +47,30 @@ func validateGCPGRPCInvocation(invocation Invocation, allowedHosts []string) err
 	if len(invocation.Parameters) != 0 {
 		return fmt.Errorf("Google Cloud gRPC system and routing parameters must use non-credential HTTP metadata headers")
 	}
-	if invocation.Body != nil || invocation.BodyFile == "" {
-		return fmt.Errorf("Google Cloud gRPC requires a framed protobuf body_file and does not accept inline body")
+	payloadMode := strings.ToLower(strings.TrimSpace(invocation.PayloadMode))
+	switch payloadMode {
+	case "":
+		if invocation.Body != nil || invocation.BodyFile == "" {
+			return fmt.Errorf("Google Cloud gRPC raw mode requires a framed protobuf body_file and does not accept inline body")
+		}
+		if invocation.ProtobufDescriptorFile != "" {
+			return fmt.Errorf("Google Cloud gRPC raw mode does not accept protobuf_descriptor_file")
+		}
+	case gcpGRPCPayloadModeProtoJSON:
+		if invocation.Body == nil || invocation.BodyFile != "" || invocation.ProtobufDescriptorFile == "" {
+			return fmt.Errorf("Google Cloud gRPC protobuf-json requires inline body and protobuf_descriptor_file; body_file is forbidden")
+		}
+		if azureRealtimeContainsCredentialField(invocation.Body) {
+			return fmt.Errorf("Google Cloud gRPC protobuf-json requires a credential-free request body")
+		}
+	default:
+		return fmt.Errorf("Google Cloud gRPC payload_mode must be protobuf-json or omitted for raw framed protobuf")
 	}
 	if invocation.ResponseFile == "" {
 		return fmt.Errorf("Google Cloud gRPC requires response_file for framed protobuf responses")
 	}
-	if invocation.PayloadMode != "" || invocation.ChecksumAlgorithm != "" || invocation.StreamChunkBytes != 0 || invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
-		return fmt.Errorf("Google Cloud gRPC does not accept REST payload, checksum, chunk-size, or provider-specific stream controls")
+	if invocation.ChecksumAlgorithm != "" || invocation.StreamChunkBytes != 0 || invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Google Cloud gRPC does not accept checksum, chunk-size, or provider-specific stream controls")
 	}
 	for name := range invocation.Headers {
 		lower := strings.ToLower(strings.TrimSpace(name))
@@ -152,6 +172,9 @@ func invokeGCPGRPC(ctx context.Context, adapter *GCPRESTAdapter, invocation Invo
 	if err := validateGCPGRPCInvocation(invocation, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
 	}
+	if strings.EqualFold(strings.TrimSpace(invocation.PayloadMode), gcpGRPCPayloadModeProtoJSON) {
+		return invokeGCPGRPCProtoJSON(ctx, adapter, invocation)
+	}
 	file, err := os.Open(invocation.BodyFile)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("open Google Cloud gRPC body_file: %w", err)
@@ -210,7 +233,7 @@ func readGCPGRPCResponse(response *http.Response, invocation Invocation, maxBody
 	if response.ProtoMajor != 2 {
 		return nil, "", fmt.Errorf("Google Cloud gRPC requires an HTTP/2 response")
 	}
-	if contentType := strings.ToLower(response.Header.Get("Content-Type")); !strings.HasPrefix(contentType, "application/grpc") {
+	if !validGCPGRPCContentType(response.Header.Get("Content-Type")) {
 		return nil, "", fmt.Errorf("Google Cloud gRPC returned an invalid content type")
 	}
 	sink, err := newWebSocketOutputSink(invocation, maxBodyBytes, "Google Cloud gRPC")
@@ -260,4 +283,13 @@ func readGCPGRPCResponse(response *http.Response, invocation Invocation, maxBody
 		return nil, "", err
 	}
 	return metadata, requestID, nil
+}
+
+func validGCPGRPCContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return false
+	}
+	mediaType = strings.ToLower(mediaType)
+	return mediaType == "application/grpc" || strings.HasPrefix(mediaType, "application/grpc+")
 }

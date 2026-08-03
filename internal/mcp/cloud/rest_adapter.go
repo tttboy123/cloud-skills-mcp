@@ -390,7 +390,7 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 func (adapter *GCPRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
 		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC/WSS + ADC",
-		Version: "google-auth/v0.22+grpc-http2+vertex-live-ws", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
+		Version: "google-auth/v0.22+grpc-http2+grpc-protojson+vertex-live-ws", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through ADC; no gcloud subprocess fallback exists",
 	}, nil
 }

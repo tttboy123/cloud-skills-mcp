@@ -528,7 +528,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if (request.StreamUserID != "" || request.StreamFormat != 0) && !(request.Provider == ProviderTencent && tencentScheme == authSchemeTencentMPSWS) {
 		return fmt.Errorf("stream_user_id and stream_format are supported only by Tencent MPS WebSocket")
 	}
-	if payloadMode != "" {
+	if payloadMode != "" && !(gcpGRPCScheme && payloadMode == gcpGRPCPayloadModeProtoJSON) {
 		if request.Provider != ProviderAWS || (payloadMode != awsPayloadModeChunked && payloadMode != awsPayloadModeChunkedTrailer && payloadMode != awsPayloadModeEventStream) {
 			return fmt.Errorf("unsupported payload_mode %q", request.PayloadMode)
 		}
@@ -618,6 +618,24 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 		if info.Size() > maxRequestFileBytes {
 			return fmt.Errorf("body_file exceeds %d bytes", maxRequestFileBytes)
+		}
+	}
+	if request.ProtobufDescriptorFile != "" {
+		if !gcpGRPCScheme || payloadMode != gcpGRPCPayloadModeProtoJSON {
+			return fmt.Errorf("protobuf_descriptor_file is supported only by Google Cloud grpc protobuf-json")
+		}
+		if !pathAllowed(request.ProtobufDescriptorFile, allowedFileRoots) {
+			return fmt.Errorf("protobuf_descriptor_file is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
+		}
+		info, err := os.Stat(request.ProtobufDescriptorFile)
+		if err != nil {
+			return fmt.Errorf("inspect protobuf_descriptor_file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("protobuf_descriptor_file must be a regular file")
+		}
+		if info.Size() > maxGCPGRPCDescriptorBytes {
+			return fmt.Errorf("protobuf_descriptor_file exceeds %d bytes", maxGCPGRPCDescriptorBytes)
 		}
 	}
 	if request.ResponseFile != "" {

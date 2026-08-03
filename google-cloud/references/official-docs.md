@@ -7,6 +7,11 @@
 - Google Cloud API reference index: https://cloud.google.com/apis/docs/overview
 - System parameters and gRPC HTTP metadata: https://docs.cloud.google.com/apis/docs/system-parameters
 - gRPC protocol over HTTP/2: https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md
+- Official ProtoJSON mapping and 64-bit integer rules: https://protobuf.dev/programming-guides/json/
+- Official protobuf-go ProtoJSON API: https://pkg.go.dev/google.golang.org/protobuf/encoding/protojson
+- Official protobuf-go FileDescriptorSet registry API: https://pkg.go.dev/google.golang.org/protobuf/reflect/protodesc
+- Official protobuf-go dynamic message/type API: https://pkg.go.dev/google.golang.org/protobuf/types/dynamicpb
+- Official Google API protobuf definitions: https://github.com/googleapis/googleapis
 - Speech-to-Text streaming overview: https://docs.cloud.google.com/speech-to-text/docs/v1/transcribe-streaming-audio
 - Speech-to-Text v2 StreamingRecognize RPC: https://cloud.google.com/speech-to-text/v2/docs/reference/rpc/google.cloud.speech.v2
 - Gemini Live API stateful WebSocket message reference: https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/multimodal-live
@@ -19,4 +24,4 @@
 - Google Cloud MCP overview: https://docs.cloud.google.com/mcp/overview
 - Cloud Storage objects.get media and Range download: https://docs.cloud.google.com/storage/docs/json_api/v1/objects/get
 
-The adapter requests a token internally and sends it only to validated `googleapis.com` hosts. Public discovery documents are fetched without credentials. For `auth_scheme=grpc`, it sends and validates the official five-byte gRPC record framing over HTTP/2, requires `grpc-status=0`, and never accepts caller-supplied authentication or gRPC protocol-control headers. For `auth_scheme=vertex-live-ws`, it uses only the official global, regional, or `us|eu` multi-region aiplatform host and Bidi path, puts the ADC Bearer token only in the Upgrade header, enforces setup/setupComplete ordering, bounds messages and time, matches tool responses to provider call IDs, and can transparently reconnect using an internal-only handle plus acknowledged-message replay. It strips `newHandle`, validates server JSON, and atomically publishes NDJSON.
+The adapter requests a token internally and sends it only to validated `googleapis.com` hosts. Public discovery documents are fetched without credentials. For `auth_scheme=grpc`, it sends and validates the official five-byte gRPC record framing over HTTP/2, requires `grpc-status=0`, and never accepts caller-supplied authentication or gRPC protocol-control headers. Raw mode preserves framed protobuf. `payload_mode=protobuf-json` loads a bounded local FileDescriptorSet, resolves the exact URL service/method, converts bounded ProtoJSON request objects with dynamic protobuf types, rejects incomplete response schemas, and atomically publishes bounded NDJSON; descriptor bytes never leave the process. For `auth_scheme=vertex-live-ws`, it uses only the official global, regional, or `us|eu` multi-region aiplatform host and Bidi path, puts the ADC Bearer token only in the Upgrade header, enforces setup/setupComplete ordering, bounds messages and time, matches tool responses to provider call IDs, and can transparently reconnect using an internal-only handle plus acknowledged-message replay. It strips `newHandle`, validates server JSON, and atomically publishes NDJSON.
