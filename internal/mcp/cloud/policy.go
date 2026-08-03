@@ -78,8 +78,11 @@ func classifyRead(provider Provider, request Invocation) bool {
 		}
 	case ProviderAWS, ProviderAlicloud, ProviderTencent:
 		action := strings.ToLower(strings.TrimSpace(request.Operation))
-		if provider == ProviderAWS && normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) == authSchemeAWSSigV4WS {
-			return false
+		if provider == ProviderAWS {
+			scheme := normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4)
+			if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS {
+				return false
+			}
 		}
 		if provider == ProviderAlicloud && normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3) == authSchemeAlibabaNLSWS {
 			switch action {
@@ -156,6 +159,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureScheme := normalizedAuthScheme(request.AuthScheme, "")
 	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
 	awsSigV4WebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4WS
+	awsConnectHealthWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSConnectHealthWS
 	awsIoTMQTTWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSIoTMQTTWS
 	awsAppSyncEventWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSAppSyncEventWS
 	awsAppSyncGraphQLWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSAppSyncGraphQLWS
@@ -164,7 +168,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
-	if awsSigV4WebSocketScheme {
+	if awsConnectHealthWebSocketScheme {
+		if err := validateAWSConnectHealthWebSocketInvocation(request); err != nil {
+			return err
+		}
+	} else if awsSigV4WebSocketScheme {
 		if err := validateAWSSigV4WebSocketInvocation(request, allowedEndpointHosts); err != nil {
 			return err
 		}
@@ -265,10 +273,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
 		scheme := awsScheme
-		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
-			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
+		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
+			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
 		}
-		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS) && !identifierPattern.MatchString(request.Region) {
+		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS) && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("AWS SigV4 requires a valid region")
 		}
 		if scheme == authSchemeAWSSigV4a {
@@ -487,7 +495,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsWebSocketScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}
@@ -563,7 +571,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
-	if request.Body != nil && request.BodyFile != "" && !awsWebSocketScheme && !alibabaNLSWebSocketScheme {
+	if request.Body != nil && request.BodyFile != "" && !awsConnectHealthWebSocketScheme && !awsWebSocketScheme && !alibabaNLSWebSocketScheme {
 		return fmt.Errorf("body and body_file are mutually exclusive")
 	}
 	if request.BodyFile != "" {

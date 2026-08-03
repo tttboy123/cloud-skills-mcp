@@ -44,7 +44,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
-| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, plus guarded raw-frame SigV4, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
+| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime Entra-authenticated WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated REST plus raw framed-protobuf gRPC over HTTP/2 against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
@@ -99,6 +99,13 @@ remain available through the guarded resource gateway.
   and atomically records bounded text/binary responses. Because raw frames can
   have arbitrary effects, this scheme is mutation-only regardless of the
   caller's operation label.
+- Connect Health Medical Scribe WSS accepts only the two official regional
+  endpoints and six documented session parameters, internally creates the
+  maximum-60-second SigV4 URL, chains signatures across configuration, raw
+  audio and `END_OF_SESSION` EventStream frames, and atomically publishes only
+  validated transcript events after a normal provider close. Starting a
+  session is always mutation-only; callers remain responsible for recording
+  consent, PHI handling and trained clinical review.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a

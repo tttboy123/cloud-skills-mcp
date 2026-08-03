@@ -122,6 +122,7 @@ type AWSRESTConfig struct {
 	AppSyncGraphQLWebSocketDial func(context.Context, string, []string) (cloudWebSocketConnection, error)
 	AppSyncGraphQLID            func() (string, error)
 	SigV4WebSocketDial          func(context.Context, string, http.Header) (cloudWebSocketConnection, error)
+	ConnectHealthWebSocketDial  func(context.Context, string) (cloudWebSocketConnection, error)
 	StreamPause                 func(context.Context, time.Duration) error
 	AllowedHosts                []string
 }
@@ -156,6 +157,9 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 	if config.SigV4WebSocketDial == nil {
 		config.SigV4WebSocketDial = defaultAWSSigV4WebSocketDial
 	}
+	if config.ConnectHealthWebSocketDial == nil {
+		config.ConnectHealthWebSocketDial = defaultAWSConnectHealthWebSocketDial
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -164,7 +168,7 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 
 func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and guarded WSS", Version: "sigv4+sigv4a+sigv4-ws+transcribe-ws+iot-mqtt-ws+appsync-event-ws+appsync-graphql-ws",
+		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and guarded WSS", Version: "sigv4+sigv4a+sigv4-ws+connect-health-ws+transcribe-ws+iot-mqtt-ws+appsync-event-ws+appsync-graphql-ws",
 		CredentialSource: credentialSource(ProviderAWS), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the AWS SDK credential chain; no cloud CLI is executed",
 	}, nil
@@ -182,19 +186,22 @@ func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]by
 		"sigv4_websocket":      "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
 		"agentcore_websocket":  "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-websocket.html",
 		"blockchain_websocket": "https://docs.aws.amazon.com/managed-blockchain/latest/ethereum-dev/json-rpc-api-examples.html",
+		"connect_health_ws":    "https://docs.aws.amazon.com/connecthealth/latest/userguide/ambient-documentation.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
-	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
 	}
-	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS {
+	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS {
 		var validationErr error
 		switch scheme {
 		case authSchemeAWSSigV4WS:
 			validationErr = validateAWSSigV4WebSocketInvocation(invocation, adapter.config.AllowedHosts)
+		case authSchemeAWSConnectHealthWS:
+			validationErr = validateAWSConnectHealthWebSocketInvocation(invocation)
 		case authSchemeAWSTranscribeWS:
 			validationErr = validateAWSTranscribeWebSocketInvocation(invocation)
 		case authSchemeAWSIoTMQTTWS:
@@ -216,6 +223,9 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 		}
 		if scheme == authSchemeAWSSigV4WS {
 			return invokeAWSSigV4WebSocket(ctx, adapter, credentials, invocation)
+		}
+		if scheme == authSchemeAWSConnectHealthWS {
+			return invokeAWSConnectHealthWebSocket(ctx, adapter, credentials, invocation)
 		}
 		if scheme == authSchemeAWSTranscribeWS {
 			return invokeAWSTranscribeWebSocket(ctx, adapter, credentials, invocation)

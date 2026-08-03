@@ -17,7 +17,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
-| AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
+| AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` REST / gRPC HTTP/2 / Discovery Service | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
@@ -142,7 +142,7 @@ Amazon Transcribe 标准、Medical 和 Call Analytics 的交互式 WebSocket 使
 {"name":"aws_api_read","arguments":{"auth_scheme":"transcribe-ws","service":"transcribe","operation":"StartStreamTranscriptionWebSocket","region":"us-west-2","method":"GET","url":"wss://transcribestreaming.us-west-2.amazonaws.com:8443/stream-transcription-websocket","parameters":{"language-code":"en-US","media-encoding":"pcm","sample-rate":16000,"session-id":"session-1"},"body_file":"/approved/audio/input.pcm","response_file":"/approved/results/transcript.ndjson"}}
 ```
 
-PCM 默认按 100ms 分片；压缩音频或特殊采样布局可显式设置 `stream_chunk_bytes`/`stream_interval_ms`。Medical 改用 `/medical-stream-transcription-websocket`、`StartMedicalStreamTranscriptionWebSocket` 并提供 `specialty`/`type`；Call Analytics 改用 `/call-analytics-stream-transcription-websocket` 和对应 operation。需要 `ConfigurationEvent` 时把配置对象放在 `body`，音频仍放在 `body_file`；这是唯一允许二者并用的受控协议。
+PCM 默认按 100ms 分片；压缩音频或特殊采样布局可显式设置 `stream_chunk_bytes`/`stream_interval_ms`。Medical 改用 `/medical-stream-transcription-websocket`、`StartMedicalStreamTranscriptionWebSocket` 并提供 `specialty`/`type`；Call Analytics 改用 `/call-analytics-stream-transcription-websocket` 和对应 operation。需要 `ConfigurationEvent` 时把配置对象放在 `body`，音频仍放在 `body_file`；它和后述 Connect Health 是允许二者并用的两个受控协议。
 
 AWS IoT Core 的 IAM/SigV4 MQTT 订阅使用 `auth_scheme=iot-mqtt-ws`。普通 SigV4 HTTPS 已能发布 `/topics/<topic>`，但不能订阅；该模式由 server 内部生成五分钟 WSS 签名、协商 `mqtt`、发送 clean-session CONNECT/SUBSCRIBE、验证 CONNACK/SUBACK、确认 QoS 1 消息，并在消息数或超时边界到达后原子发布 Base64 NDJSON：
 
@@ -175,6 +175,14 @@ IAM Authorization 和 STS token 只进入内部动态 `header-<Base64URL>` 子�
 ```
 
 该通用模式在进程内对精确 host/path/query 与非凭证 header 执行 SigV4，最多发送 256 个 `json|text|binary` 帧并收集 256 个响应或 300 秒；文本和 Base64 二进制响应写入原子 NDJSON。由于任意双向帧可能产生副作用，它永远不允许走 read 工具。Transcribe、IoT、AppSync 以及要求每个 EventStream 帧继续链式签名的协议仍使用各自专用模式。
+
+Amazon Connect Health ambient documentation 使用专用 `auth_scheme=connect-health-ws`，不会误走原始帧通道。server 只接受官网列出的 `us-east-1|us-west-2` endpoint，把六个会话参数放进内部 60 秒 SigV4 预签名 Upgrade，然后依次发送链式签名的 `configurationEvent`、原始 PCM/FLAC `binaryAudioEvent` 和 `END_OF_SESSION`；只有服务端以 WebSocket 1000 正常关闭后，才原子发布合法 `transcriptEvent` NDJSON：
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"connect-health-ws","service":"health-agent","operation":"StartMedicalScribeListeningSession","region":"us-west-2","method":"GET","url":"wss://streaming.health-agent.us-west-2.api.aws/medical-scribe-stream-websocket","parameters":{"session-id":"<uuid>","domain-id":"<dom-or-hai-id>","subscription-id":"<sub-id>","language-code":"en-US","sample-rate":16000,"media-encoding":"pcm"},"body":{"postStreamActionSettings":{"outputS3Uri":"s3://<bucket>/<prefix>","clinicalNoteGenerationSettings":{"noteTemplateSettings":{"managedTemplate":{"templateType":"PHYSICAL_SOAP"}}}}},"body_file":"/approved/audio/visit.pcm","response_file":"/approved/results/medical-scribe.ndjson","force":true}}
+```
+
+该 API 的 IAM action 是 Write，并会生成会话与 S3 临床文档产物，所以固定要求 mutation 审批。音频和 encounter context 可能包含 PHI；调用前必须按组织政策取得并记录合法同意，输出还必须由受训医疗人员复核。AKSK/STS、预签名 URL和逐帧签名不会进入 MCP 输出。
 
 Azure 查询：
 
@@ -218,7 +226,7 @@ Alibaba Intelligent Speech Interaction 使用 `auth_scheme=nls-ws`。调用方�
 
 同一内部 Token 也用于 `auth_scheme=nls-rest`：`ShortSentenceRecognition` 把有限音频作为 `body_file` POST 到官方 `/stream/v1/asr`；`SpeechSynthesisREST` 用 GET/query 或 POST/JSON 调用 `/stream/v1/tts` 并把音频原子写入 `response_file`。Token 只注入 `X-NLS-Token` header，不进入 URL 或 MCP 输出。
 
-Azure OpenAI Realtime 使用 `auth_scheme=realtime-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+Azure OpenAI Realtime 使用 `auth_scheme=realtime-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 
 Tencent ASR WebSocket 有限音频流示例：
 

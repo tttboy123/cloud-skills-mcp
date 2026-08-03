@@ -1,11 +1,11 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, finite raw-frame SigV4 WSS, Amazon Transcribe WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, AgentCore, Managed Blockchain, Transcribe, IoT, AppSync, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, finite raw-frame SigV4 WSS, Amazon Connect Health or Transcribe signed EventStream WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, AgentCore, Managed Blockchain, Connect Health, Transcribe, IoT, AppSync, or any documented AWS API.
 ---
 
 # AWS Cloud
 
-Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, connects bounded raw SigV4, Transcribe, IoT, and AppSync WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
+Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, connects bounded raw SigV4, Connect Health, Transcribe, IoT, and AppSync WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `sigv4-ws` for a finite raw-frame IAM WebSocket, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1 subscription, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
+- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `sigv4-ws` for a finite raw-frame IAM WebSocket, `connect-health-ws` for Connect Health Medical Scribe, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1 subscription, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
@@ -28,7 +28,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `payload_mode=aws-eventstream`: for a finite SigV4 HTTP request whose `body_file` contains consecutive CRC-valid unsigned Amazon EventStream frames. The server validates the 24 MiB per-frame bound, adds signing envelopes and a terminal frame. This is not an interactive WebSocket transport.
 - `method` and `url`: exact official AWS HTTPS request.
 - `parameters`: optional scalar query parameters; use `body` for Query/JSON protocol payloads.
-- `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root. `transcribe-ws` requires raw finite audio in `body_file`; optional object `body` becomes the first signed `ConfigurationEvent`, so this scheme is the sole controlled case where both are accepted.
+- `headers`, `body`, `body_file`: non-credential request data; local files require an operator-approved root. `connect-health-ws` requires the Medical Scribe configuration in `body` and raw finite audio in `body_file`; `transcribe-ws` requires raw finite audio and optionally accepts a configuration object. These are the controlled cases where both are accepted.
 - `response_file`: optional new approved-root file for large/binary responses. Use the documented `Range` header for objects larger than the configured per-call limit; existing files are never overwritten.
 
 Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="describe-instances", region="us-east-1", method="POST", url="https://ec2.us-east-1.amazonaws.com/", headers={"Content-Type":"application/x-www-form-urlencoded"}, body="Action=DescribeInstances&Version=2016-11-15&MaxResults=20")`.
@@ -44,6 +44,12 @@ Example finite event stream: `aws_api_mutate(auth_scheme="sigv4", payload_mode="
 Finite raw-frame IAM WebSockets use `auth_scheme="sigv4-ws"`. The gateway signs the exact WSS host/path/query and all allowed caller headers in-process, sends at most 256 client frames of type `json`, `text`, or `binary` (`data_base64`), and atomically records at most 256 server frames or 300 seconds as NDJSON. AgentCore targets additionally enforce the official 32 KiB per-frame limit. Every generic signed WebSocket is forced through `aws_api_mutate` because arbitrary bidirectional frames can have side effects even when an operation label looks read-only. Example AgentCore invocation: `aws_api_mutate(auth_scheme="sigv4-ws", service="bedrock-agentcore", operation="InvokeAgentRuntimeWithWebSocketStream", region="us-west-2", method="GET", url="wss://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/<percent-encoded-runtime-arn>/ws?qualifier=prod", headers={"X-Amzn-Bedrock-AgentCore-Runtime-Session-Id":"session-123456789012345678901234567890"}, body={"messages":[{"type":"json","data":{"inputText":"hello"}}],"max_messages":10,"timeout_seconds":30}, response_file="<approved-root>/agentcore.ndjson", force=true)`.
 
 Use this generic mode only when the provider protocol uses ordinary WebSocket text/binary frames after the SigV4 Upgrade, such as an AgentCore runtime or Managed Blockchain JSON-RPC node. It does not replace `transcribe-ws`, `iot-mqtt-ws`, either AppSync mode, or a protocol that requires per-frame AWS EventStream signatures. Authorization, STS token, and the signed handshake never enter MCP output; caller-controlled credential/query, WebSocket control headers, redirects, and unbounded sessions are rejected.
+
+Connect Health ambient documentation uses `auth_scheme="connect-health-ws"`, `service="health-agent"`, operation `StartMedicalScribeListeningSession`, method `GET`, and the exact `wss://streaming.health-agent.<region>.api.aws/medical-scribe-stream-websocket` endpoint in `us-east-1` or `us-west-2`. Supply exactly `session-id`, `domain-id`, `subscription-id`, `language-code=en-US`, `sample-rate`, and `media-encoding=pcm|flac` as parameters. `body` is the documented `MedicalScribeConfigurationEvent` object and must contain the S3 post-stream action and exactly one managed or custom note template; `body_file` is finite raw audio and `response_file` receives atomic transcript NDJSON.
+
+Example: `aws_api_mutate(auth_scheme="connect-health-ws", service="health-agent", operation="StartMedicalScribeListeningSession", region="us-west-2", method="GET", url="wss://streaming.health-agent.us-west-2.api.aws/medical-scribe-stream-websocket", parameters={"session-id":"<uuid>","domain-id":"<dom-or-hai-id>","subscription-id":"<sub-id>","language-code":"en-US","sample-rate":16000,"media-encoding":"pcm"}, body={"postStreamActionSettings":{"outputS3Uri":"s3://<bucket>/<prefix>","clinicalNoteGenerationSettings":{"noteTemplateSettings":{"managedTemplate":{"templateType":"PHYSICAL_SOAP"}}}}}, body_file="<approved-root>/visit.pcm", response_file="<approved-root>/medical-scribe.ndjson", force=true)`.
+
+The gateway creates the maximum-60-second presigned Upgrade internally, chains a signature over every configuration/audio/session-control EventStream frame, sends raw `binaryAudioEvent` chunks followed by `END_OF_SESSION`, and publishes output only after a normal provider close. This is always a write operation because it starts a session and produces S3 artifacts. Obtain and record required recording consent before sending PHI, and require trained clinical review of generated output. The signed URL, AKSK/STS token, and frame signatures never enter MCP output.
 
 Example realtime transcription: `aws_api_read(auth_scheme="transcribe-ws", service="transcribe", operation="StartStreamTranscriptionWebSocket", region="us-west-2", method="GET", url="wss://transcribestreaming.us-west-2.amazonaws.com:8443/stream-transcription-websocket", parameters={"language-code":"en-US","media-encoding":"pcm","sample-rate":16000,"session-id":"session-1"}, body_file="/approved/audio/input.pcm", response_file="/approved/results/transcript.ndjson")`. The adapter creates the five-minute SigV4 handshake internally, signs every audio event in a chained outer EventStream frame, sends an empty signed terminal event, validates both CRC layers in provider responses, and atomically publishes only bounded JSON event payloads. PCM defaults to 100 ms chunks; use `stream_chunk_bytes` and `stream_interval_ms` only when the documented media format requires another cadence.
 
@@ -65,4 +71,4 @@ The adapter signs the documented HTTPS `/graphql/connect` body `{}` and the exac
 
 Use the AWS SDK credential chain: profiles/SSO, web identity, IAM roles, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / optional `AWS_SESSION_TOKEN`. Keep credentials in the server environment or official AWS config, never in MCP arguments.
 
-Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, Transcribe, IoT, or AppSync streaming parameters, or operation naming needs verification.
+Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, Connect Health, Transcribe, IoT, or AppSync streaming parameters, or operation naming needs verification.
