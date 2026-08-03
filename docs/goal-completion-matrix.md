@@ -24,21 +24,22 @@ and every provider has successful live acceptance with sanitized audit evidence.
 | Protocol, installer, security and cross-platform build gates | `scripts/ci/protocol-smoke.sh`, `install-smoke.sh`, `build-release.sh`, `.github/workflows/ci.yml` | Azure Web PubSub JSON/Protobuf/MQTT slice covers exact endpoint/schema validation, four PubSub subprotocols, official proto3 wire vectors, binary Any/stream messages, token containment, reliable recovery/sequence/publisher state, MQTT 3.1.1/5.0 QoS/state/property flow, and atomic failure behavior; Protobuf implementation run [30784347113](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30784347113) passed. Vertex Live recovery adds exact function-call ID response dispatch, atomic handler bounds, private handle sanitization, acknowledged-message replay, GoAway/unexpected-close reconnect, integer preservation, and two fuzz targets; implementation run [30785793131](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30785793131) passed macOS, Ubuntu, ShellCheck, security, and release jobs. Google schema-driven gRPC adds exact descriptor-selected methods, strict ProtoJSON request conversion, finite four-shape streaming, recursive unknown-wire rejection including `Any`, official 64-bit-safe output mapping, atomic NDJSON, and two fuzz targets; implementation run [30787842631](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30787842631) passed. Baidu RTC AI Agent adds exact BCE v1 create/private-token WSS/stop, internal license containment, concurrent bounded duplex streaming, fail-closed atomic output, mutation-only policy, a live mutation entrypoint, and a plan fuzz target; initial lifecycle run [30790805986](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30790805986) passed. The codec follow-up corrects the control field to official `config.audiocodec`, covers `raw`, `raw16k`, PCMA, PCMU, G.722, and variable-length Opus packet vectors, and internally derives `ac`/`ptime`/`plen`; implementation run [30792487473](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30792487473) passed. The static command follow-up strictly parses every documented non-event-correlated client command, rejects credential material and unsafe media URLs, and preserves pre/post-audio order; implementation run [30793969272](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30793969272) passed. The stateful media follow-up adds approved-root `image_file`, exact provider-triggered 16 KiB/Base64 upload framing, one-request consumption, and non-interleaved writes; implementation run [30795300185](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30795300185) passed. The Function Call follow-up implements the current nested JSON format, exact provider `session_id` correlation, bounded credential-free result/post-function templates, and fail-closed unknown/duplicate/overflow handling; implementation run [30796139810](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30796139810) passed | Fresh local module verification, formatting, vet, race suite (80.4% total / 80.4% cloud-package coverage), build, protocol/install smoke, shell syntax, six-Skill validation, Actionlint, govulncheck, 10-second Baidu RTC fuzzing (223,961 executions), and four-platform release builds passed; remote macOS/Ubuntu verification, ShellCheck, security scans, and release archives also passed |
 | Observable six-cloud acceptance | `TestLiveSixCloudReadOnly` selects providers and logs provider/outcome/bytes/request ID only; `TestLiveBaiduRTCAgentMutation` separately exercises the explicitly approved billed create/WSS/stop lifecycle without response bodies or secrets | Requires operator-injected credentials and opt-in live flags; RTC additionally requires mutation approval, app/device/user values and server-only product license | **Pending** |
 
-Latest verified slice: Azure Voice Live now supports current Foundry and legacy
-Speech WSS endpoints through non-CLI Azure Identity. The gateway derives the
-official Entra scope from the endpoint, accepts bounded model response,
-transcription, and session event plans as read-only operations, forces
-configured `agent_id`/`project_id` sessions through mutation approval, and
-rejects caller or server credential fields before atomic NDJSON publication.
-Avatar WebRTC remains an explicitly excluded media plane because it exchanges
-ICE credentials rather than cloud resources. Implementation commit
-`30e7a42192061b81af10ee9800c672e6cbd1a1cb` passed remote macOS,
+Latest verified slice: Firebase Realtime Database SSE now supports bounded
+read-only listeners through direct HTTPS and the official Google Auth ADC
+chain. The gateway requests the documented `firebase.database` and
+`userinfo.email` scopes, keeps the Bearer token in the internal Authorization
+header, validates all current Firebase Database URL forms, and follows only
+bounded official 307 redirects that preserve the exact path and query. It
+strictly parses `put`, `patch`, and optional `keep-alive` events, rejects
+`cancel`, `auth_revoked`, malformed, unknown, oversized, or credential-bearing
+provider data, and atomically publishes mode-0600 NDJSON. Implementation commit
+`71dbb5ee7127c02ab2d9c375a6829c8d74c3cb49` passed remote macOS,
 Ubuntu, ShellCheck, Actionlint, govulncheck and four-platform release
-verification in [CI run 30801633419](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30801633419).
-Fresh local module verification, formatting, vet, race coverage (80.3% total),
+verification in [CI run 30803592532](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30803592532).
+Fresh local module verification, formatting, vet, race coverage (80.4% total),
 build, protocol/install smoke, shell syntax, all six Skill validators,
-Actionlint, govulncheck, four-platform archives and a five-second Voice Live
-client-event fuzz run (164,626 executions) also passed.
+Actionlint, govulncheck, four-platform archives and a ten-second Firebase SSE
+event fuzz run (340,418 executions) also passed.
 
 ## Live acceptance command
 
