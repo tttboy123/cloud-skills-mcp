@@ -19,7 +19,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；ECR/ECR Public Docker/OCI Registry HTTP；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS；ECR Registry token 仅在 server 内部派生 |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime、Voice Live WSS + Web PubSub 标准/可靠 JSON/Protobuf/MQTT + Event Grid MQTT v5 + Service Bus/Event Hubs AMQP 1.0 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
-| Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS + Firebase Realtime Database SSE | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
+| Google Cloud | Google Auth ADC + `googleapis.com` REST / Artifact Registry 与 `gcr.io` OCI Distribution 1.1 HTTP / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS + Firebase Realtime Database SSE | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2；RTC AI Agent 由 BCE v1 控制面创建后用内部实例 token 建立 raw/raw16k/PCMA/PCMU/G.722/Opus 双工 WSS | BCE AK/SK、IAM/STS temporary AK/SK/session token；RTC 产品 license 仅由 server 环境注入 |
@@ -295,6 +295,14 @@ GCP 查询：
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
 
+Google Artifact Registry 与仍由 Artifact Registry 承载的 `gcr.io` 仓库使用 `auth_scheme=artifact-registry`。server 直接从 ADC 取得短期 OAuth access token，并只把 `Bearer` header 发送给精确的 `<location>-docker.pkg.dev`、`gcr.io`、`us.gcr.io`、`eu.gcr.io` 或 `asia.gcr.io` Registry origin；不调用 `gcloud`、Docker 或 credential helper，也不向 MCP 返回 token。入口覆盖 OCI Distribution 1.1 的 version、manifest、blob、tag、referrer、cross-repository mount 与 monolithic upload 路径，并按 Google 官方限制拒绝 Docker chunked `PATCH` upload：
+
+```json
+{"name":"gcp_api_read","arguments":{"auth_scheme":"artifact-registry","service":"artifact-registry","operation":"ListTags","method":"GET","url":"https://us-west1-docker.pkg.dev/v2/<project>/<repository>/<image>/tags/list","parameters":{"n":20},"project":"<quota-project>"}}
+```
+
+写 manifest、删除内容、跨仓库 mount 或上传 blob 仍走 `gcp_api_mutate(force=true)`。monolithic blob upload 使用 `/blobs/uploads/`、`digest` 参数和受控 `body_file`；若 Registry 先返回 `202 + Location`，server 会把同一完整文件 PUT 到严格同源的内部 upload location，并隐藏该 capability。调用方不能访问 `/v2/token`、提供 Authorization、OAuth/query token 或 Registry credential。
+
 Firebase Realtime Database 的长连接读取使用 `auth_scheme=firebase-sse`。server 通过 ADC 单独请求官方要求的 `firebase.database` 与 `userinfo.email` scopes，把 Bearer token 只放在内部 Authorization header，并把有限 `put`/`patch` 事件原子写入 NDJSON。仅接受官方 `firebaseio.com`、`europe-west1.firebasedatabase.app` 和 `asia-southeast1.firebasedatabase.app` 数据库 URL；调用方不能提供 `auth`、`access_token`、header 或内联 query：
 
 ```json
@@ -369,7 +377,7 @@ go test ./internal/mcp/cloud -run TestLiveAlibabaMQMutation -v
 
 Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；Event Grid Namespace MQTT v5 使用 `auth_scheme=eventgrid-mqtt-ws` 和内部 Entra `OAUTH2-JWT` CONNECT/AUTH；Service Bus/Event Hubs 数据面使用 `servicebus-amqp-ws|eventhubs-amqp-ws` 和内部 Entra/CBS AMQP 1.0 over WSS。它们都把凭证、临时 token、CBS claim 和消息/会话锁留在 server 内部。
 
-Azure OpenAI Realtime、Voice Live 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|voice-live-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、Kinesis Video Signaling、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|kinesisvideo-signaling-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，RocketMQ 4.x HTTP 数据面使用 `mq`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；CLS 旧版数据面使用独立的 `cls` q-sign 入口；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+Azure OpenAI Realtime、Voice Live 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|voice-live-ws|webpubsub-ws`，GCP Artifact Registry OCI HTTP 与原生 HTTP/2 分别使用 `auth_scheme=artifact-registry|grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、Kinesis Video Signaling、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|kinesisvideo-signaling-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，RocketMQ 4.x HTTP 数据面使用 `mq`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；CLS 旧版数据面使用独立的 `cls` q-sign 入口；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 
 Tencent CLS 当前管理面与新增功能优先走 API 3.0 `tc3`。仍公开的旧版 CLS 数据面签名必须显式使用 `auth_scheme=cls`，server 只接受精确的 `<region>.cls.tencentcs.com` 公网域名或 `<region>.cls.tencentyun.com` 同地域内网域名，按官网 `q-sign-algorithm=sha1` 规则签名，并在 CAM 临时凭证场景把 token 仅放入内部 `X-Cls-Token`。例如读取旧版 logset：
 
@@ -511,6 +519,15 @@ CLOUD_SKILLS_LIVE_TEST=1 go test ./internal/mcp/cloud -run TestLiveSixCloudReadO
 ```
 
 GCP live 验收需要 `CLOUD_SKILLS_LIVE_GCP_PROJECT`。各云可用 `CLOUD_SKILLS_LIVE_PROVIDERS` 选择子集。live gate 永不调用 mutate 工具，也不打印响应正文；它逐云输出 adapter availability、credential source/status、审计 outcome、响应字节数和可用的 provider RequestId。
+
+Artifact Registry 使用独立只读 live gate，需要 ADC、精确 Registry origin 和现存可读取 image path（`pkg.dev` 为 `<project>/<repository>/<image>`，`gcr.io` 为 `<project>/<image>`）：
+
+```bash
+CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY=1 \
+CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY_ENDPOINT=https://us-west1-docker.pkg.dev \
+CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY_REPOSITORY='<project>/<repository>/<image>' \
+go test ./internal/mcp/cloud -run TestLiveGCPArtifactRegistryReadOnly -v
+```
 
 私有 ECR Registry live gate 需要精确 registry origin 和现存可拉取 repository；ECR Public 使用独立 gate，因为它固定 `ecr-public/us-east-1`、使用 Bearer token 且不支持 `/tags/list`。两者都只从 AWS SDK chain 解析 IAM/AKSK/STS，不打印 Registry token 或响应正文：
 

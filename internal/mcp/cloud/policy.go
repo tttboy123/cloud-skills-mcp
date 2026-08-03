@@ -228,6 +228,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	gcpFirebaseSSEScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPFirebaseSSE
 	gcpVertexLiveWebSocketScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPVertexLiveWS
+	gcpArtifactRegistryScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPArtifactRegistry
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	azureVoiceLiveScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureVoiceLiveWS
 	azureWebPubSubScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubWS
@@ -335,6 +336,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				return err
 			}
 		}
+	} else if gcpArtifactRegistryScheme {
+		if err := validateGCPArtifactRegistryInvocation(request); err != nil {
+			return err
+		}
 	} else if gcpFirebaseSSEScheme {
 		if err := validateFirebaseSSEInvocation(request); err != nil {
 			return err
@@ -394,8 +399,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 		}
 	case ProviderGCP:
-		if gcpScheme != "" && gcpScheme != authSchemeGCPFirebaseSSE && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
-			return fmt.Errorf("Google Cloud auth_scheme must be firebase-sse, grpc, vertex-live-ws, or omitted for REST")
+		if gcpScheme != "" && gcpScheme != authSchemeGCPArtifactRegistry && gcpScheme != authSchemeGCPFirebaseSSE && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
+			return fmt.Errorf("Google Cloud auth_scheme must be artifact-registry, firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 		}
 	case ProviderBaidu:
 		if baiduScheme != "" && baiduScheme != authSchemeBaiduRTCAgentWS {

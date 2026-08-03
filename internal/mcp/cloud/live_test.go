@@ -469,6 +469,67 @@ func runLiveAWSECRRegistryRead(t *testing.T, public bool) {
 	t.Logf("provider=aws service=%s operation=%s outcome=succeeded response_bytes=%d request_id=%q", service, operation, len(text), succeeded.RequestID)
 }
 
+func TestLiveGCPArtifactRegistryReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY=1 for a real ADC-backed Artifact Registry ListTags probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Google Artifact Registry live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY_ENDPOINT"), "/")
+	repository := required("CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY_REPOSITORY")
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("parse Google Artifact Registry endpoint: %v", err)
+	}
+	if _, ok := parseGCPArtifactRegistryHost(strings.ToLower(parsed.Hostname())); !ok || parsed.Scheme != "https" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "" {
+		t.Fatal("CLOUD_SKILLS_LIVE_GCP_ARTIFACT_REGISTRY_ENDPOINT must be an exact official docker.pkg.dev or supported gcr.io origin")
+	}
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "gcp_api_read", map[string]any{
+		"auth_scheme": "artifact-registry", "service": "artifact-registry", "operation": "ListTags",
+		"method": "GET", "url": endpoint + "/v2/" + repository + "/tags/list", "parameters": map[string]any{"n": 1},
+	})
+	if result.IsError {
+		t.Fatalf("Google Artifact Registry live read failed: %s", cloudToolText(t, result))
+	}
+	text := strings.TrimSpace(cloudToolText(t, result))
+	if text == "" {
+		t.Fatal("Google Artifact Registry returned an empty response")
+	}
+	for _, secret := range []string{os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"), os.Getenv("GOOGLE_OAUTH_ACCESS_TOKEN")} {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Fatal("Google Artifact Registry live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderGCP && events[index].Mode == ModeRead && events[index].Operation == "ListTags" && events[index].AuthScheme == authSchemeGCPArtifactRegistry && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Google Artifact Registry read audit event: %#v", events)
+	}
+	t.Logf("provider=gcp service=artifact-registry operation=ListTags outcome=succeeded response_bytes=%d request_id=%q", len(text), succeeded.RequestID)
+}
+
 func parseLiveProviderStatus(text string) (ProviderStatus, error) {
 	var status ProviderStatus
 	if err := json.Unmarshal([]byte(text), &status); err != nil {

@@ -454,13 +454,21 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 
 func (adapter *GCPRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC/WSS/SSE + ADC",
-		Version: "google-auth/v0.22+grpc-http2+grpc-protojson+vertex-live-ws+firebase-sse", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
+		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC/WSS/SSE and Artifact Registry OCI HTTP + ADC",
+		Version: "google-auth/v0.22+artifact-registry-oci1.1+grpc-http2+grpc-protojson+vertex-live-ws+firebase-sse", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through ADC; no gcloud subprocess fallback exists",
 	}, nil
 }
 
 func (adapter *GCPRESTAdapter) Discover(ctx context.Context, request DiscoveryRequest) ([]byte, error) {
+	if strings.EqualFold(request.Service, "artifact-registry") {
+		return json.Marshal(map[string]string{
+			"docker_api":     "https://cloud.google.com/artifact-registry/docs/reference/docker-api",
+			"authentication": "https://cloud.google.com/artifact-registry/docs/docker/authentication",
+			"image_names":    "https://cloud.google.com/artifact-registry/docs/docker/names",
+			"gcr_io":         "https://cloud.google.com/artifact-registry/docs/transition/gcr-repositories",
+		})
+	}
 	if strings.EqualFold(request.Service, "firebase-database") {
 		return json.Marshal(map[string]string{
 			"rest_streaming": "https://firebase.google.com/docs/database/rest/retrieve-data#section-rest-streaming",
@@ -490,6 +498,9 @@ func (adapter *GCPRESTAdapter) Discover(ctx context.Context, request DiscoveryRe
 
 func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(request.AuthScheme, "")
+	if scheme == authSchemeGCPArtifactRegistry {
+		return invokeGCPArtifactRegistry(ctx, adapter, request)
+	}
 	if scheme == authSchemeGCPFirebaseSSE {
 		return invokeGCPFirebaseSSE(ctx, adapter, request)
 	}
@@ -500,7 +511,7 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 		return invokeGCPGRPC(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Google Cloud auth_scheme must be firebase-sse, grpc, vertex-live-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Google Cloud auth_scheme must be artifact-registry, firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 	}
 	if err := validateRESTTargetWithEndpointHosts(ProviderGCP, request.Method, request.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err

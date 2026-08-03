@@ -1,6 +1,6 @@
 interface:
   display_name: "Google Cloud"
-  short_description: "Operate Google Cloud APIs through guarded REST, gRPC, WSS, or SSE"
+  short_description: "Operate Google Cloud through guarded REST, OCI HTTP, gRPC, WSS, or SSE"
   default_prompt: "Use $google-cloud to inspect or operate GCP resources safely."
 dependencies:
   tools:
