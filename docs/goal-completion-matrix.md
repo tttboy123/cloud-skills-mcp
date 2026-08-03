@@ -397,6 +397,25 @@ protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
 govulncheck, four-platform archives, and a ten-second HTTP endpoint/plan fuzz
 run (244,437 executions) also passed.
 
+Baidu IoT Core MQTT now also implements the current official MQTT 5.0 and QoS
+2 contract while retaining MQTT 3.1.1 compatibility. The guarded client covers
+wildcard/shared QoS 0/1/2 subscriptions, mutation-gated batched unsubscribe and
+UNSUBACK reason validation, bidirectional duplicate-safe
+PUBREC/PUBREL/PUBCOMP, application and Will properties, message expiry, Will
+delay, Receive Maximum, broker packet/QoS capabilities, and server DISCONNECT.
+It uses a Baidu-specific bounded packet codec so the documented approved 128
+KiB payload ceiling remains usable as payload rather than being confused with
+an entire MQTT packet ceiling. The dedicated live gate now selects MQTT 5 and
+requests QoS 2; real broker acceptance still requires an operator-bound IAM
+application and one staged message. Implementation commit
+`f80ba600d8ddacd981841ceb81b42fea32c47891` passed remote macOS, Ubuntu,
+ShellCheck, Actionlint, govulncheck, and four-platform release verification in
+[CI run 30849781456](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30849781456).
+Fresh local module verification, formatting, vet, race coverage (80.1%), build,
+protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
+govulncheck, four-platform archives, and a ten-second MQTT 5 packet/property
+fuzz run (17,808 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
