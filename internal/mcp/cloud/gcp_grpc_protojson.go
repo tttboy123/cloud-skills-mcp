@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -124,6 +125,9 @@ func invokeGCPGRPCProtoJSON(ctx context.Context, adapter *GCPRESTAdapter, invoca
 	if err != nil {
 		return InvocationResult{}, err
 	}
+	if err := validateGCPGRPCProtoJSONStreamBounds(schema, invocation); err != nil {
+		return InvocationResult{}, err
+	}
 	framed, err := encodeGCPGRPCProtoJSONRequest(invocation.Body, schema)
 	if err != nil {
 		return InvocationResult{}, err
@@ -136,10 +140,16 @@ func invokeGCPGRPCProtoJSON(ctx context.Context, adapter *GCPRESTAdapter, invoca
 		return InvocationResult{}, fmt.Errorf("Google Cloud credential returned an empty access token")
 	}
 	interval := time.Duration(invocation.StreamIntervalMS) * time.Millisecond
+	requestContext := ctx
+	cancel := func() {}
+	if schema.method.IsStreamingServer() {
+		requestContext, cancel = context.WithTimeout(ctx, time.Duration(invocation.StreamTimeoutSeconds)*time.Second)
+	}
+	defer cancel()
 	body := newGCPGRPCFrameReader(io.NopCloser(bytes.NewReader(framed)), adapter.config.StreamPause, interval)
-	body.ctx = ctx
+	body.ctx = requestContext
 	defer body.Close()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, invocation.URL, body)
+	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, invocation.URL, body)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Google Cloud gRPC request: %w", err)
 	}
@@ -157,14 +167,27 @@ func invokeGCPGRPCProtoJSON(ctx context.Context, adapter *GCPRESTAdapter, invoca
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("Google Cloud gRPC request: %w", err)
 	}
-	output, requestID, err := readGCPGRPCProtoJSONResponse(response, invocation, adapter.config.MaxBodyBytes, schema)
+	output, requestID, err := readGCPGRPCProtoJSONResponse(requestContext, response, invocation, adapter.config.MaxBodyBytes, schema)
 	if err != nil {
 		return InvocationResult{}, err
 	}
 	return InvocationResult{Output: output, RequestID: requestID}, nil
 }
 
-func readGCPGRPCProtoJSONResponse(response *http.Response, invocation Invocation, maxBodyBytes int64, schema gcpGRPCProtoJSONSchema) ([]byte, string, error) {
+func validateGCPGRPCProtoJSONStreamBounds(schema gcpGRPCProtoJSONSchema, invocation Invocation) error {
+	if schema.method.IsStreamingServer() {
+		if invocation.StreamMaxMessages < 1 || invocation.StreamMaxMessages > maxGCPGRPCJSONMessages || invocation.StreamTimeoutSeconds < 1 || invocation.StreamTimeoutSeconds > maxGCPGRPCStreamTimeoutSeconds {
+			return fmt.Errorf("Google Cloud server-streaming gRPC protobuf-json requires stream_max_messages and stream_timeout_seconds")
+		}
+		return nil
+	}
+	if invocation.StreamMaxMessages != 0 || invocation.StreamTimeoutSeconds != 0 {
+		return fmt.Errorf("Google Cloud unary or client-streaming gRPC does not accept server-stream bounds")
+	}
+	return nil
+}
+
+func readGCPGRPCProtoJSONResponse(ctx context.Context, response *http.Response, invocation Invocation, maxBodyBytes int64, schema gcpGRPCProtoJSONSchema) ([]byte, string, error) {
 	if response == nil || response.Body == nil {
 		return nil, "", fmt.Errorf("Google Cloud gRPC returned no response")
 	}
@@ -186,6 +209,7 @@ func readGCPGRPCProtoJSONResponse(response *http.Response, invocation Invocation
 	reader := bufio.NewReader(response.Body)
 	marshal := protojson.MarshalOptions{Resolver: schema.types}
 	messageCount := 0
+	boundedTermination := false
 	for {
 		header := make([]byte, 5)
 		count, readErr := io.ReadFull(reader, header)
@@ -193,6 +217,10 @@ func readGCPGRPCProtoJSONResponse(response *http.Response, invocation Invocation
 			break
 		}
 		if readErr != nil {
+			if schema.method.IsStreamingServer() && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				boundedTermination = true
+				break
+			}
 			return nil, "", fmt.Errorf("decode Google Cloud gRPC response frame header: %w", readErr)
 		}
 		if header[0] != 0 {
@@ -224,6 +252,10 @@ func readGCPGRPCProtoJSONResponse(response *http.Response, invocation Invocation
 		if err := sink.writeMessage(encoded); err != nil {
 			return nil, "", err
 		}
+		if schema.method.IsStreamingServer() && messageCount == invocation.StreamMaxMessages {
+			boundedTermination = true
+			break
+		}
 	}
 	if !schema.method.IsStreamingServer() && messageCount != 1 {
 		return nil, "", fmt.Errorf("Google Cloud unary gRPC response must contain exactly one message")
@@ -232,10 +264,10 @@ func readGCPGRPCProtoJSONResponse(response *http.Response, invocation Invocation
 	if status == "" {
 		status = response.Header.Get("Grpc-Status")
 	}
-	if status == "" {
+	if status == "" && !boundedTermination {
 		return nil, "", fmt.Errorf("Google Cloud gRPC response omitted grpc-status")
 	}
-	if status != "0" {
+	if status != "" && status != "0" {
 		if _, err := strconv.Atoi(status); err != nil {
 			return nil, "", fmt.Errorf("Google Cloud gRPC returned an invalid grpc-status")
 		}

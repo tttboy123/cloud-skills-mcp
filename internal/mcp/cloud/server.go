@@ -82,6 +82,8 @@ func newInvokeTool(name string, mutating bool) mcp.Tool {
 		mcp.WithString("response_file", mcp.Description("Optional new local file for a successful HTTP body, validated AWS EventStream response, Firebase SSE or gRPC NDJSON, WebSocket/AMQP NDJSON events, or synthesized audio; required by paced AWS aws-eventstream and by AWS sigv4-ws, connect-health-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, and appsync-graphql-ws, Azure realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, and eventhubs-amqp-ws, Google Cloud firebase-sse, grpc, and vertex-live-ws, Alibaba nls-ws synthesis, Alibaba nls-rest TTS, and Baidu rtc-aiagent-ws. The target must be under CLOUD_SKILLS_ALLOWED_FILE_ROOTS and is never overwritten.")),
 		mcp.WithNumber("stream_chunk_bytes", mcp.Description("Optional WebSocket binary message size. AWS Connect Health, AWS Transcribe, Alibaba NLS recognition, and Tencent audio streams derive protocol-specific defaults when omitted. Baidu RTC fixed-rate codecs require the exact byte count implied by codec and stream_interval_ms; Opus uses body.opus_packet_lengths instead."), mcp.Min(1), mcp.Max(maxRequestFileBytes)),
 		mcp.WithNumber("stream_interval_ms", mcp.Description("Optional streaming message pacing interval in milliseconds; AWS aws-eventstream paces consecutive pre-encoded frames and requires response_file, Azure realtime-ws/voice-live-ws/webpubsub-ws and Google Cloud vertex-live-ws pace JSON events, Google Cloud grpc paces framed protobuf messages, AWS Connect Health, AWS Transcribe, and Alibaba NLS recognition default to 100 ms, Tencent ASR to 200 ms, Tencent MPS PCM to 40 ms, and Baidu RTC accepts official 20-200 ms fixed-rate packets or Opus 20/40/60 ms packets."), mcp.Min(1), mcp.Max(5000)),
+		mcp.WithNumber("stream_max_messages", mcp.Description("Google Cloud grpc protobuf-json server-streaming methods only: required finite response-message bound from 1 to 256."), mcp.Min(1), mcp.Max(maxGCPGRPCJSONMessages)),
+		mcp.WithNumber("stream_timeout_seconds", mcp.Description("Google Cloud grpc protobuf-json server-streaming methods only: required finite observation timeout from 1 to 300 seconds."), mcp.Min(1), mcp.Max(maxGCPGRPCStreamTimeoutSeconds)),
 		mcp.WithString("stream_user_id", mcp.Description("Required MPS WebSocket audio-source ID. It is placed only in the internal binary frame, not the signed URL.")),
 		mcp.WithNumber("stream_format", mcp.Description("Required MPS WebSocket PCM format: 1 for 16 kHz s16 mono or 2 for 8 kHz s16 mono."), mcp.Min(1), mcp.Max(2)),
 		mcp.WithReadOnlyHintAnnotation(!mutating),
@@ -200,6 +202,8 @@ func invocationFromRequest(provider Provider, mode InvocationMode, request mcp.C
 		ResponseFile:           request.GetString("response_file", ""),
 		StreamChunkBytes:       request.GetInt("stream_chunk_bytes", 0),
 		StreamIntervalMS:       request.GetInt("stream_interval_ms", 0),
+		StreamMaxMessages:      request.GetInt("stream_max_messages", 0),
+		StreamTimeoutSeconds:   request.GetInt("stream_timeout_seconds", 0),
 		StreamUserID:           request.GetString("stream_user_id", ""),
 		StreamFormat:           request.GetInt("stream_format", 0),
 	}

@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	authSchemeGCPGRPC           = "grpc"
-	gcpGRPCPayloadModeProtoJSON = "protobuf-json"
-	maxGCPGRPCMessageBytes      = 16 * 1024 * 1024
-	maxGCPGRPCDescriptorBytes   = 16 * 1024 * 1024
-	maxGCPGRPCJSONMessages      = 256
+	authSchemeGCPGRPC              = "grpc"
+	gcpGRPCPayloadModeProtoJSON    = "protobuf-json"
+	maxGCPGRPCMessageBytes         = 16 * 1024 * 1024
+	maxGCPGRPCDescriptorBytes      = 16 * 1024 * 1024
+	maxGCPGRPCJSONMessages         = 256
+	maxGCPGRPCStreamTimeoutSeconds = 300
 )
 
 var gcpGRPCMethodPathPattern = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_.]{0,254}/[A-Za-z][A-Za-z0-9_]{0,127}$`)
@@ -65,6 +66,14 @@ func validateGCPGRPCInvocation(invocation Invocation, allowedHosts []string) err
 		}
 	default:
 		return fmt.Errorf("Google Cloud gRPC payload_mode must be protobuf-json or omitted for raw framed protobuf")
+	}
+	if invocation.StreamMaxMessages != 0 || invocation.StreamTimeoutSeconds != 0 {
+		if payloadMode != gcpGRPCPayloadModeProtoJSON {
+			return fmt.Errorf("Google Cloud gRPC stream bounds require protobuf-json and a method descriptor")
+		}
+		if invocation.StreamMaxMessages < 1 || invocation.StreamMaxMessages > maxGCPGRPCJSONMessages || invocation.StreamTimeoutSeconds < 1 || invocation.StreamTimeoutSeconds > maxGCPGRPCStreamTimeoutSeconds {
+			return fmt.Errorf("Google Cloud gRPC stream_max_messages and stream_timeout_seconds must both be bounded")
+		}
 	}
 	if invocation.ResponseFile == "" {
 		return fmt.Errorf("Google Cloud gRPC requires response_file for framed protobuf responses")

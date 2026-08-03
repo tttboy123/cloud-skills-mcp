@@ -71,7 +71,13 @@ remain available through the guarded resource gateway.
 - Google schema-driven gRPC loads a bounded binary `FileDescriptorSet` from an
   operator-approved root, derives request and response types only from the URL
   method descriptor, and never invokes `protoc`, `grpcurl`, or `gcloud` at
-  runtime. Descriptor bytes remain local; response publication is atomic.
+  runtime. Descriptor-declared server streams require a finite response-message
+  bound and timeout. Exact Firestore `Listen` and Logging `TailLogEntries`
+  observation paths are read-only; Pub/Sub `StreamingPull` remains
+  mutation-gated because it can acknowledge messages and change ack deadlines.
+  Descriptor bytes remain local; response publication is atomic. Raw
+  framed-protobuf mode remains available for finite calls whose official
+  protocol naturally reaches terminal status.
 - Provider auth scheme, service/action names, API versions, HTTP methods, URLs,
   headers, query values, body size and response size are bounded.
 - AWS SigV4a derives the documented ECDSA P-256 key from the same

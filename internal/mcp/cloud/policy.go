@@ -84,6 +84,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 		}
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeGCPGRPC {
 			action := strings.ToLower(strings.TrimSpace(request.Operation))
+			if strings.HasPrefix(action, "listen") || action == "taillogentries" {
+				return isKnownGCPGRPCObservationMethod(request)
+			}
 			for _, prefix := range []string{
 				"describe", "list", "get", "head", "search", "query", "check", "show", "read", "inspect", "lookup", "count", "enumerate", "recognize", "streamingrecognize", "transcribe", "translate", "synthesize",
 			} {
@@ -164,6 +167,22 @@ func classifyRead(provider Provider, request Invocation) bool {
 	return false
 }
 
+func isKnownGCPGRPCObservationMethod(request Invocation) bool {
+	target, err := url.Parse(request.URL)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(request.Method), http.MethodPost) {
+		return false
+	}
+	host := strings.ToLower(target.Hostname())
+	switch target.EscapedPath() {
+	case "/google.firestore.v1.Firestore/Listen", "/google.firestore.v1beta1.Firestore/Listen":
+		return host == "firestore.googleapis.com" && strings.EqualFold(strings.TrimSpace(request.Operation), "Listen")
+	case "/google.logging.v2.LoggingServiceV2/TailLogEntries":
+		return host == "logging.googleapis.com" && strings.EqualFold(strings.TrimSpace(request.Operation), "TailLogEntries")
+	default:
+		return false
+	}
+}
+
 func isSensitiveInvocation(request Invocation) bool {
 	value := strings.ToLower(strings.Join([]string{request.Service, request.Operation, request.URL}, " "))
 	for _, term := range sensitiveTerms {
@@ -214,6 +233,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
+	if (request.StreamMaxMessages != 0 || request.StreamTimeoutSeconds != 0) && !gcpGRPCScheme {
+		return fmt.Errorf("stream_max_messages and stream_timeout_seconds are supported only by Google Cloud grpc protobuf-json server streams")
+	}
 	if awsConnectHealthWebSocketScheme {
 		if err := validateAWSConnectHealthWebSocketInvocation(request); err != nil {
 			return err

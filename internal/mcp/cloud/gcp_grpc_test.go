@@ -93,6 +93,16 @@ func TestGCPGRPCInvocationBoundarySupportsSchemaDrivenProtoJSON(t *testing.T) {
 			value.Body = nil
 			value.BodyFile = descriptorFile
 		},
+		"message bound only": func(value *Invocation) { value.StreamMaxMessages = 1 },
+		"timeout bound only": func(value *Invocation) { value.StreamTimeoutSeconds = 1 },
+		"message bound high": func(value *Invocation) {
+			value.StreamMaxMessages = 257
+			value.StreamTimeoutSeconds = 1
+		},
+		"timeout bound high": func(value *Invocation) {
+			value.StreamMaxMessages = 1
+			value.StreamTimeoutSeconds = 301
+		},
 		"other provider": func(value *Invocation) {
 			value.Provider = ProviderAWS
 			value.AuthScheme = "sigv4"
@@ -104,6 +114,50 @@ func TestGCPGRPCInvocationBoundarySupportsSchemaDrivenProtoJSON(t *testing.T) {
 			mutate(&candidate)
 			if err := validateInvocation(candidate, []string{directory}); err == nil {
 				t.Fatal("unsafe schema-driven gRPC invocation accepted")
+			}
+		})
+	}
+}
+
+func TestGCPGRPCStreamBoundsAreNeverIgnoredByOtherTransports(t *testing.T) {
+	request := Invocation{
+		Provider: ProviderAWS, Mode: ModeMutate, AuthScheme: "sigv4", Service: "execute-api", Operation: "Invoke",
+		Region: "us-east-1", Method: http.MethodPost, URL: "https://example.execute-api.us-east-1.amazonaws.com/resource",
+		StreamMaxMessages: 8, StreamTimeoutSeconds: 30,
+	}
+	if err := validateInvocation(request, nil); err == nil {
+		t.Fatal("non-gRPC transport silently ignored Google Cloud stream bounds")
+	}
+}
+
+func TestGCPGRPCClassifiesOnlyKnownLongLivedObservationMethodsAsReadOnly(t *testing.T) {
+	for name, test := range map[string]struct {
+		service   string
+		operation string
+		rawURL    string
+		readOnly  bool
+	}{
+		"Firestore Listen": {
+			service: "firestore", operation: "Listen",
+			rawURL: "https://firestore.googleapis.com/google.firestore.v1.Firestore/Listen", readOnly: true,
+		},
+		"Logging TailLogEntries": {
+			service: "logging", operation: "TailLogEntries",
+			rawURL: "https://logging.googleapis.com/google.logging.v2.LoggingServiceV2/TailLogEntries", readOnly: true,
+		},
+		"PubSub StreamingPull can acknowledge": {
+			service: "pubsub", operation: "StreamingPull",
+			rawURL: "https://pubsub.googleapis.com/google.pubsub.v1.Subscriber/StreamingPull", readOnly: false,
+		},
+		"lookalike Listen": {
+			service: "example", operation: "Listen",
+			rawURL: "https://example.googleapis.com/example.v1.MutableService/Listen", readOnly: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := Invocation{Provider: ProviderGCP, AuthScheme: "grpc", Service: test.service, Operation: test.operation, Method: http.MethodPost, URL: test.rawURL}
+			if got := classifyRead(ProviderGCP, request); got != test.readOnly {
+				t.Fatalf("classifyRead=%v want %v", got, test.readOnly)
 			}
 		})
 	}
@@ -201,6 +255,7 @@ func TestGCPAdapterSchemaDrivenProtoJSONSupportsFiniteBidirectionalStreams(t *te
 		PayloadMode: "protobuf-json", ProtobufDescriptorFile: descriptorFile,
 		Body:         []any{map[string]any{"name": "one", "resourceId": "1"}, map[string]any{"name": "two", "resourceId": "2"}},
 		ResponseFile: responseFile, StreamIntervalMS: 1, MaxResponseFileBytes: 4096,
+		StreamMaxMessages: 2, StreamTimeoutSeconds: 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -277,6 +332,14 @@ func TestGCPGRPCProtoJSONRejectsInvalidSchemaOrRequestBeforeCredentialsAndNetwor
 			invocation.Operation = "Chat"
 			invocation.URL = "https://example.googleapis.com/test.v1.TestService/Chat"
 		},
+		"server stream without bounds": func(_ *testing.T, _ string, invocation *Invocation) {
+			invocation.Operation = "Watch"
+			invocation.URL = "https://example.googleapis.com/test.v1.TestService/Watch"
+		},
+		"stream bounds on unary": func(_ *testing.T, _ string, invocation *Invocation) {
+			invocation.StreamMaxMessages = 1
+			invocation.StreamTimeoutSeconds = 30
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -301,6 +364,105 @@ func TestGCPGRPCProtoJSONRejectsInvalidSchemaOrRequestBeforeCredentialsAndNetwor
 				t.Fatalf("err=%v token calls=%d doer=%v", err, tokens.calls, doerCalled)
 			}
 		})
+	}
+}
+
+func TestGCPGRPCProtoJSONBoundsLongLivedServerStreamByMessageCount(t *testing.T) {
+	directory := t.TempDir()
+	responseFile := filepath.Join(directory, "watch.ndjson")
+	responseData := appendGRPCFrame(nil, appendGRPCTestResponsePayload(nil, "one", 1))
+	responseData = appendGRPCFrame(responseData, appendGRPCTestResponsePayload(nil, "two", 2))
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{
+		Tokens: &staticTokenProvider{token: "token"},
+		GRPCHTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200, ProtoMajor: 2,
+				Header: http.Header{"Content-Type": []string{"application/grpc+proto"}},
+				Body:   io.NopCloser(bytes.NewReader(responseData)),
+			}, nil
+		}),
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Mode: ModeMutate, AuthScheme: "grpc", Service: "test", Operation: "Watch",
+		Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Watch",
+		PayloadMode: "protobuf-json", ProtobufDescriptorFile: writeGCPGRPCTestDescriptorSet(t, directory),
+		Body: map[string]any{"name": "Lune"}, ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+		StreamMaxMessages: 1, StreamTimeoutSeconds: 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(data), []byte{'\n'})
+	if len(lines) != 1 || !bytes.Contains(lines[0], []byte(`"message":"one"`)) || bytes.Contains(data, []byte(`"message":"two"`)) {
+		t.Fatalf("bounded response=%s", data)
+	}
+}
+
+func TestGCPGRPCProtoJSONBoundedStreamRejectsKnownProviderError(t *testing.T) {
+	directory := t.TempDir()
+	responseFile := filepath.Join(directory, "failed-watch.ndjson")
+	responseData := appendGRPCFrame(nil, appendGRPCTestResponsePayload(nil, "partial", 1))
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{
+		Tokens: &staticTokenProvider{token: "token"},
+		GRPCHTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200, ProtoMajor: 2,
+				Header:  http.Header{"Content-Type": []string{"application/grpc+proto"}},
+				Body:    io.NopCloser(bytes.NewReader(responseData)),
+				Trailer: http.Header{"Grpc-Status": []string{"13"}},
+			}, nil
+		}),
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Mode: ModeMutate, AuthScheme: "grpc", Service: "test", Operation: "Watch",
+		Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Watch",
+		PayloadMode: "protobuf-json", ProtobufDescriptorFile: writeGCPGRPCTestDescriptorSet(t, directory),
+		Body: map[string]any{"name": "Lune"}, ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+		StreamMaxMessages: 1, StreamTimeoutSeconds: 30,
+	})
+	if err == nil {
+		t.Fatal("bounded stream accepted a known nonzero grpc-status")
+	}
+	if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
+		t.Fatalf("failed bounded stream published output: %v", statErr)
+	}
+}
+
+func TestGCPGRPCProtoJSONBoundsIdleServerStreamByTimeout(t *testing.T) {
+	directory := t.TempDir()
+	responseFile := filepath.Join(directory, "idle-watch.ndjson")
+	adapter := NewGCPRESTAdapter(GCPRESTConfig{
+		Tokens: &staticTokenProvider{token: "token"},
+		GRPCHTTP: doerFunc(func(request *http.Request) (*http.Response, error) {
+			reader, writer := io.Pipe()
+			go func() {
+				<-request.Context().Done()
+				_ = writer.CloseWithError(request.Context().Err())
+			}()
+			return &http.Response{
+				StatusCode: 200, ProtoMajor: 2,
+				Header: http.Header{"Content-Type": []string{"application/grpc+proto"}},
+				Body:   reader,
+			}, nil
+		}),
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderGCP, Mode: ModeMutate, AuthScheme: "grpc", Service: "test", Operation: "Watch",
+		Method: http.MethodPost, URL: "https://example.googleapis.com/test.v1.TestService/Watch",
+		PayloadMode: "protobuf-json", ProtobufDescriptorFile: writeGCPGRPCTestDescriptorSet(t, directory),
+		Body: map[string]any{"name": "Lune"}, ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+		StreamMaxMessages: 8, StreamTimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("idle bounded stream data=%q err=%v", data, err)
 	}
 }
 
@@ -639,6 +801,32 @@ func FuzzGCPGRPCProtoJSONDescriptorSetNeverPanics(f *testing.F) {
 		schema, err := parseGCPGRPCProtoJSONSchema(data, rawURL)
 		if err == nil && (schema.method == nil || schema.types == nil) {
 			t.Fatal("successful descriptor parse returned an incomplete schema")
+		}
+	})
+}
+
+func FuzzGCPGRPCProtoJSONStreamBounds(f *testing.F) {
+	f.Add(1, 1, true)
+	f.Add(256, 300, true)
+	f.Add(0, 0, false)
+	f.Add(257, 301, true)
+	f.Fuzz(func(t *testing.T, maxMessages, timeoutSeconds int, serverStreaming bool) {
+		method := "Echo"
+		if serverStreaming {
+			method = "Watch"
+		}
+		schema, err := parseGCPGRPCProtoJSONSchema(gcpGRPCTestDescriptorSetBytes(t), "https://example.googleapis.com/test.v1.TestService/"+method)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invocation := Invocation{StreamMaxMessages: maxMessages, StreamTimeoutSeconds: timeoutSeconds}
+		err = validateGCPGRPCProtoJSONStreamBounds(schema, invocation)
+		valid := maxMessages == 0 && timeoutSeconds == 0
+		if serverStreaming {
+			valid = maxMessages >= 1 && maxMessages <= maxGCPGRPCJSONMessages && timeoutSeconds >= 1 && timeoutSeconds <= maxGCPGRPCStreamTimeoutSeconds
+		}
+		if (err == nil) != valid {
+			t.Fatalf("max=%d timeout=%d server=%v err=%v", maxMessages, timeoutSeconds, serverStreaming, err)
 		}
 	})
 }
