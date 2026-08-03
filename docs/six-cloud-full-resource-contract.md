@@ -44,7 +44,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
-| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
+| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, private/public ECR Docker/OCI Registry HTTP with internal IAM token retrieval, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env; ECR authorization tokens remain internal |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience, ACR internal OAuth2 scoped-token exchange, Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, Event Grid Namespace MQTT v5, and Service Bus/Event Hubs AMQP 1.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials; ACR refresh/access tokens remain internal |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles and the derived NLS token remain internal |
@@ -289,6 +289,17 @@ remain available through the guarded resource gateway.
   public login name for private DNS resolution. The official read-only 307 is
   followed only to the same registry's dedicated data endpoint or an Azure
   Blob host, with Authorization removed and signed Location values contained.
+- Amazon ECR private and public Docker/OCI Registry data-plane operations use
+  `auth_scheme=ecr` and only the AWS SDK identity chain. The server signs a
+  provider-fixed private `ecr` or public `ecr-public` GetAuthorizationToken
+  JSON request, validates the returned base64 `AWS:password`, and retains both
+  forms internally. Private data requests use Basic; Public HTTP API requests
+  use the complete token as Bearer and reject `/tags/list`. Account, region,
+  service, classic/FIPS/dual-stack host family, Public alias path, and Registry
+  path/method are validated before credential resolution. Private layer
+  GET/HEAD may follow only a bounded 307 to the exact same-region
+  `prod-<region>-starport-layer-bucket` S3 endpoint, with Authorization removed
+  and signed Location values excluded from results and errors.
 - Azure Maps `atlas.microsoft.com` and geographic subdomains route to the
   documented Maps Entra resource. Azure Health Data Services FHIR endpoints
   use the service host audience by default, while DICOM endpoints route to the
@@ -370,3 +381,6 @@ Examples are navigation aids, not a support allowlist.
   dedicated disposable resources and separate explicit approval.
 - The dedicated ACR live gate requires an existing repository with read access
   and exercises the complete Entra-to-ACR scoped-token chain through ListTags.
+- Dedicated private and Public ECR live gates require existing repositories and
+  exercise their distinct Basic/tags and Bearer/manifest contracts through the
+  AWS SDK identity chain without printing response bodies or token material.

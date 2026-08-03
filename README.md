@@ -17,7 +17,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
-| AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
+| AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；ECR/ECR Public Docker/OCI Registry HTTP；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS；ECR Registry token 仅在 server 内部派生 |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime、Voice Live WSS + Web PubSub 标准/可靠 JSON/Protobuf/MQTT + Event Grid MQTT v5 + Service Bus/Event Hubs AMQP 1.0 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS + Firebase Realtime Database SSE | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
@@ -30,7 +30,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 - 写操作必须同时满足宿主已取得人类批准、server 环境设置 `CLOUD_SKILLS_ALLOW_MUTATIONS=1`、单次调用包含 `force=true`。
 - secret/password/token/credential/access-key 类操作还要求 `CLOUD_SKILLS_ALLOW_SENSITIVE=1`。
 - 所有六云请求都由进程内 HTTP adapter 构造和签名；统一 Server 不执行 `aws`、`az`、`gcloud`、`aliyun` 或 `tccli`。
-- REST 只允许官方 HTTPS 域名和 443 端口；通用调用禁止 redirect。Firebase SSE 仅按官方要求手动接受最多三次 307，且每一跳仍须是 Firebase Database 官方域名并保持数据库路径和查询不变。调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。Azure 非常见数据面可提供公开的 Entra `audience` 标识，但不能提供 token。
+- REST 只允许官方 HTTPS 域名和 443 端口；通用调用禁止 redirect。Firebase SSE 仅按官方要求手动接受最多三次 307，且每一跳仍须是 Firebase Database 官方域名并保持数据库路径和查询不变；ACR GET/HEAD 只跟随 provider-owned Azure data/Blob 307；私有 ECR layer GET/HEAD 只跟随与 registry region 精确一致的 `prod-<region>-starport-layer-bucket` S3 307。所有跨数据面跳转都移除 Authorization，签名 Location 不进入输出。调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。Azure 非常见数据面可提供公开的 Entra `audience` 标识，但不能提供 token。
 - 新发布且尚未进入内置域名表的官方 endpoint，只能由 operator 通过 `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` 追加逗号分隔的精确 hostname；不接受 URL、端口、子域 wildcard 或 MCP 参数。
 - 六云数据面上传均可使用 `body_file`；本地文件只允许位于 `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` 下，且会解析 symlink 后再判断。单文件默认上限 64 MiB，更大对象使用厂商 multipart/chunk API。
 - 六云成功响应均可使用 `response_file` 流式写入批准目录中的新文件，正文不会进入 MCP/模型上下文。目标文件绝不覆盖，临时文件以 mode `0600` 写完并同步后才原子发布；默认单次上限 1 GiB，可用 `CLOUD_SKILLS_MAX_RESPONSE_FILE_BYTES` 收紧或调大，更大对象使用厂商 `Range` API 分段下载。
@@ -110,6 +110,18 @@ AWS 查询：
 ```json
 {"name":"aws_api_read","arguments":{"auth_scheme":"sigv4","service":"ec2","operation":"describe-instances","region":"us-east-1","method":"POST","url":"https://ec2.us-east-1.amazonaws.com/","headers":{"Content-Type":"application/x-www-form-urlencoded"},"body":"Action=DescribeInstances&Version=2016-11-15&MaxResults=20"}}
 ```
+
+Amazon ECR 私有和公共 Docker/OCI Registry 数据面使用 `auth_scheme=ecr`。调用方仍只提供 AWS SDK identity chain；server 内部对私有 `ecr:GetAuthorizationToken` 或公共 `ecr-public:GetAuthorizationToken` 发起 SigV4 JSON 请求、校验并保留 Registry token，再调用 `/v2`。私有 Registry 使用官方 `Basic <authorizationToken>`，ECR Public HTTP API 使用官方 `Bearer <authorizationToken>`；调用方不能请求、看到或覆盖该 token。私有 classic/FIPS/dual-stack、China classic 以及 Public classic/dual-stack endpoint 都按 account、region、service 精确绑定。ECR Public 按官网限制拒绝 Registry tags API，并固定在 `us-east-1` 取得 token：
+
+```json
+{"name":"aws_api_read","arguments":{"auth_scheme":"ecr","service":"ecr","operation":"ListTags","region":"us-west-2","method":"GET","url":"https://123456789012.dkr.ecr.us-west-2.amazonaws.com/v2/team/app/tags/list","parameters":{"n":20}}}
+```
+
+```json
+{"name":"aws_api_read","arguments":{"auth_scheme":"ecr","service":"ecr-public","operation":"GetManifest","region":"us-east-1","method":"GET","url":"https://public.ecr.aws/v2/<registry-alias>/<repository>/manifests/latest"}}
+```
+
+Manifest、blob、upload、delete、mount 和 referrers 走同一 Registry HTTP 入口；非 GET/HEAD 方法仍必须通过 mutation gate。私有 layer GET/HEAD 的 307 只允许进入同 region 官方 Starport S3 bucket，请求会剥离 Registry Authorization；可配合 `response_file` 原子下载，预签名 S3 URL 永不返回 MCP。
 
 AWS S3 Multi-Region Access Point 使用 `auth_scheme=sigv4a` 和官方 region set；`region_set` 只定义签名可用区域，不是凭证：
 
@@ -499,6 +511,22 @@ CLOUD_SKILLS_LIVE_TEST=1 go test ./internal/mcp/cloud -run TestLiveSixCloudReadO
 ```
 
 GCP live 验收需要 `CLOUD_SKILLS_LIVE_GCP_PROJECT`。各云可用 `CLOUD_SKILLS_LIVE_PROVIDERS` 选择子集。live gate 永不调用 mutate 工具，也不打印响应正文；它逐云输出 adapter availability、credential source/status、审计 outcome、响应字节数和可用的 provider RequestId。
+
+私有 ECR Registry live gate 需要精确 registry origin 和现存可拉取 repository；ECR Public 使用独立 gate，因为它固定 `ecr-public/us-east-1`、使用 Bearer token 且不支持 `/tags/list`。两者都只从 AWS SDK chain 解析 IAM/AKSK/STS，不打印 Registry token 或响应正文：
+
+```bash
+CLOUD_SKILLS_LIVE_AWS_ECR=1 \
+CLOUD_SKILLS_LIVE_AWS_ECR_ENDPOINT=https://123456789012.dkr.ecr.us-west-2.amazonaws.com \
+CLOUD_SKILLS_LIVE_AWS_ECR_REPOSITORY=team/app \
+go test ./internal/mcp/cloud -run TestLiveAWSECRReadOnly -v
+```
+
+```bash
+CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC=1 \
+CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_ENDPOINT=https://public.ecr.aws \
+CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY='<registry-alias>/<repository>' \
+go test ./internal/mcp/cloud -run TestLiveAWSECRPublicReadOnly -v
+```
 
 Baidu RTC 是会创建计费实例的独立 opt-in mutation gate。只有 operator 已完成具体会话批准并注入 BCE AKSK/IAM 与 product license 后才运行；测试强制走 MCP mutation/force/audit、内部 create/WSS/stop 和 secret containment：
 

@@ -26,6 +26,19 @@ and every provider has successful live acceptance with sanitized audit evidence.
 
 Verified slices:
 
+Amazon ECR private and public Docker/OCI Registry HTTP now uses
+`auth_scheme=ecr` and only the AWS SDK credential chain. The gateway derives
+the provider authorization token through an internal SigV4 JSON request,
+keeps both the base64 token and decoded password out of MCP/audit/error output,
+and sends the documented private Basic or public Bearer form. Hermetic tests
+cover classic, FIPS, dual-stack, China and Public endpoints, strict
+account/region/service/path/method binding, the Public tags-API exclusion,
+bounded token failures, exact proxy selection, request IDs, mutation policy,
+and private layer 307 downloads to the same-region Starport S3 bucket with
+Authorization removed and atomic response-file publication. Dedicated private
+and Public live gates are implemented but remain pending operator IAM
+credentials and existing repositories; this slice is not yet live-proven.
+
 Azure Container Registry now uses direct HTTPS with the official non-CLI
 Entra-to-ACR OAuth2 exchange and path/method-matched access scopes. It covers
 Docker/OCI catalog, manifest, blob, upload, tags, referrers and cross-repository
@@ -284,3 +297,27 @@ go test ./internal/mcp/cloud -run TestLiveTencentCLSReadOnly -v
 
 This gate is read-only and records only sanitized outcome, byte count, and
 provider request ID evidence.
+
+For private ECR Registry HTTP, provide the exact registry origin and an
+existing pullable repository. The test resolves the region from the endpoint,
+uses only the AWS SDK credential chain, derives GetAuthorizationToken
+internally, and performs `/tags/list` without printing its body:
+
+```bash
+CLOUD_SKILLS_LIVE_AWS_ECR=1 \
+CLOUD_SKILLS_LIVE_AWS_ECR_ENDPOINT=https://123456789012.dkr.ecr.us-west-2.amazonaws.com \
+CLOUD_SKILLS_LIVE_AWS_ECR_REPOSITORY=team/app \
+go test ./internal/mcp/cloud -run TestLiveAWSECRReadOnly -v
+```
+
+The ECR Public protocol has a separate live gate because it uses the
+`ecr-public` service in `us-east-1`, a Bearer token, and does not support the
+Registry tags API. Point `CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY` at an
+existing `<registry-alias>/<repository>` whose `latest` manifest exists:
+
+```bash
+CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC=1 \
+CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_ENDPOINT=https://public.ecr.aws \
+CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY='<registry-alias>/<repository>' \
+go test ./internal/mcp/cloud -run TestLiveAWSECRPublicReadOnly -v
+```

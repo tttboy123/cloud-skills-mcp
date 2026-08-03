@@ -1,11 +1,11 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, finite raw-frame SigV4 WSS, Amazon Connect Health or Transcribe signed EventStream WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, AgentCore, Managed Blockchain, Connect Health, Transcribe, IoT, AppSync, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, private/public ECR Docker/OCI Registry HTTP, finite raw-frame SigV4 WSS, Amazon Connect Health or Transcribe signed EventStream WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, ECR, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, AgentCore, Managed Blockchain, Connect Health, Transcribe, IoT, AppSync, or any documented AWS API.
 ---
 
 # AWS Cloud
 
-Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, connects bounded raw SigV4, Connect Health, Transcribe, IoT, and AppSync WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
+Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, derives private/public ECR Registry authorization internally, connects bounded raw SigV4, Connect Health, Transcribe, IoT, and AppSync WebSocket streams internally, and never executes AWS CLI or returns a token or presigned URL.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `sigv4-ws` for a finite raw-frame IAM WebSocket, `connect-health-ws` for Connect Health Medical Scribe, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1/5.0 subscription, `kinesisvideo-signaling-ws` for Kinesis Video WebRTC signaling, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
+- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `ecr` for private or public Docker/OCI Registry HTTP with an internal IAM authorization token, `sigv4-ws` for a finite raw-frame IAM WebSocket, `connect-health-ws` for Connect Health Medical Scribe, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1/5.0 subscription, `kinesisvideo-signaling-ws` for Kinesis Video WebRTC signaling, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
@@ -32,6 +32,8 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 - `response_file`: optional new approved-root file for large/binary responses. Use the documented `Range` header for objects larger than the configured per-call limit; existing files are never overwritten.
 
 Example read: `aws_api_read(auth_scheme="sigv4", service="ec2", operation="describe-instances", region="us-east-1", method="POST", url="https://ec2.us-east-1.amazonaws.com/", headers={"Content-Type":"application/x-www-form-urlencoded"}, body="Action=DescribeInstances&Version=2016-11-15&MaxResults=20")`.
+
+Private ECR Registry example: `aws_api_read(auth_scheme="ecr", service="ecr", operation="ListTags", region="us-west-2", method="GET", url="https://123456789012.dkr.ecr.us-west-2.amazonaws.com/v2/team/app/tags/list", parameters={"n":20})`. Public example: `aws_api_read(auth_scheme="ecr", service="ecr-public", operation="GetManifest", region="us-east-1", method="GET", url="https://public.ecr.aws/v2/<registry-alias>/<repository>/manifests/latest")`. The gateway signs the internal GetAuthorizationToken request from the AWS credential chain and never exposes the returned token. Public Registry does not support `/tags/list`. Private layer GET/HEAD may follow only the exact regional Starport S3 307 with Authorization removed; use `response_file` for a bounded atomic layer download. Push/upload/delete/mount calls use the mutation tool and approval gate.
 
 Example streaming upload: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-chunked", service="s3", operation="put-object", region="us-east-1", method="PUT", url="https://bucket.s3.us-east-1.amazonaws.com/object", body_file="/approved/uploads/object.bin", force=true)`.
 
@@ -75,4 +77,4 @@ The adapter signs the documented HTTPS `/graphql/connect` body `{}` and the exac
 
 Use the AWS SDK credential chain: profiles/SSO, web identity, IAM roles, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / optional `AWS_SESSION_TOKEN`. Keep credentials in the server environment or official AWS config, never in MCP arguments.
 
-Read [references/official-docs.md](references/official-docs.md) when authentication, Cloud Control, Connect Health, Transcribe, IoT, or AppSync streaming parameters, or operation naming needs verification.
+Read [references/official-docs.md](references/official-docs.md) when authentication, ECR Registry, Cloud Control, Connect Health, Transcribe, IoT, or AppSync streaming parameters, or operation naming needs verification.

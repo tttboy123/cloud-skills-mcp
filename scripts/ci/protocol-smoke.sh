@@ -39,6 +39,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"alicloud_api_read","arguments":{"auth_scheme":"mq","service":"rocketmq","operation":"ConsumeMessages","method":"GET","url":"https://123456.mqrest.cn-hangzhou.aliyuncs.com/topics/orders/messages","parameters":{"consumer":"group-a","numOfMessages":1},"body":{"settlement":"release"},"response_file":"/tmp/rocketmq.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"tencent_api_read","arguments":{"auth_scheme":"cls","service":"cls","operation":"GetLogset","method":"GET","url":"https://nested.ap-beijing.cls.tencentcs.com/logset","parameters":{"logset_id":"example"}}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"acr","service":"acr","operation":"ListTags","method":"GET","url":"https://registry123.azurecr.io.attacker.example/v2/team/app/tags/list","acr_scope":"repository:team/app:pull"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"ecr","service":"ecr","operation":"ListTags","region":"us-west-2","method":"GET","url":"https://123456789012.dkr.ecr.us-west-2.amazonaws.com.attacker.example/v2/team/app/tags/list"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -89,7 +90,9 @@ jq -e -s '
     ($responses | map(select(.id == 24))[0].result.isError == true) and
     ($responses | map(select(.id == 24))[0].result.content[0].text | contains("exact regional")) and
     ($responses | map(select(.id == 25))[0].result.isError == true) and
-    ($responses | map(select(.id == 25))[0].result.content[0].text | contains("exact public login endpoint"))
+    ($responses | map(select(.id == 25))[0].result.content[0].text | contains("exact public login endpoint")) and
+    ($responses | map(select(.id == 26))[0].result.isError == true) and
+    ($responses | map(select(.id == 26))[0].result.content[0].text | contains("exact private or public Registry endpoint"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

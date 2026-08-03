@@ -234,6 +234,24 @@ func TestUnifiedMCPContractRoutesAzureACRScope(t *testing.T) {
 	}
 }
 
+func TestUnifiedMCPContractRoutesAWSECRRegistry(t *testing.T) {
+	fake := &fakeAdapter{invokeOut: []byte(`{"name":"team/app","tags":[]}`)}
+	adapters := allFakeAdapters()
+	adapters[ProviderAWS] = fake
+	c := newTestClient(t, Runtime{Adapters: adapters, Audit: func(context.Context, AuditEvent) error { return nil }})
+	result := callCloudTool(t, c, "aws_api_read", map[string]any{
+		"auth_scheme": "ecr", "service": "ecr", "operation": "ListTags", "region": "us-west-2", "method": "GET",
+		"url": "https://123456789012.dkr.ecr.us-west-2.amazonaws.com/v2/team/app/tags/list",
+	})
+	if result.IsError || len(fake.invocations) != 1 {
+		t.Fatalf("result=%#v invocations=%#v", result, fake.invocations)
+	}
+	invocation := fake.invocations[0]
+	if invocation.AuthScheme != authSchemeAWSECR || invocation.Service != "ecr" || invocation.Region != "us-west-2" {
+		t.Fatalf("invocation=%#v", invocation)
+	}
+}
+
 func TestUnifiedMCPContractRoutesBaiduRTCEventImageFile(t *testing.T) {
 	root := t.TempDir()
 	imageFile := filepath.Join(root, "camera.jpg")

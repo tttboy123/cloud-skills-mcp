@@ -17,7 +17,7 @@ is complete.
 | Binary/media upload | `body_file` streams a regular file below an approved root | 64 MiB per request; provider multipart/resumable operations compose larger uploads |
 | Binary/media download and export | `response_file` streams a successful response to a new mode-0600 file and atomically publishes it | 1 GiB default per request; operator configurable; provider `Range` operations compose larger downloads |
 | Error response | Bounded in-memory read with credential-field redaction | No output file is created |
-| Redirect | Disabled by default; Firebase SSE has a path/query-preserving same-database 307 rule, and ACR GET/HEAD has a provider-owned data-endpoint/Blob 307 rule with Authorization stripped | Prevents credentials or signatures crossing unvalidated hosts |
+| Redirect | Disabled by default; Firebase SSE has a path/query-preserving same-database 307 rule, ACR GET/HEAD has a provider-owned data-endpoint/Blob 307 rule, and private ECR layer GET/HEAD has an exact regional Starport S3 307 rule; Authorization is stripped before data-plane hops | Prevents credentials or signatures crossing unvalidated hosts |
 
 The six object-storage implementations all expose an official HTTP download
 body and byte ranges: [AWS S3 GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),
@@ -37,6 +37,20 @@ and [Baidu BOS GetObject](https://cloud.baidu.com/doc/BOS/s/xkc5pcmcj).
 | Alibaba Cloud | ACS3 OpenAPI; legacy RPC/ROA V2; DataHub `DATAHUB` and OpenSearch V3 `OPENSEARCH` HMAC-SHA1; MaxCompute project/data/Tunnel ODPS V2/V4; classic Function Compute `FC`, current `fcapp.run` Trigger ACS3, and custom-domain Trigger POP HMAC-SHA1; OSS V1/V4 Header authentication; SLS v1/v4; MNS/SMQ; RocketMQ 4.x `MQ` HMAC-SHA1/XML HTTPS publish, normal/order/transaction-half consume, and in-call acknowledge/commit/rollback with internal-only receipt handles and atomic sanitized NDJSON; Tablestore OTS v2/v4; NLS short ASR and TTS REST with internal header token and atomic audio output; and NLS `SpeechTranscriber`, `SpeechRecognizer`, `FlowingSpeechSynthesizer`, `SpeechSynthesizer`, and `SpeechLongSynthesizer` WSS with an internally minted/cached RPC V2 token, server-generated task/message IDs, protocol start/stop/terminal enforcement, paced audio/text, and atomic event/audio output; credentials-go RAM/OIDC/ECS/AKSK/STS chain. RocketMQ 5.x control plane remains ACS3-addressable; its public data plane is an explicit credential-bound exclusion because it requires instance ACL username/password rather than the Goal's RAM AKSK/IAM entrypoint | Product-specific signatures or non-HTTP transports outside implemented families; service-by-service live vectors |
 | Tencent Cloud | TC3 API 3.0, API 3.0 v1 HmacSHA1/HmacSHA256 query/form, still-active legacy `*.api.qcloud.com/v2/index.php` HmacSHA1/HmacSHA256 query/form, COS REST signatures, CLS legacy `q-sign-algorithm=sha1` HTTPS with exact public/internal regional endpoints and internal CAM `x-cls-token`, realtime ASR with documented CAM temporary-token signing, virtual-number human detection, SOE evaluation, speech-translation, standard realtime TTS, streaming-text TTS v2, and large-model podcast HMAC-SHA1 WSS, voice-conversion HMAC-SHA1 WSS with framed bidirectional PCM, MPS private-audio TC3 WSS recognition/translation with network-order framing, and MPS TC3 WSS streaming TTS with controlled text segments and atomic binary-audio output; AKSK/CAM credentials within each protocol's documented fields | Product-specific signatures outside implemented families; other remaining long-lived streaming/WebSocket protocols; service-by-service live vectors |
 | Baidu AI Cloud | BCE auth v1 and v2 signed HTTPS; AKSK/IAM-STS session token; RTC AI Agent BCE v1 create/private-instance-token WSS/stop lifecycle with exact official endpoints, operator-only license activation, all six documented upload codecs (`raw`, `raw16k`, `pcma`, `pcmu`, `g722`, `opus`), control/WSS codec agreement, 20–200 ms fixed-rate framing, variable-length Opus packet plans with official `ptime`/`plen`, strict credential-free parsing of the documented static break/text/TTS/device/GIS/player/ASR/prompt/variable/role/query/MCP/direct-control/meeting commands before or after audio, provider-event-correlated single-image upload with approved-root file validation and official 16 KiB/Base64 frame sequencing, current-format Function Call parsing with provider-session correlation to bounded credential-free `ok|error`/`post_function` templates, duplicate/unknown/call-limit rejection, serialized concurrent writes, bounded text/binary streaming, internal token containment, mutation-only policy, and atomic sanitized NDJSON | Product-specific legacy signatures or other long-lived transports outside BCE v1/v2 and RTC AI Agent; service-by-service live vectors |
+
+Amazon ECR private and public Docker/OCI Registry HTTP is a first-class
+exception to generic AWS SigV4 request signing. `auth_scheme=ecr` derives
+GetAuthorizationToken through the AWS SDK identity chain and a provider-fixed
+SigV4 JSON request, keeps the base64 `AWS:password` material internal, and
+applies the documented private Basic or public Bearer Registry header. The
+contract binds private classic/FIPS/dual-stack and China endpoints to exact
+account/region/service values, binds Public classic/dual-stack to
+`ecr-public`/`us-east-1`, rejects the Public tags API, and maps Registry
+version, catalog, manifest, blob, upload, tags, and referrers paths to their
+valid methods. Private layer GET/HEAD follows at most three 307 responses only
+to the exact same-region Starport S3 bucket with Authorization removed and
+signed Location values contained. Private and Public live probes remain
+pending operator IAM credentials and existing repositories.
 
 Azure Container Registry is a first-class exception to generic Entra bearer
 REST. `auth_scheme=acr` obtains the official Container Registry Entra audience,

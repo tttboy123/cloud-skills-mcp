@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -373,6 +374,99 @@ func TestLiveAzureACRReadOnly(t *testing.T) {
 		t.Fatalf("no succeeded Azure ACR read audit event: %#v", events)
 	}
 	t.Logf("provider=azure operation=ListTags scope=%s outcome=succeeded response_bytes=%d request_id=%q", succeeded.ACRScope, len(text), succeeded.RequestID)
+}
+
+func TestLiveAWSECRReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_ECR") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AWS_ECR=1 for a real private ECR Registry token and ListTags probe")
+	}
+	runLiveAWSECRRegistryRead(t, false)
+}
+
+func TestLiveAWSECRPublicReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC=1 for a real ECR Public Registry token and manifest probe")
+	}
+	runLiveAWSECRRegistryRead(t, true)
+}
+
+func runLiveAWSECRRegistryRead(t *testing.T, public bool) {
+	t.Helper()
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Amazon ECR live validation", name)
+		}
+		return value
+	}
+	endpointName := "CLOUD_SKILLS_LIVE_AWS_ECR_ENDPOINT"
+	repositoryName := "CLOUD_SKILLS_LIVE_AWS_ECR_REPOSITORY"
+	service := "ecr"
+	operation := "ListTags"
+	pathSuffix := "/tags/list"
+	if public {
+		endpointName = "CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_ENDPOINT"
+		repositoryName = "CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY"
+		service = "ecr-public"
+		operation = "GetManifest"
+		pathSuffix = "/manifests/latest"
+	}
+	endpoint := strings.TrimRight(required(endpointName), "/")
+	repository := required(repositoryName)
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("parse Amazon ECR endpoint: %v", err)
+	}
+	target, ok := parseAWSPrivateECRHost(strings.ToLower(parsed.Hostname()))
+	if public {
+		target, ok = parseAWSPublicECRHost(strings.ToLower(parsed.Hostname()))
+	}
+	if !ok || parsed.Scheme != "https" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "" {
+		t.Fatalf("%s must be an exact official Amazon ECR Registry origin", endpointName)
+	}
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	arguments := map[string]any{
+		"auth_scheme": "ecr", "service": service, "operation": operation, "region": target.Region,
+		"method": "GET", "url": endpoint + "/v2/" + repository + pathSuffix,
+	}
+	if !public {
+		arguments["parameters"] = map[string]any{"n": 1}
+	}
+	result := callCloudTool(t, c, "aws_api_read", arguments)
+	if result.IsError {
+		t.Fatalf("Amazon ECR live read failed: %s", cloudToolText(t, result))
+	}
+	text := strings.TrimSpace(cloudToolText(t, result))
+	if text == "" {
+		t.Fatal("Amazon ECR returned an empty response")
+	}
+	for _, secret := range []string{os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"), os.Getenv("AWS_SESSION_TOKEN")} {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Fatal("Amazon ECR live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAWS && events[index].Mode == ModeRead && events[index].Operation == operation && events[index].AuthScheme == authSchemeAWSECR && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Amazon ECR read audit event: %#v", events)
+	}
+	t.Logf("provider=aws service=%s operation=%s outcome=succeeded response_bytes=%d request_id=%q", service, operation, len(text), succeeded.RequestID)
 }
 
 func parseLiveProviderStatus(text string) (ProviderStatus, error) {
