@@ -258,6 +258,8 @@ remain available through the guarded resource gateway.
   included in the signature, and never accepted from or returned to callers.
   Legacy writes remain mutation-gated; current CLS API 3.0 calls continue to use
   the generic TC3 family rather than being misrouted through the old signer.
+  `TestLiveTencentCLSReadOnly` is the opt-in real q-sign acceptance gate and
+  requires an exact endpoint plus an existing logset ID.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an

@@ -361,6 +361,15 @@ Tencent CLS 当前管理面与新增功能优先走 API 3.0 `tc3`。仍公开的
 
 旧版写日志、修改配置等非 GET/HEAD/OPTIONS 请求必须走 `tencent_api_mutate(force=true)`；protobuf/压缩上传可用受控 `body_file` 和非凭证的 `Content-Type`、`Content-MD5`、`X-Cls-Compress-Type` headers。调用方不能提供 `Authorization`、`X-Cls-Token` 或任何 q-sign 凭证查询参数。
 
+真实 CLS q-sign 验收是显式 opt-in 的只读旧版 `GetLogset`，需要一个现存 logset ID；当前 API 3.0 的通用 Tencent live probe 不能替代它：
+
+```bash
+CLOUD_SKILLS_LIVE_TENCENT_CLS=1 \
+CLOUD_SKILLS_LIVE_TENCENT_CLS_ENDPOINT=https://ap-shanghai.cls.tencentcs.com \
+CLOUD_SKILLS_LIVE_TENCENT_CLS_LOGSET_ID=<logset-id> \
+go test ./internal/mcp/cloud -run TestLiveTencentCLSReadOnly -v
+```
+
 Baidu RTC AI Agent 文本、音频、图片与 Function Call 双工会话必须走 mutation gate。`app_id`、非敏感 `config`、device/user 标识、终止条件和 `audio_codec` 放在 body。`messages`/`final_messages` 分别在音频前/后发送，合计最多 64 条，并严格解析官网的打断、文本、直接 TTS、自动打断、设备/GIS、云音乐、ASR 模式、system prompt、动态变量、三方透传、角色、增强 Query、MCP Tools 变更、直接音乐和会议纪要静态指令；未声明的 server event、license 激活、原始图片帧与调用方自造的 `[F]:` 结果不能伪装成普通字符串。需要图片时把单个非空文件放在 `image_file`，可在 body 设 `image_mode="image_generate"`；server 只在收到精确的 `[E]:[UPLOAD_IMAGE]` 后按官网 16 KiB 分片协议上传一次，并保证图片帧不会与并发音频帧交错。配置了图片但会话未请求、未配置图片却收到请求、或重复请求都会 fail closed。Function Call 通过 body `function_results` 按 `function_name` 预声明最多 32 个无凭证 `ok|error` 结果模板，并用 `max_function_calls` 限制本次调用数；server 严格解析 provider 的嵌套 JSON，只复用其 `session_id` 生成响应，未知函数、重复 session、旧 `[F]:[C]:` 格式和带凭证参数均 fail closed。模板可含 `message` 或官网 `post_function` 的 `text|prompt|play_music` 组合，但类型必须唯一，且 `text` 与 `prompt` 不可并存。`audio_codec` 支持官网列出的 `raw|raw16k|pcma|pcmu|g722|opus`，server 会把同值写入控制面 `config.audiocodec` 与内部 WSS `ac`。固定码率文件按 `stream_interval_ms=20..200`（默认 20）分包，`stream_chunk_bytes` 必须与编码/时长严格相符；Opus 使用 `opus_packet_time_ms=20|40|60` 和覆盖整个文件的 `opus_packet_lengths`，server 内部生成 `ptime`/`plen`。WSS 结果以 text/Base64-binary NDJSON 原子发布，创建后的任何失败都会尝试签名 stop：
 
 ```json
