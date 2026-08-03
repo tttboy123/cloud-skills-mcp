@@ -115,7 +115,7 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
 		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
-			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "image_file", "protobuf_descriptor_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_max_messages", "stream_timeout_seconds", "stream_user_id", "stream_format", "audience", "auth_version"} {
+			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "image_file", "protobuf_descriptor_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_max_messages", "stream_timeout_seconds", "stream_user_id", "stream_format", "audience", "acr_scope", "acr_source_scope", "auth_version"} {
 				if _, ok := tool.InputSchema.Properties[field]; !ok {
 					t.Errorf("%s must expose HTTP field %s", tool.Name, field)
 				}
@@ -214,6 +214,23 @@ func TestUnifiedMCPContractRoutesGCPProtoJSONDescriptorFile(t *testing.T) {
 	invocation := fake.invocations[0]
 	if invocation.ProtobufDescriptorFile != descriptorFile || invocation.PayloadMode != "protobuf-json" || invocation.Body == nil || filepath.Base(invocation.ResponseFile) != filepath.Base(responseFile) || invocation.StreamMaxMessages != 8 || invocation.StreamTimeoutSeconds != 30 {
 		t.Fatalf("invocation=%#v", invocation)
+	}
+}
+
+func TestUnifiedMCPContractRoutesAzureACRScope(t *testing.T) {
+	fake := &fakeAdapter{invokeOut: []byte(`{"name":"team/app","tags":[]}`)}
+	adapters := allFakeAdapters()
+	adapters[ProviderAzure] = fake
+	c := newTestClient(t, Runtime{Adapters: adapters, Audit: func(context.Context, AuditEvent) error { return nil }})
+	result := callCloudTool(t, c, "azure_api_read", map[string]any{
+		"auth_scheme": "acr", "service": "acr", "operation": "ListTags", "method": "GET",
+		"url": "https://registry123.azurecr.io/v2/team/app/tags/list", "acr_scope": "repository:team/app:pull",
+	})
+	if result.IsError || len(fake.invocations) != 1 {
+		t.Fatalf("result=%#v invocations=%#v", result, fake.invocations)
+	}
+	if fake.invocations[0].ACRScope != "repository:team/app:pull" {
+		t.Fatalf("invocation=%#v", fake.invocations[0])
 	}
 }
 

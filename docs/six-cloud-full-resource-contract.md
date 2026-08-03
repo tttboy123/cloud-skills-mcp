@@ -45,7 +45,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
-| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, Event Grid Namespace MQTT v5, and Service Bus/Event Hubs AMQP 1.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
+| Azure | Direct HTTPS with Entra Bearer Token and validated audience, ACR internal OAuth2 scoped-token exchange, Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, Event Grid Namespace MQTT v5, and Service Bus/Event Hubs AMQP 1.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials; ACR refresh/access tokens remain internal |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles and the derived NLS token remain internal |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
@@ -277,6 +277,18 @@ remain available through the guarded resource gateway.
 - Azure uncommon data-plane endpoints can use a first-class, validated
   `audience` identifier. The value is never a credential: the adapter derives
   the `.default` scope internally.
+- Azure Container Registry data-plane operations use `auth_scheme=acr`, exact
+  public login endpoints, and a path-matched `acr_scope`. The adapter obtains
+  the official Container Registry Entra audience, internally exchanges it for
+  an ACR refresh token and then a least-privilege access token, and sends only
+  that access token to `/v2` or `/acr/v1`. Catalog/deleted-catalog,
+  content pull/push/delete, metadata read/write/delete, and soft-delete
+  read/restore permissions have distinct path-and-method contracts;
+  cross-repository blob mount adds
+  only the exact source-repository pull scope. Private Endpoint callers keep the
+  public login name for private DNS resolution. The official read-only 307 is
+  followed only to the same registry's dedicated data endpoint or an Azure
+  Blob host, with Authorization removed and signed Location values contained.
 - Azure Maps `atlas.microsoft.com` and geographic subdomains route to the
   documented Maps Entra resource. Azure Health Data Services FHIR endpoints
   use the service host audience by default, while DICOM endpoints route to the
@@ -356,3 +368,5 @@ Examples are navigation aids, not a support allowlist.
   operator injects credentials and observes provider, audit outcome, response
   size and request ID without printing response bodies. Mutation live tests use
   dedicated disposable resources and separate explicit approval.
+- The dedicated ACR live gate requires an existing repository with read access
+  and exercises the complete Entra-to-ACR scoped-token chain through ListTags.

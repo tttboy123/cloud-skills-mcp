@@ -104,7 +104,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+acr-oauth2+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -115,6 +115,9 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 	return json.Marshal(map[string]string{
 		"rest_api_reference":  "https://learn.microsoft.com/en-us/rest/api/azure/",
 		"authentication":      "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
+		"acr_authentication":  "https://learn.microsoft.com/en-us/rest/api/registry-dataplane/authentication/exchange-aad-access-token-for-acr-refresh-token",
+		"acr_scoped_token":    "https://learn.microsoft.com/en-us/rest/api/registry-dataplane/authentication/exchange-acr-refresh-token-for-acr-access-token",
+		"acr_data_plane":      "https://learn.microsoft.com/en-us/rest/api/registry-dataplane/container-registry",
 		"openai_realtime":     "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
 		"voice_live":          "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to",
 		"webpubsub_protocol":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
@@ -130,6 +133,9 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 
 func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(request.AuthScheme, "")
+	if scheme == authSchemeAzureACR {
+		return invokeAzureACR(ctx, adapter, request)
+	}
 	if scheme == authSchemeAzureRealtimeWS {
 		return invokeAzureRealtimeWebSocket(ctx, adapter, request)
 	}
@@ -152,7 +158,7 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 		return invokeAzureEventHubsAMQP(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {

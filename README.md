@@ -199,6 +199,12 @@ Azure 查询：
 {"name":"azure_api_read","arguments":{"method":"GET","url":"https://management.azure.com/subscriptions/<id>/resources?api-version=2021-04-01","subscription":"<id>"}}
 ```
 
+Azure Container Registry 数据面使用 `auth_scheme=acr`，不把 Entra token 直接发送给 Registry API。server 先用非 CLI Azure Identity 获取 `https://containerregistry.azure.net/.default`，再按 ACR 官方 OAuth2 合同内部完成 Entra access token → ACR refresh token → 最小作用域 access token；三类 token 都不会进入 MCP 参数、结果、错误或审计。`acr_scope` 必须与 URL 中的 repository 精确一致，并按当前官方权限族绑定路径和方法：catalog 为 `registry:catalog:*`，软删除 catalog 为 `registry:deleted_catalog:*`，Docker/OCI 内容读取、写入、删除分别为 `pull`、`push`（也接受官方组合 `pull,push`）和 `delete`，`/acr/v1` 元数据读取、更新、删除分别为 `metadata_read`、`metadata_write,metadata_read` 和 `delete`，软删除清单读取与 manifest 恢复分别为 `deleted_read` 和 `deleted_read,deleted_restore`。跨 repository blob mount 额外使用与 `from` 精确匹配的 `acr_source_scope=repository:<source>:pull`，作为第二个内部 OAuth scope。公共登录端点仅接受 `<registry>.azurecr.io` 或官方 regional login endpoint；Private Endpoint 仍使用公共登录名并由 VNet DNS 私下解析。Blob GET/HEAD 的官方 307 可在内部跟随到同一 registry 的 dedicated data endpoint 或 Azure Blob，跳转请求会移除 Authorization，签名 Location 永不返回 MCP：
+
+```json
+{"name":"azure_api_read","arguments":{"auth_scheme":"acr","service":"acr","operation":"ListTags","method":"GET","url":"https://<registry>.azurecr.io/v2/<repository>/tags/list","parameters":{"n":100},"acr_scope":"repository:<repository>:pull"}}
+```
+
 Azure OpenAI Realtime 使用 `auth_scheme=realtime-ws`，server 通过非 CLI Azure Identity 获取官网推荐的 `https://ai.azure.com/.default` Entra token，并且只把它放入内部 WSS Upgrade 的 Authorization header。当前官网仅发布公共 Azure 的单标签 `wss://<resource>.openai.azure.com` Realtime 合同；Azure Government 官网说明其模型清单包含该云提供的全部 Azure OpenAI 模型，而清单中没有 Realtime 型号，Azure China 也没有发布对应的 Foundry Realtime 端点合同，因此 `.azure.us`、`.azure.cn`、多级子域和相似域名都会被拒绝。调用方提供官方 client event 对象/数组，或用 `body_file` 提供逐行 JSON 事件；server 会按 `response.create`/`response.done` 和 audio commit/transcription completed 数量等待有限终态，成功后才原子发布 NDJSON：
 
 ```json

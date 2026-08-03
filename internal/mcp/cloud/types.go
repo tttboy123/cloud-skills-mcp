@@ -65,6 +65,8 @@ type Invocation struct {
 	Project                string
 	Subscription           string
 	Audience               string
+	ACRScope               string
+	ACRSourceScope         string
 	AuthScheme             string
 	AuthVersion            string
 	APIVersion             string
@@ -112,6 +114,8 @@ type AuditEvent struct {
 	RegionSet         string         `json:"region_set,omitempty"`
 	Project           string         `json:"project,omitempty"`
 	Subscription      string         `json:"subscription,omitempty"`
+	ACRScope          string         `json:"acr_scope,omitempty"`
+	ACRSourceScope    string         `json:"acr_source_scope,omitempty"`
 	AuthVersion       string         `json:"auth_version,omitempty"`
 	AuthScheme        string         `json:"auth_scheme,omitempty"`
 	APIVersion        string         `json:"api_version,omitempty"`

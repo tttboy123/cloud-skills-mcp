@@ -234,6 +234,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureEventGridMQTTScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureEventGridMQTTWS
 	azureServiceBusAMQPScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureServiceBusAMQPWS
 	azureEventHubsAMQPScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureEventHubsAMQPWS
+	azureACRScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureACR
 	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
@@ -341,6 +342,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateGCPVertexLiveWebSocketInvocation(request); err != nil {
 			return err
 		}
+	} else if azureACRScheme {
+		if err := validateAzureACRInvocation(request); err != nil {
+			return err
+		}
 	} else if azureRealtimeScheme {
 		if err := validateAzureRealtimeWebSocketInvocation(request); err != nil {
 			return err
@@ -380,8 +385,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	switch request.Provider {
 	case ProviderAzure:
-		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureVoiceLiveWS && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureWebPubSubMQTTWS && azureScheme != authSchemeAzureEventGridMQTTWS && azureScheme != authSchemeAzureServiceBusAMQPWS && azureScheme != authSchemeAzureEventHubsAMQPWS {
-			return fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
+		if azureScheme != "" && azureScheme != authSchemeAzureACR && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureVoiceLiveWS && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureWebPubSubMQTTWS && azureScheme != authSchemeAzureEventGridMQTTWS && azureScheme != authSchemeAzureServiceBusAMQPWS && azureScheme != authSchemeAzureEventHubsAMQPWS {
+			return fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 		}
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPFirebaseSSE && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
@@ -626,6 +631,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	if request.Provider != ProviderAWS && request.RegionSet != "" {
 		return fmt.Errorf("region_set is supported only by AWS SigV4a")
+	}
+	if !azureACRScheme && (request.ACRScope != "" || request.ACRSourceScope != "") {
+		return fmt.Errorf("acr_scope and acr_source_scope are supported only by Azure Container Registry auth_scheme=acr")
 	}
 	if request.StreamChunkBytes < 0 || request.StreamChunkBytes > maxRequestFileBytes {
 		return fmt.Errorf("stream_chunk_bytes must be between 1 and %d when provided", maxRequestFileBytes)

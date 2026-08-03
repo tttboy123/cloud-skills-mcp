@@ -8,6 +8,19 @@
 - Azure MCP Server overview: https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/overview
 - App Configuration data-plane REST and Entra audience: https://learn.microsoft.com/en-us/azure/azure-app-configuration/rest-api and https://learn.microsoft.com/en-us/azure/azure-app-configuration/concept-enable-rbac
 - Azure data-plane endpoint/audience model: https://learn.microsoft.com/en-us/azure/developer/terraform/concept-azapi-data-plane-framework
+- AAD access token to ACR refresh token exchange: https://learn.microsoft.com/en-us/rest/api/registry-dataplane/authentication/exchange-aad-access-token-for-acr-refresh-token?view=rest-registry-dataplane-2021-07-01
+- ACR refresh token to scoped access token exchange: https://learn.microsoft.com/en-us/rest/api/registry-dataplane/authentication/exchange-acr-refresh-token-for-acr-access-token?view=rest-registry-dataplane-2021-07-01
+- ACR login and repository-scoped token contract: https://learn.microsoft.com/en-us/rest/api/registry-dataplane/authentication/get-acr-access-token-from-login?view=rest-registry-dataplane-2021-07-01
+- ACR dedicated regional data endpoints and 307 redirect behavior: https://learn.microsoft.com/en-us/azure/container-registry/container-registry-dedicated-data-endpoints
+- ACR Private Endpoint public-name DNS contract: https://learn.microsoft.com/en-us/azure/container-registry/container-registry-private-endpoints
+- ACR service-principal and RBAC authentication: https://learn.microsoft.com/en-us/azure/container-registry/container-registry-auth-service-principal
+- ACR current data-plane operation index (Docker `/v2` and ACR `/acr/v1`): https://learn.microsoft.com/en-us/rest/api/registry-dataplane/container-registry?view=rest-registry-dataplane-2021-07-01
+- Microsoft Azure CLI's current ACR permission constants and OAuth scope construction: https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/acr/_docker_utils.py
+- Microsoft Azure CLI's current catalog, metadata, delete, soft-delete, and restore request mappings: https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/acr/repository.py and https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/acr/manifest.py
+- OCI/Docker Distribution HTTP API V2 blob upload and cross-repository mount protocol: https://distribution.github.io/distribution/spec/api/
+
+ACR data-plane calls first obtain `https://containerregistry.azure.net/.default`, then perform the AAD-to-refresh and refresh-to-scoped-access exchanges inside the server. The current Microsoft permission constants cover registry `catalog`/`deleted_catalog` and repository `pull`, `push`, `delete`, `metadata_read`, `metadata_write`, `deleted_read`, and `deleted_restore`; the server binds the least request-appropriate documented combination to the exact URL and method. Cross-repository blob mounts add only the exact source-repository pull scope documented by the repeated `scope` form field. These sources are protocol evidence only: the runtime never invokes Azure CLI. Provider-owned GET/HEAD redirects drop Authorization, and neither token responses nor signed Location values enter MCP output.
+
 - Azure Web PubSub data-plane authentication: https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-rest-api-data-plane
 - Azure Web PubSub Entra authorization and internal client-token flow: https://learn.microsoft.com/en-us/azure/azure-web-pubsub/concept-azure-ad-authorization
 - Azure Web PubSub Generate Client Token REST API: https://learn.microsoft.com/en-us/rest/api/webpubsub/dataplane/web-pub-sub/generate-client-token?view=rest-webpubsub-dataplane-2024-01-01

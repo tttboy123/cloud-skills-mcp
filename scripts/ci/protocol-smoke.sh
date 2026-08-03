@@ -38,6 +38,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"webpubsub-mqtt-ws","service":"webpubsub","operation":"SubscribeMQTT","method":"GET","url":"wss://privatelink.webpubsub.azure.com/clients/mqtt/hubs/chat","body":{"client_id":"Observer123","subscriptions":[{"topic_filter":"room/temperature","qos":1}],"keep_alive_seconds":30,"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/webpubsub-private-link.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"alicloud_api_read","arguments":{"auth_scheme":"mq","service":"rocketmq","operation":"ConsumeMessages","method":"GET","url":"https://123456.mqrest.cn-hangzhou.aliyuncs.com/topics/orders/messages","parameters":{"consumer":"group-a","numOfMessages":1},"body":{"settlement":"release"},"response_file":"/tmp/rocketmq.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"tencent_api_read","arguments":{"auth_scheme":"cls","service":"cls","operation":"GetLogset","method":"GET","url":"https://nested.ap-beijing.cls.tencentcs.com/logset","parameters":{"logset_id":"example"}}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"acr","service":"acr","operation":"ListTags","method":"GET","url":"https://registry123.azurecr.io.attacker.example/v2/team/app/tags/list","acr_scope":"repository:team/app:pull"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -49,7 +50,7 @@ jq -e -s '
       (.inputSchema.required | index("force") != null)] | all) and
     ([map(select(.id == 2))[0].result.tools[] |
       select(.name | test("_api_(read|mutate)$")) |
-      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
+      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("acr_scope") and has("acr_source_scope") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
     (["aws","azure","gcp","alicloud","tencent","baiducloud"] -
       [map(select(.id == 2))[0].result.tools[].name | select(endswith("_api_read")) | sub("_api_read$"; "")]) == [] and
     (map(select(.id == 3))[0].result.isError == true) and
@@ -86,7 +87,9 @@ jq -e -s '
     ($responses | map(select(.id == 23))[0].result.isError == true) and
     ($responses | map(select(.id == 23))[0].result.content[0].text | contains("mutation approval path")) and
     ($responses | map(select(.id == 24))[0].result.isError == true) and
-    ($responses | map(select(.id == 24))[0].result.content[0].text | contains("exact regional"))
+    ($responses | map(select(.id == 24))[0].result.content[0].text | contains("exact regional")) and
+    ($responses | map(select(.id == 25))[0].result.isError == true) and
+    ($responses | map(select(.id == 25))[0].result.content[0].text | contains("exact public login endpoint"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"
