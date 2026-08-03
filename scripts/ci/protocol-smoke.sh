@@ -31,6 +31,10 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://nested.resource.openai.azure.com/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://resource.openai.azure.us/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime-gov.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://resource.openai.azure.cn/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime-cn.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"voice-live-ws","service":"voice-live","operation":"VoiceLiveResponse","method":"GET","url":"wss://resource.services.ai.azure.us/voice-live/realtime","parameters":{"api-version":"2026-04-10","model":"gpt-realtime"},"body":{"type":"response.create"},"response_file":"/tmp/voice-live-gov.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"voice-live-ws","service":"voice-live","operation":"VoiceLiveResponse","method":"GET","url":"wss://resource.cognitiveservices.azure.cn/voice-live/realtime","parameters":{"api-version":"2026-04-10","model":"gpt-realtime"},"body":{"type":"response.create"},"response_file":"/tmp/voice-live-cn.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://privatelink.openai.azure.com/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime-private-link.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"voice-live-ws","service":"voice-live","operation":"VoiceLiveResponse","method":"GET","url":"wss://privatelink.services.ai.azure.com/voice-live/realtime","parameters":{"api-version":"2026-04-10","model":"gpt-realtime"},"body":{"type":"response.create"},"response_file":"/tmp/voice-live-private-link.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -66,7 +70,14 @@ jq -e -s '
     (map(select(.id == 14))[0].result.content[0].text | contains("namespace.servicebus.windows.net")) and
     ([15,16,17] | all(. as $id |
       ($responses | map(select(.id == $id))[0].result.isError == true) and
-      ($responses | map(select(.id == $id))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host"))))
+      ($responses | map(select(.id == $id))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host")))) and
+    ([18,19] | all(. as $id |
+      ($responses | map(select(.id == $id))[0].result.isError == true) and
+      ($responses | map(select(.id == $id))[0].result.content[0].text | contains("exact public-cloud single-label Foundry or Cognitive Services host")))) and
+    ($responses | map(select(.id == 20))[0].result.isError == true) and
+    ($responses | map(select(.id == 20))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host")) and
+    ($responses | map(select(.id == 21))[0].result.isError == true) and
+    ($responses | map(select(.id == 21))[0].result.content[0].text | contains("exact public-cloud single-label Foundry or Cognitive Services host"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

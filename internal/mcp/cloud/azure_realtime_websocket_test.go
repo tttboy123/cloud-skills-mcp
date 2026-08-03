@@ -43,6 +43,7 @@ func TestAzureRealtimeWebSocketBoundarySupportsEntraAuthenticatedGAAndPreview(t 
 		"post method":        func(value *Invocation) { value.Method = http.MethodPost },
 		"wrong host":         func(value *Invocation) { value.URL = "wss://example.com/openai/v1/realtime" },
 		"nested public host": func(value *Invocation) { value.URL = "wss://nested.demo.openai.azure.com/openai/v1/realtime" },
+		"private-link zone":  func(value *Invocation) { value.URL = "wss://privatelink.openai.azure.com/openai/v1/realtime" },
 		"government host":    func(value *Invocation) { value.URL = "wss://demo.openai.azure.us/openai/v1/realtime" },
 		"china host":         func(value *Invocation) { value.URL = "wss://demo.openai.azure.cn/openai/v1/realtime" },
 		"wrong path":         func(value *Invocation) { value.URL = "wss://demo.openai.azure.com/openai/v1/chat" },
@@ -234,6 +235,7 @@ func FuzzAzureOpenAIRealtimeHostNeverEscapesPublicCloud(f *testing.F) {
 		"demo.openai.azure.us",
 		"demo.openai.azure.cn",
 		"demo.openai.azure.com.example.com",
+		"privatelink.openai.azure.com",
 	} {
 		f.Add(seed)
 	}
@@ -254,7 +256,7 @@ func FuzzAzureOpenAIRealtimeHostNeverEscapesPublicCloud(f *testing.F) {
 		}
 		normalized := strings.ToLower(parsed.Hostname())
 		resource := strings.TrimSuffix(normalized, ".openai.azure.com")
-		if resource == normalized || !endpointLabelPattern.MatchString(resource) {
+		if resource == normalized || resource == "privatelink" || !endpointLabelPattern.MatchString(resource) {
 			t.Fatalf("accepted non-public or non-single-label Azure OpenAI Realtime host %q", normalized)
 		}
 	})

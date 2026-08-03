@@ -45,6 +45,17 @@ func TestAzureVoiceLiveBoundarySeparatesModelReadsFromAgentMutations(t *testing.
 
 	for name, mutate := range map[string]func(*Invocation){
 		"wrong host":          func(value *Invocation) { value.URL = "wss://example.com/voice-live/realtime" },
+		"nested Foundry host": func(value *Invocation) { value.URL = "wss://nested.demo.services.ai.azure.com/voice-live/realtime" },
+		"nested legacy host": func(value *Invocation) {
+			value.URL = "wss://nested.demo.cognitiveservices.azure.com/voice-live/realtime"
+		},
+		"private-link Foundry": func(value *Invocation) { value.URL = "wss://privatelink.services.ai.azure.com/voice-live/realtime" },
+		"private-link legacy": func(value *Invocation) {
+			value.URL = "wss://privatelink.cognitiveservices.azure.com/voice-live/realtime"
+		},
+		"government Foundry":  func(value *Invocation) { value.URL = "wss://demo.services.ai.azure.us/voice-live/realtime" },
+		"government legacy":   func(value *Invocation) { value.URL = "wss://demo.cognitiveservices.azure.us/voice-live/realtime" },
+		"China legacy":        func(value *Invocation) { value.URL = "wss://demo.cognitiveservices.azure.cn/voice-live/realtime" },
 		"wrong path":          func(value *Invocation) { value.URL = "wss://demo.services.ai.azure.com/openai/v1/realtime" },
 		"inline query":        func(value *Invocation) { value.URL += "?api-version=caller" },
 		"missing api version": func(value *Invocation) { delete(value.Parameters, "api-version") },
@@ -155,5 +166,35 @@ func FuzzAzureVoiceLiveClientEventNeverPanics(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		events := &azureRealtimeEvents{}
 		_ = events.add(data)
+	})
+}
+
+func FuzzAzureVoiceLiveHostNeverEscapesPublicCloud(f *testing.F) {
+	for _, seed := range []string{
+		"demo.services.ai.azure.com",
+		"demo.cognitiveservices.azure.com",
+		"nested.demo.services.ai.azure.com",
+		"demo.services.ai.azure.us",
+		"demo.cognitiveservices.azure.cn",
+		"privatelink.services.ai.azure.com",
+		"privatelink.cognitiveservices.azure.com",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, host string) {
+		normalized := strings.ToLower(host)
+		if !azureVoiceLiveHost(normalized) {
+			return
+		}
+		valid := false
+		for _, suffix := range []string{".services.ai.azure.com", ".cognitiveservices.azure.com"} {
+			resource := strings.TrimSuffix(normalized, suffix)
+			if resource != normalized && resource != "privatelink" && endpointLabelPattern.MatchString(resource) {
+				valid = true
+			}
+		}
+		if !valid {
+			t.Fatalf("accepted non-public or non-single-label Azure Voice Live host %q", normalized)
+		}
 	})
 }

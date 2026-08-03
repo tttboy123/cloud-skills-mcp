@@ -145,11 +145,15 @@ remain available through the guarded resource gateway.
   `put`/`patch` and optional `keep-alive` events are atomically published;
   `cancel`, `auth_revoked`, malformed/unknown/credential-bearing events, and
   reserved `.settings` paths fail closed without publishing a partial file.
-- Azure Voice Live uses the bounded realtime event engine on exact Foundry or
-  legacy Speech WSS endpoints, selects the documented Entra scope from the
-  host, keeps model calls read-only, and forces configured Agent sessions
-  through mutation approval. Avatar WebRTC is excluded because it returns
-  media-plane ICE credentials; such events fail before atomic output.
+- Azure Voice Live uses the bounded realtime event engine on exact single-label
+  public Foundry or legacy Speech WSS endpoints, selects the documented Entra
+  scope from the host, keeps model calls read-only, and forces configured Agent
+  sessions through mutation approval. The official sovereign-cloud tables mark
+  Voice Live unsupported in both Azure Government and China; sovereign,
+  nested, direct private-DNS-zone, custom, and lookalike hosts fail before token
+  resolution. Normal public resource names can still resolve through Azure
+  Private Link inside the operator VNet. Avatar WebRTC is excluded because it
+  returns media-plane ICE credentials; such events fail before atomic output.
 - Azure Web PubSub JSON/Protobuf WSS accepts only a public-cloud resource endpoint and
   the exact hub path. It obtains an Entra token, calls the fixed five-minute
   Generate Client Token API internally, keeps both tokens out of MCP, requires
@@ -198,12 +202,13 @@ remain available through the guarded resource gateway.
   custom/lookalike, and retired Germany hosts fail closed.
 - Azure OpenAI Realtime accepts only the current official public-cloud
   single-label `<resource>.openai.azure.com` WSS host. Its Entra token remains
-  internal, and guessed Azure Government/China, nested, private-link, custom,
-  or lookalike endpoints fail before credential resolution. The Government
-  model page states that its list includes all Azure OpenAI models offered there
-  and lists no Realtime model; Microsoft publishes no China Foundry Realtime
-  endpoint contract, so these sovereign transports are recorded as unavailable
-  rather than synthesized from generic cloud suffixes.
+  internal, and guessed Azure Government/China, nested, direct private-DNS-zone,
+  custom, or lookalike endpoints fail before credential resolution. Normal
+  public resource names remain compatible with private DNS resolution. The
+  Government model page states that its list includes all Azure OpenAI models
+  offered there and lists no Realtime model; Microsoft publishes no China
+  Foundry Realtime endpoint contract, so these sovereign transports are
+  recorded as unavailable rather than synthesized from generic cloud suffixes.
 - Service Bus exposes bounded queue/topic/subscription send, schedule/cancel,
   peek, receive, deferred-message and session-state operations. Only peek is
   read-only. ReceiveAndDelete and every PeekLock settlement require mutation

@@ -54,7 +54,7 @@ func validateAzureRealtimeWebSocketInvocation(invocation Invocation) error {
 	host := strings.ToLower(target.Hostname())
 	const publicRealtimeSuffix = ".openai.azure.com"
 	resource := strings.TrimSuffix(host, publicRealtimeSuffix)
-	if resource == host || !endpointLabelPattern.MatchString(resource) {
+	if resource == host || resource == "privatelink" || !endpointLabelPattern.MatchString(resource) {
 		return fmt.Errorf("Azure OpenAI Realtime WebSocket requires an exact public-cloud resource.openai.azure.com host")
 	}
 	switch target.EscapedPath() {
@@ -110,7 +110,7 @@ func validateAzureVoiceLiveWebSocketInvocation(invocation Invocation) error {
 	}
 	host := strings.ToLower(target.Hostname())
 	if !azureVoiceLiveHost(host) {
-		return fmt.Errorf("Azure Voice Live requires an official Foundry or Cognitive Services host")
+		return fmt.Errorf("Azure Voice Live requires an exact public-cloud single-label Foundry or Cognitive Services host")
 	}
 	values, err := azureRealtimeStringParameters(invocation.Parameters, map[string]bool{"api-version": true, "model": true, "agent_id": true, "project_id": true})
 	if err != nil || values["api-version"] == "" || !apiVersionPattern.MatchString(values["api-version"]) {
@@ -151,7 +151,7 @@ func validateAzureVoiceLiveWebSocketInvocation(invocation Invocation) error {
 func azureVoiceLiveHost(host string) bool {
 	for _, suffix := range []string{".services.ai.azure.com", ".cognitiveservices.azure.com"} {
 		prefix := strings.TrimSuffix(host, suffix)
-		if prefix != host && endpointLabelPattern.MatchString(prefix) {
+		if prefix != host && prefix != "privatelink" && endpointLabelPattern.MatchString(prefix) {
 			return true
 		}
 	}
