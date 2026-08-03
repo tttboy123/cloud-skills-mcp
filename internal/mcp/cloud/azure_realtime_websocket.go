@@ -16,7 +16,10 @@ import (
 	"github.com/coder/websocket"
 )
 
-const authSchemeAzureRealtimeWS = "realtime-ws"
+const (
+	authSchemeAzureRealtimeWS  = "realtime-ws"
+	authSchemeAzureVoiceLiveWS = "voice-live-ws"
+)
 
 const maxAzureRealtimeEvents = 65536
 
@@ -30,6 +33,9 @@ type azureRealtimeEvents struct {
 }
 
 func validateAzureRealtimeWebSocketInvocation(invocation Invocation) error {
+	if normalizedAuthScheme(invocation.AuthScheme, "") == authSchemeAzureVoiceLiveWS {
+		return validateAzureVoiceLiveWebSocketInvocation(invocation)
+	}
 	if !strings.EqualFold(invocation.Method, http.MethodGet) {
 		return fmt.Errorf("Azure OpenAI Realtime WebSocket requires method GET for the HTTP upgrade")
 	}
@@ -77,6 +83,77 @@ func validateAzureRealtimeWebSocketInvocation(invocation Invocation) error {
 		return fmt.Errorf("Azure OpenAI Realtime WebSocket does not accept REST, cross-provider, chunk-size, or provider-specific controls")
 	}
 	return nil
+}
+
+func validateAzureVoiceLiveWebSocketInvocation(invocation Invocation) error {
+	if !strings.EqualFold(invocation.Method, http.MethodGet) || !strings.EqualFold(invocation.Service, "voice-live") {
+		return fmt.Errorf("Azure Voice Live WebSocket requires method GET and service voice-live")
+	}
+	operation := strings.ToLower(strings.TrimSpace(invocation.Operation))
+	switch operation {
+	case "voiceliveresponse", "voicelivetranscription", "voicelivesession":
+		if invocation.Mode != ModeRead {
+			return fmt.Errorf("Azure Voice Live model sessions require the read tool")
+		}
+	case "voiceliveagentsession":
+		if invocation.Mode != ModeMutate {
+			return fmt.Errorf("Azure Voice Live Agent sessions require the mutate tool")
+		}
+	default:
+		return fmt.Errorf("Azure Voice Live operation must be VoiceLiveResponse, VoiceLiveTranscription, VoiceLiveSession, or VoiceLiveAgentSession")
+	}
+	target, err := url.Parse(invocation.URL)
+	if err != nil || !strings.EqualFold(target.Scheme, "wss") || target.User != nil || target.Fragment != "" || target.RawQuery != "" || target.Port() != "" || target.EscapedPath() != "/voice-live/realtime" {
+		return fmt.Errorf("Azure Voice Live requires the exact official query-free WSS endpoint")
+	}
+	host := strings.ToLower(target.Hostname())
+	if !azureVoiceLiveHost(host) {
+		return fmt.Errorf("Azure Voice Live requires an official Foundry or Cognitive Services host")
+	}
+	values, err := azureRealtimeStringParameters(invocation.Parameters, map[string]bool{"api-version": true, "model": true, "agent_id": true, "project_id": true})
+	if err != nil || values["api-version"] == "" || !apiVersionPattern.MatchString(values["api-version"]) {
+		return fmt.Errorf("Azure Voice Live requires one valid api-version query parameter")
+	}
+	modelMode := values["model"] != "" && values["agent_id"] == "" && values["project_id"] == ""
+	agentMode := values["model"] == "" && values["agent_id"] != "" && values["project_id"] != ""
+	if !modelMode && !agentMode {
+		return fmt.Errorf("Azure Voice Live requires exactly model or the agent_id/project_id pair")
+	}
+	if (operation == "voiceliveagentsession") != agentMode {
+		return fmt.Errorf("Azure Voice Live Agent operation and query parameters must agree")
+	}
+	if (invocation.Body == nil) == (invocation.BodyFile == "") {
+		return fmt.Errorf("Azure Voice Live requires exactly one of body or NDJSON body_file")
+	}
+	if invocation.Body != nil && azureRealtimeContainsCredentialField(invocation.Body) {
+		return fmt.Errorf("Azure Voice Live events cannot contain credential fields")
+	}
+	if invocation.ResponseFile == "" || len(invocation.Headers) != 0 {
+		return fmt.Errorf("Azure Voice Live requires response_file and forbids caller handshake headers")
+	}
+	if invocation.Region != "" || invocation.Project != "" || invocation.Subscription != "" || invocation.Audience != "" || invocation.APIVersion != "" || invocation.AuthVersion != "" || invocation.PayloadMode != "" || invocation.ChecksumAlgorithm != "" || invocation.StreamChunkBytes != 0 || invocation.StreamUserID != "" || invocation.StreamFormat != 0 {
+		return fmt.Errorf("Azure Voice Live does not accept REST, cross-provider, chunk-size, or provider-specific controls")
+	}
+	if invocation.Body != nil {
+		events, err := loadAzureRealtimeEvents(invocation)
+		if err != nil {
+			return err
+		}
+		if err := validateAzureRealtimeEventIntent(invocation, events); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func azureVoiceLiveHost(host string) bool {
+	for _, suffix := range []string{".services.ai.azure.com", ".cognitiveservices.azure.com"} {
+		prefix := strings.TrimSuffix(host, suffix)
+		if prefix != host && endpointLabelPattern.MatchString(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateAzureRealtimeGAParameters(parameters map[string]any) error {
@@ -221,7 +298,7 @@ func azureRealtimeContainsCredentialField(value any) bool {
 	case map[string]any:
 		for name, child := range typed {
 			normalized := normalizedOperation(name)
-			if normalized == "authorization" || normalized == "apikey" || normalized == "accesstoken" || normalized == "bearertoken" || normalized == "clientsecret" {
+			if normalized == "authorization" || normalized == "apikey" || normalized == "accesstoken" || normalized == "bearertoken" || normalized == "clientsecret" || normalized == "credential" || normalized == "sessiontoken" {
 				return true
 			}
 			if azureRealtimeContainsCredentialField(child) {
@@ -246,7 +323,10 @@ func invokeAzureRealtimeWebSocket(ctx context.Context, adapter *AzureRESTAdapter
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	token, err := adapter.config.Tokens.Token(ctx, "https://ai.azure.com/.default")
+	if err := validateAzureRealtimeEventIntent(invocation, events); err != nil {
+		return InvocationResult{}, err
+	}
+	token, err := adapter.config.Tokens.Token(ctx, azureRealtimeTokenScope(invocation))
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("load Azure OpenAI Realtime identity token: %w", err)
 	}
@@ -290,6 +370,34 @@ func invokeAzureRealtimeWebSocket(ctx context.Context, adapter *AzureRESTAdapter
 	return InvocationResult{Output: output, RequestID: requestID}, nil
 }
 
+func azureRealtimeTokenScope(invocation Invocation) string {
+	if normalizedAuthScheme(invocation.AuthScheme, "") == authSchemeAzureVoiceLiveWS {
+		target, _ := url.Parse(invocation.URL)
+		if strings.HasSuffix(strings.ToLower(target.Hostname()), ".cognitiveservices.azure.com") {
+			return "https://cognitiveservices.azure.com/.default"
+		}
+	}
+	return "https://ai.azure.com/.default"
+}
+
+func validateAzureRealtimeEventIntent(invocation Invocation, events azureRealtimeEvents) error {
+	switch strings.ToLower(strings.TrimSpace(invocation.Operation)) {
+	case "realtimeresponse", "voiceliveresponse", "voiceliveagentsession":
+		if events.responseCreates == 0 {
+			return fmt.Errorf("Azure realtime response session requires response.create")
+		}
+	case "realtimetranscription", "voicelivetranscription":
+		if events.transcriptionCommits == 0 {
+			return fmt.Errorf("Azure realtime transcription session requires input_audio_buffer.commit")
+		}
+	case "realtimesession", "voicelivesession":
+		if events.sessionUpdates == 0 {
+			return fmt.Errorf("Azure realtime session requires session.update")
+		}
+	}
+	return nil
+}
+
 func readAzureRealtimeEvents(ctx context.Context, connection cloudWebSocketConnection, sink *cloudWebSocketOutputSink, expected azureRealtimeEvents) (string, error) {
 	responsesDone, transcriptionsDone, sessionsUpdated := 0, 0, 0
 	requestID := ""
@@ -311,6 +419,9 @@ func readAzureRealtimeEvents(ctx context.Context, connection cloudWebSocketConne
 		}
 		if eventType == "error" || eventType == "conversation.item.input_audio_transcription.failed" {
 			return requestID, fmt.Errorf("Azure OpenAI Realtime returned a failed event")
+		}
+		if azureRealtimeContainsCredentialField(event) {
+			return requestID, fmt.Errorf("Azure realtime service returned a credential-bearing event")
 		}
 		if eventID, ok := event["event_id"].(string); ok && eventID != "" {
 			requestID = eventID

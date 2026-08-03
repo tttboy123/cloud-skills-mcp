@@ -87,7 +87,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-json-protobuf-reliable+mqtt5",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -99,6 +99,7 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"rest_api_reference": "https://learn.microsoft.com/en-us/rest/api/azure/",
 		"authentication":     "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
 		"openai_realtime":    "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
+		"voice_live":         "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to",
 		"webpubsub_protocol": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
 		"webpubsub_reliable": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
 		"webpubsub_mqtt":     "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-connect-mqtt-websocket-client",
@@ -110,6 +111,9 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureRealtimeWS {
 		return invokeAzureRealtimeWebSocket(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureVoiceLiveWS {
+		return invokeAzureRealtimeWebSocket(ctx, adapter, request)
+	}
 	if scheme == authSchemeAzureWebPubSubWS {
 		return invokeAzureWebPubSub(ctx, adapter, request)
 	}
@@ -117,7 +121,7 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 		return invokeAzureWebPubSubMQTT(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {
