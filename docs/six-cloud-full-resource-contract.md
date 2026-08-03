@@ -46,7 +46,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 |---|---|---|
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime, Voice Live, and Entra-backed Web PubSub standard/reliable JSON/Protobuf and MQTT 3.1.1/5.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
-| Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, and bounded Vertex/Gemini Live WSS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
+| Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
 | Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token; RTC product license is server-only entitlement material |
@@ -136,6 +136,15 @@ remain available through the guarded resource gateway.
   memory and replaying only unacknowledged buffered messages. Caller-supplied
   handles are rejected, `newHandle` is stripped from output, and validated
   server JSON is published atomically. Paid stateful sessions are mutation-only.
+- Google Cloud Firebase Realtime Database SSE accepts only the three official
+  database URL forms and a `.json` data path, obtains a service-account token
+  from ADC with the documented `firebase.database` and `userinfo.email` scopes,
+  and places it only in the Authorization header. It manually follows at most
+  three provider-required 307 responses, revalidating the official hostname and
+  preserving the exact path/query before credential reuse. Only bounded
+  `put`/`patch` and optional `keep-alive` events are atomically published;
+  `cancel`, `auth_revoked`, malformed/unknown/credential-bearing events, and
+  reserved `.settings` paths fail closed without publishing a partial file.
 - Azure Voice Live uses the bounded realtime event engine on exact Foundry or
   legacy Speech WSS endpoints, selects the documented Entra scope from the
   host, keeps model calls read-only, and forces configured Agent sessions

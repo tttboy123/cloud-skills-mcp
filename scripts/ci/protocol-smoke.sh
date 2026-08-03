@@ -24,6 +24,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"baiducloud_api_read","arguments":{"method":"GET","url":"https://bts.bj.baidubce.com/v1/forms","auth_version":"v2","service":"bts"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"aws_api_mutate","arguments":{"service":"sts","operation":"assume-role","force":true}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"cloud_provider_status","arguments":{"provider":"aws"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"auth_scheme":"firebase-sse","service":"firebase-database","operation":"Listen","method":"GET","url":"https://demo.firebaseio.com.attacker.example/messages.json","body":{"max_events":1,"timeout_seconds":5},"response_file":"/tmp/events.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -47,7 +48,9 @@ jq -e -s '
     (map(select(.id == 8))[0].result.content[0].text | contains("requires a valid region")) and
     (map(select(.id == 9))[0].result.isError == true) and
     (map(select(.id == 9))[0].result.content[0].text | contains("credential issuance")) and
-    ((map(select(.id == 10))[0].result.content[0].text | fromjson).credential_status == "unverified")
+    ((map(select(.id == 10))[0].result.content[0].text | fromjson).credential_status == "unverified") and
+    (map(select(.id == 11))[0].result.isError == true) and
+    (map(select(.id == 11))[0].result.content[0].text | contains("official Realtime Database host"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

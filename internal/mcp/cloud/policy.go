@@ -66,6 +66,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 			return false
 		}
 	case ProviderGCP:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeGCPFirebaseSSE {
+			return strings.EqualFold(strings.TrimSpace(request.Operation), "Listen")
+		}
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeGCPVertexLiveWS {
 			return false
 		}
@@ -189,6 +192,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	alibabaNLSRESTScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSREST
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
+	gcpFirebaseSSEScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPFirebaseSSE
 	gcpVertexLiveWebSocketScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPVertexLiveWS
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	azureVoiceLiveScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureVoiceLiveWS
@@ -276,6 +280,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				return err
 			}
 		}
+	} else if gcpFirebaseSSEScheme {
+		if err := validateFirebaseSSEInvocation(request); err != nil {
+			return err
+		}
 	} else if gcpGRPCScheme {
 		if err := validateGCPGRPCInvocation(request, allowedEndpointHosts); err != nil {
 			return err
@@ -315,8 +323,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
 		}
 	case ProviderGCP:
-		if gcpScheme != "" && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
-			return fmt.Errorf("Google Cloud auth_scheme must be grpc, vertex-live-ws, or omitted for REST")
+		if gcpScheme != "" && gcpScheme != authSchemeGCPFirebaseSSE && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
+			return fmt.Errorf("Google Cloud auth_scheme must be firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 		}
 	case ProviderBaidu:
 		if baiduScheme != "" && baiduScheme != authSchemeBaiduRTCAgentWS {

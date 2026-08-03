@@ -19,7 +19,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime、Voice Live WSS + Web PubSub 标准/可靠 JSON/Protobuf 与 MQTT 3.1.1/5.0 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
-| Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
+| Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS + Firebase Realtime Database SSE | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2；RTC AI Agent 由 BCE v1 控制面创建后用内部实例 token 建立 raw/raw16k/PCMA/PCMU/G.722/Opus 双工 WSS | BCE AK/SK、IAM/STS temporary AK/SK/session token；RTC 产品 license 仅由 server 环境注入 |
@@ -30,7 +30,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 - 写操作必须同时满足宿主已取得人类批准、server 环境设置 `CLOUD_SKILLS_ALLOW_MUTATIONS=1`、单次调用包含 `force=true`。
 - secret/password/token/credential/access-key 类操作还要求 `CLOUD_SKILLS_ALLOW_SENSITIVE=1`。
 - 所有六云请求都由进程内 HTTP adapter 构造和签名；统一 Server 不执行 `aws`、`az`、`gcloud`、`aliyun` 或 `tccli`。
-- REST 只允许官方 HTTPS 域名、443 端口且禁止 redirect；调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。Azure 非常见数据面可提供公开的 Entra `audience` 标识，但不能提供 token。
+- REST 只允许官方 HTTPS 域名和 443 端口；通用调用禁止 redirect。Firebase SSE 仅按官方要求手动接受最多三次 307，且每一跳仍须是 Firebase Database 官方域名并保持数据库路径和查询不变。调用方不能提供 Authorization、API key、cookie、SAS/signed URL 或 session-token 参数。Azure 非常见数据面可提供公开的 Entra `audience` 标识，但不能提供 token。
 - 新发布且尚未进入内置域名表的官方 endpoint，只能由 operator 通过 `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` 追加逗号分隔的精确 hostname；不接受 URL、端口、子域 wildcard 或 MCP 参数。
 - 六云数据面上传均可使用 `body_file`；本地文件只允许位于 `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` 下，且会解析 symlink 后再判断。单文件默认上限 64 MiB，更大对象使用厂商 multipart/chunk API。
 - 六云成功响应均可使用 `response_file` 流式写入批准目录中的新文件，正文不会进入 MCP/模型上下文。目标文件绝不覆盖，临时文件以 mode `0600` 写完并同步后才原子发布；默认单次上限 1 GiB，可用 `CLOUD_SKILLS_MAX_RESPONSE_FILE_BYTES` 收紧或调大，更大对象使用厂商 `Range` API 分段下载。
@@ -244,6 +244,14 @@ GCP 查询：
 ```json
 {"name":"gcp_api_read","arguments":{"method":"GET","url":"https://compute.googleapis.com/compute/v1/projects/<project>/aggregated/instances","project":"<project>"}}
 ```
+
+Firebase Realtime Database 的长连接读取使用 `auth_scheme=firebase-sse`。server 通过 ADC 单独请求官方要求的 `firebase.database` 与 `userinfo.email` scopes，把 Bearer token 只放在内部 Authorization header，并把有限 `put`/`patch` 事件原子写入 NDJSON。仅接受官方 `firebaseio.com`、`europe-west1.firebasedatabase.app` 和 `asia-southeast1.firebasedatabase.app` 数据库 URL；调用方不能提供 `auth`、`access_token`、header 或内联 query：
+
+```json
+{"name":"gcp_api_read","arguments":{"auth_scheme":"firebase-sse","service":"firebase-database","operation":"Listen","method":"GET","url":"https://<database>.europe-west1.firebasedatabase.app/messages.json","parameters":{"orderBy":"\"createdAt\"","limitToLast":10},"body":{"max_events":32,"timeout_seconds":30},"response_file":"/approved/results/firebase-events.ndjson"}}
+```
+
+`max_events` 为 1–256，`timeout_seconds` 为 1–300；可选 `include_keep_alive=true` 会把 provider keep-alive 也写入并计数。`cancel`、`auth_revoked`、未知/超限事件和凭证形态的数据会使整个临时输出失败且不发布目标文件。保留的 `.settings` 路径不通过该流式入口暴露。
 
 GCP 没有 REST transcoding 的 gRPC 方法使用 `auth_scheme=grpc`，仍然是 server 直接发起官方 HTTP/2 Request，不调用 `gcloud`、`grpcurl`、`protoc` 或其他 CLI。原始模式的 `body_file` 是由官方 protobuf schema 编码的一条或多条消息，每条前面添加标准的 `0x00 + 4-byte big-endian length`；`response_file` 保存校验过 framing 且 `grpc-status=0` 的原始 framed protobuf，成功前不会发布目标文件：
 

@@ -343,7 +343,9 @@ type HTTPDoer interface {
 
 type GCPRESTConfig struct {
 	Tokens                  TokenProvider
+	FirebaseTokens          TokenProvider
 	HTTP                    HTTPDoer
+	FirebaseHTTP            HTTPDoer
 	GRPCHTTP                HTTPDoer
 	VertexLiveWebSocketDial gcpVertexLiveWebSocketDial
 	MaxBodyBytes            int64
@@ -361,13 +363,33 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 	if config.Timeout <= 0 {
 		config.Timeout = 60 * time.Second
 	}
+	customTokens := config.Tokens != nil
 	if config.Tokens == nil {
 		config.Tokens = &gcpADCTokenProvider{detect: detectDefaultGoogleCredentials}
+	}
+	if config.FirebaseTokens == nil {
+		if customTokens {
+			config.FirebaseTokens = config.Tokens
+		} else {
+			config.FirebaseTokens = &gcpADCTokenProvider{
+				detectScopes: detectGoogleCredentialsWithScopes,
+				scopes:       []string{gcpFirebaseDatabaseScope, gcpUserInfoEmailScope},
+			}
+		}
 	}
 	if config.HTTP == nil {
 		config.HTTP = &http.Client{
 			Timeout:       config.Timeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		}
+	}
+	if config.FirebaseHTTP == nil {
+		if customHTTP {
+			config.FirebaseHTTP = config.HTTP
+		} else {
+			config.FirebaseHTTP = &http.Client{
+				CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+			}
 		}
 	}
 	if config.GRPCHTTP == nil {
@@ -393,13 +415,21 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 
 func (adapter *GCPRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC/WSS + ADC",
-		Version: "google-auth/v0.22+grpc-http2+grpc-protojson+vertex-live-ws", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
+		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC/WSS/SSE + ADC",
+		Version: "google-auth/v0.22+grpc-http2+grpc-protojson+vertex-live-ws+firebase-sse", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through ADC; no gcloud subprocess fallback exists",
 	}, nil
 }
 
 func (adapter *GCPRESTAdapter) Discover(ctx context.Context, request DiscoveryRequest) ([]byte, error) {
+	if strings.EqualFold(request.Service, "firebase-database") {
+		return json.Marshal(map[string]string{
+			"rest_streaming": "https://firebase.google.com/docs/database/rest/retrieve-data#section-rest-streaming",
+			"authentication": "https://firebase.google.com/docs/database/rest/auth",
+			"locations":      "https://firebase.google.com/docs/database/locations",
+			"limits":         "https://firebase.google.com/docs/database/usage/limits",
+		})
+	}
 	url := "https://www.googleapis.com/discovery/v1/apis"
 	if request.Service != "" {
 		version := request.Operation
@@ -421,6 +451,9 @@ func (adapter *GCPRESTAdapter) Discover(ctx context.Context, request DiscoveryRe
 
 func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(request.AuthScheme, "")
+	if scheme == authSchemeGCPFirebaseSSE {
+		return invokeGCPFirebaseSSE(ctx, adapter, request)
+	}
 	if scheme == authSchemeGCPVertexLiveWS {
 		return invokeGCPVertexLiveWebSocket(ctx, adapter, request)
 	}
@@ -428,7 +461,7 @@ func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (
 		return invokeGCPGRPC(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Google Cloud auth_scheme must be grpc, vertex-live-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Google Cloud auth_scheme must be firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 	}
 	if err := validateRESTTargetWithEndpointHosts(ProviderGCP, request.Method, request.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
@@ -481,10 +514,12 @@ type googleAuthTokenSource interface {
 }
 
 type gcpADCTokenProvider struct {
-	detect func(context.Context) (googleAuthTokenSource, error)
-	once   sync.Once
-	source googleAuthTokenSource
-	err    error
+	detect       func(context.Context) (googleAuthTokenSource, error)
+	detectScopes func(context.Context, []string) (googleAuthTokenSource, error)
+	scopes       []string
+	once         sync.Once
+	source       googleAuthTokenSource
+	err          error
 }
 
 func detectDefaultGoogleCredentials(context.Context) (googleAuthTokenSource, error) {
@@ -493,9 +528,19 @@ func detectDefaultGoogleCredentials(context.Context) (googleAuthTokenSource, err
 	})
 }
 
+func detectGoogleCredentialsWithScopes(_ context.Context, scopes []string) (googleAuthTokenSource, error) {
+	return googlecredentials.DetectDefault(&googlecredentials.DetectOptions{Scopes: append([]string(nil), scopes...)})
+}
+
 func (provider *gcpADCTokenProvider) Token(ctx context.Context) (string, error) {
 	provider.once.Do(func() {
-		provider.source, provider.err = provider.detect(ctx)
+		if len(provider.scopes) > 0 && provider.detectScopes != nil {
+			provider.source, provider.err = provider.detectScopes(ctx, append([]string(nil), provider.scopes...))
+		} else if provider.detect != nil {
+			provider.source, provider.err = provider.detect(ctx)
+		} else {
+			provider.err = fmt.Errorf("Google Cloud ADC detector is not configured")
+		}
 	})
 	if provider.err != nil {
 		return "", fmt.Errorf("detect Google Cloud Application Default Credentials: %w", provider.err)
@@ -603,7 +648,7 @@ func streamRESTResponseToFile(response *http.Response, responseFile string, maxB
 }
 
 func responseRequestID(headers http.Header) string {
-	for _, name := range []string{"X-Request-Id", "X-Ms-Request-Id", "X-Goog-Request-Id", "X-Cloud-Trace-Context", "X-Bce-Request-Id", "X-NLS-RequestId", "Request-Id"} {
+	for _, name := range []string{"X-Request-Id", "X-Ms-Request-Id", "X-Goog-Request-Id", "X-Firebase-Request-Id", "X-Cloud-Trace-Context", "X-Bce-Request-Id", "X-NLS-RequestId", "Request-Id"} {
 		if value := headers.Get(name); value != "" {
 			return value
 		}
