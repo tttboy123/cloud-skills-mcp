@@ -388,6 +388,14 @@ Real cloud acceptance remains pending the explicit
 `TestLiveBaiduIoTCoreHTTPPubMutation` gate with an operator-bound IAM
 application and disposable topic; no live success is inferred from hermetic
 HTTP or signature tests.
+Implementation commit `1a5a9dd6416c09278d2c0868d74d76601249c10d`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck, and
+four-platform release verification in
+[CI run 30846516291](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30846516291).
+Fresh local module verification, formatting, vet, race coverage (80.1%), build,
+protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
+govulncheck, four-platform archives, and a ten-second HTTP endpoint/plan fuzz
+run (244,437 executions) also passed.
 
 ## Live acceptance command
 
