@@ -168,7 +168,7 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 
 func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and guarded WSS", Version: "sigv4+sigv4a+sigv4-ws+connect-health-ws+transcribe-ws+iot-mqtt-ws+appsync-event-ws+appsync-graphql-ws",
+		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and guarded WSS", Version: "sigv4+sigv4a+sigv4-ws+connect-health-ws+transcribe-ws+iot-mqtt-ws+kinesisvideo-signaling-ws+appsync-event-ws+appsync-graphql-ws",
 		CredentialSource: credentialSource(ProviderAWS), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the AWS SDK credential chain; no cloud CLI is executed",
 	}, nil
@@ -176,26 +176,27 @@ func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 
 func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
 	return json.Marshal(map[string]string{
-		"api_reference":        "https://docs.aws.amazon.com/index.html#lang/en_us",
-		"authentication":       "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
-		"sigv4a":               "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html",
-		"transcribe_websocket": "https://docs.aws.amazon.com/transcribe/latest/dg/streaming-setting-up.html",
-		"iot_mqtt_websocket":   "https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html",
-		"appsync_event_ws":     "https://docs.aws.amazon.com/appsync/latest/eventapi/event-api-websocket-protocol.html",
-		"appsync_graphql_ws":   "https://docs.aws.amazon.com/appsync/latest/devguide/real-time-websocket-client.html",
-		"sigv4_websocket":      "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
-		"agentcore_websocket":  "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-websocket.html",
-		"blockchain_websocket": "https://docs.aws.amazon.com/managed-blockchain/latest/ethereum-dev/json-rpc-api-examples.html",
-		"connect_health_ws":    "https://docs.aws.amazon.com/connecthealth/latest/userguide/ambient-documentation.html",
+		"api_reference":                    "https://docs.aws.amazon.com/index.html#lang/en_us",
+		"authentication":                   "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
+		"sigv4a":                           "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html",
+		"transcribe_websocket":             "https://docs.aws.amazon.com/transcribe/latest/dg/streaming-setting-up.html",
+		"iot_mqtt_websocket":               "https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html",
+		"kinesisvideo_signaling_websocket": "https://docs.aws.amazon.com/kinesisvideostreams-webrtc-dg/latest/devguide/kvswebrtc-websocket-apis.html",
+		"appsync_event_ws":                 "https://docs.aws.amazon.com/appsync/latest/eventapi/event-api-websocket-protocol.html",
+		"appsync_graphql_ws":               "https://docs.aws.amazon.com/appsync/latest/devguide/real-time-websocket-client.html",
+		"sigv4_websocket":                  "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html",
+		"agentcore_websocket":              "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-websocket.html",
+		"blockchain_websocket":             "https://docs.aws.amazon.com/managed-blockchain/latest/ethereum-dev/json-rpc-api-examples.html",
+		"connect_health_ws":                "https://docs.aws.amazon.com/connecthealth/latest/userguide/ambient-documentation.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
-	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, or appsync-graphql-ws")
 	}
-	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS {
+	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS {
 		var validationErr error
 		switch scheme {
 		case authSchemeAWSSigV4WS:
@@ -206,6 +207,8 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			validationErr = validateAWSTranscribeWebSocketInvocation(invocation)
 		case authSchemeAWSIoTMQTTWS:
 			validationErr = validateAWSIoTMQTTWebSocketInvocation(invocation, adapter.config.AllowedHosts)
+		case authSchemeAWSKinesisVideoSignalingWS:
+			validationErr = validateAWSKinesisVideoSignalingInvocation(invocation)
 		case authSchemeAWSAppSyncEventWS:
 			validationErr = validateAWSAppSyncEventWebSocketInvocation(invocation, adapter.config.AllowedHosts)
 		case authSchemeAWSAppSyncGraphQLWS:
@@ -232,6 +235,9 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 		}
 		if scheme == authSchemeAWSIoTMQTTWS {
 			return invokeAWSIoTMQTTWebSocket(ctx, adapter, credentials, invocation)
+		}
+		if scheme == authSchemeAWSKinesisVideoSignalingWS {
+			return invokeAWSKinesisVideoSignalingWebSocket(ctx, adapter, credentials, invocation)
 		}
 		if scheme == authSchemeAWSAppSyncEventWS {
 			return invokeAWSAppSyncEventWebSocket(ctx, adapter, credentials, invocation)

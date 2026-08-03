@@ -106,6 +106,13 @@ remain available through the guarded resource gateway.
   honors broker keepalive, and atomically publishes Base64 NDJSON. Persistent
   sessions, subscription identifiers, QoS 2 and caller-provided handshake
   material are excluded; publishing remains available through signed HTTPS.
+- AWS Kinesis Video WebRTC Signaling WSS accepts exact provider-generated
+  endpoints and mutation-only `ConnectAsMaster|ConnectAsViewer` plans. It keeps
+  the 299-second SigV4 query, Channel ARN, Viewer ID and STS token internal;
+  validates role-scoped SDP/ICE JSON, paces the official message quota,
+  correlates asynchronous status errors, and atomically publishes decoded
+  signaling events. Peer-to-peer RTP/media transport is not a cloud resource
+  API and remains outside the MCP server.
 - Generic AWS SigV4 WSS signs only exact official or operator-approved
   endpoints and allowed non-credential headers, keeps Authorization and STS
   tokens inside the Upgrade, accepts bounded JSON/text/Base64 client frames,
