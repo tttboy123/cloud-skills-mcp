@@ -55,6 +55,12 @@ different client. All OSS resource operations that do not require delegated
 authorization remain callable with the implemented V1/V4 Header signers,
 including PutObject and multipart upload operations behind the write gate.
 
+Azure Web PubSub standard/reliable JSON/Protobuf and MQTT clients follow the
+official Private Endpoint contract: callers always use the unchanged
+`<resource>.webpubsub.azure.com` URL and VNet DNS resolves it to the private
+address. Direct `privatelink.webpubsub.azure.com` or nested `privatelink`
+subdomain URLs are rejected before identity or client-token resolution.
+
 ## Explicit unavailable or credential-bound mappings
 
 - Alibaba Cloud Batch Compute is not an active API surface: Alibaba Cloud's

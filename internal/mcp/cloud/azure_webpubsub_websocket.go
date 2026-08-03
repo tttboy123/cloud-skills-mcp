@@ -25,7 +25,10 @@ const (
 	azureWebPubSubMaxTimeoutSeconds = 300
 )
 
-var azureWebPubSubHubPattern = regexp.MustCompile("^[A-Za-z][A-Za-z0-9_`,.\\[\\]]{0,127}$")
+var (
+	azureWebPubSubHubPattern      = regexp.MustCompile("^[A-Za-z][A-Za-z0-9_`,.\\[\\]]{0,127}$")
+	azureWebPubSubResourcePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`)
+)
 
 type azureWebPubSubWebSocketDial func(context.Context, string, http.Header) (cloudWebSocketConnection, error)
 
@@ -68,9 +71,8 @@ func parseAzureWebPubSubTarget(rawURL string) (*url.URL, string, error) {
 		return nil, "", fmt.Errorf("Azure Web PubSub requires an exact credential-free wss:// URL")
 	}
 	host := strings.ToLower(target.Hostname())
-	const suffix = ".webpubsub.azure.com"
-	resource := strings.TrimSuffix(host, suffix)
-	if resource == host || !endpointLabelPattern.MatchString(resource) || len(resource) < 3 || len(resource) > 63 {
+	_, validResource := azureWebPubSubResourceName(host)
+	if !validResource {
 		return nil, "", fmt.Errorf("Azure Web PubSub requires a resource.webpubsub.azure.com host")
 	}
 	const prefix = "/client/hubs/"
@@ -82,6 +84,12 @@ func parseAzureWebPubSubTarget(rawURL string) (*url.URL, string, error) {
 		return nil, "", fmt.Errorf("Azure Web PubSub requires one valid hub path segment")
 	}
 	return target, hub, nil
+}
+
+func azureWebPubSubResourceName(host string) (string, bool) {
+	const suffix = ".webpubsub.azure.com"
+	resource := strings.TrimSuffix(host, suffix)
+	return resource, resource != host && resource != "privatelink" && azureWebPubSubResourcePattern.MatchString(resource)
 }
 
 func parseAzureWebPubSubPlan(body any) (azureWebPubSubPlan, error) {

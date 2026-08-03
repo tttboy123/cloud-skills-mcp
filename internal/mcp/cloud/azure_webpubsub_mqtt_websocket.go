@@ -154,9 +154,8 @@ func parseAzureWebPubSubMQTTTarget(rawURL string) (*url.URL, string, error) {
 		return nil, "", fmt.Errorf("Azure Web PubSub MQTT requires an exact credential-free wss:// URL")
 	}
 	host := strings.ToLower(target.Hostname())
-	const suffix = ".webpubsub.azure.com"
-	resource := strings.TrimSuffix(host, suffix)
-	if resource == host || !endpointLabelPattern.MatchString(resource) || len(resource) < 3 || len(resource) > 63 {
+	_, validResource := azureWebPubSubResourceName(host)
+	if !validResource {
 		return nil, "", fmt.Errorf("Azure Web PubSub MQTT requires a resource.webpubsub.azure.com host")
 	}
 	const prefix = "/clients/mqtt/hubs/"

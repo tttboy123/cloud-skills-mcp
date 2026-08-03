@@ -154,8 +154,10 @@ remain available through the guarded resource gateway.
   resolution. Normal public resource names can still resolve through Azure
   Private Link inside the operator VNet. Avatar WebRTC is excluded because it
   returns media-plane ICE credentials; such events fail before atomic output.
-- Azure Web PubSub JSON/Protobuf WSS accepts only a public-cloud resource endpoint and
-  the exact hub path. It obtains an Entra token, calls the fixed five-minute
+- Azure Web PubSub JSON/Protobuf WSS accepts only a public-cloud resource
+  endpoint and the exact hub path. Private endpoints keep that public resource
+  URL and rely on VNet DNS; direct `privatelink` subdomain URLs are rejected.
+  It obtains an Entra token, calls the fixed five-minute
   Generate Client Token API internally, keeps both tokens out of MCP, requires
   the exact standard/reliable JSON or Protobuf subprotocol, bounds both
   directions, rejects failed protocol acknowledgements, and atomically
@@ -169,7 +171,8 @@ remain available through the guarded resource gateway.
   `ClientMQTT` entrypoints for MQTT 3.1.1 and 5.0. It accepts exact topics and
   alphanumeric client IDs, derives least-privilege join/send roles, mints a
   five-minute token with `clientType=MQTT`, and keeps it in the internal WSS
-  Authorization header. The state machine covers publish/subscribe QoS 0/1/2,
+  Authorization header. It uses the same public-name/private-DNS endpoint rule.
+  The state machine covers publish/subscribe QoS 0/1/2,
   duplicate-safe inbound QoS 2, persistent sessions up to Azure's documented
   30-second recovery guarantee, Last Will, MQTT 5 message/session properties,
   subscription identifiers, broker flow-control limits, keepalive, server and

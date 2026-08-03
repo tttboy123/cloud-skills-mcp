@@ -38,12 +38,14 @@ func TestAzureWebPubSubMQTTBoundaryAllowsOnlyFiniteReadSubscriptions(t *testing.
 		t.Fatalf("gateway rejected finite Azure MQTT subscription: %v", err)
 	}
 	for name, mutate := range map[string]func(*Invocation){
-		"wrong endpoint": func(value *Invocation) { value.URL = "wss://demo.webpubsub.azure.com/client/hubs/chat" },
-		"query":          func(value *Invocation) { value.URL += "?access_token=caller" },
-		"header":         func(value *Invocation) { value.Headers = map[string]string{"Authorization": "Bearer caller"} },
-		"client id":      func(value *Invocation) { value.Body.(map[string]any)["client_id"] = "observer-1" },
-		"keepalive low":  func(value *Invocation) { value.Body.(map[string]any)["keep_alive_seconds"] = 0 },
-		"keepalive high": func(value *Invocation) { value.Body.(map[string]any)["keep_alive_seconds"] = 181 },
+		"wrong endpoint":   func(value *Invocation) { value.URL = "wss://demo.webpubsub.azure.com/client/hubs/chat" },
+		"private-link URL": func(value *Invocation) { value.URL = "wss://privatelink.webpubsub.azure.com/clients/mqtt/hubs/chat" },
+		"numeric resource": func(value *Invocation) { value.URL = "wss://123.webpubsub.azure.com/clients/mqtt/hubs/chat" },
+		"query":            func(value *Invocation) { value.URL += "?access_token=caller" },
+		"header":           func(value *Invocation) { value.Headers = map[string]string{"Authorization": "Bearer caller"} },
+		"client id":        func(value *Invocation) { value.Body.(map[string]any)["client_id"] = "observer-1" },
+		"keepalive low":    func(value *Invocation) { value.Body.(map[string]any)["keep_alive_seconds"] = 0 },
+		"keepalive high":   func(value *Invocation) { value.Body.(map[string]any)["keep_alive_seconds"] = 181 },
 		"wildcard": func(value *Invocation) {
 			value.Body.(map[string]any)["subscriptions"] = []any{map[string]any{"topic_filter": "room/#", "qos": 1}}
 		},

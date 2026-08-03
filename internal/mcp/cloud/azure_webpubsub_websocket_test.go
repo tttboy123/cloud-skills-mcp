@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,17 +37,19 @@ func TestAzureWebPubSubBoundaryRequiresExactEntraBackedProtocol(t *testing.T) {
 		t.Fatal("Web PubSub session was classified read-only")
 	}
 	for name, mutate := range map[string]func(*Invocation){
-		"post":            func(v *Invocation) { v.Method = http.MethodPost },
-		"service":         func(v *Invocation) { v.Service = "signalr" },
-		"operation":       func(v *Invocation) { v.Operation = "Send" },
-		"host":            func(v *Invocation) { v.URL = "wss://demo.webpubsub.azure.com.attacker.test/client/hubs/chat_hub" },
-		"path":            func(v *Invocation) { v.URL = "wss://demo.webpubsub.azure.com/client/hubs/chat_hub/extra" },
-		"query":           func(v *Invocation) { v.URL += "?access_token=caller" },
-		"header":          func(v *Invocation) { v.Headers = map[string]string{"Authorization": "Bearer caller"} },
-		"missing body":    func(v *Invocation) { v.Body = nil },
-		"body file":       func(v *Invocation) { v.BodyFile = filepath.Join(root, "body") },
-		"missing output":  func(v *Invocation) { v.ResponseFile = "" },
-		"unknown message": func(v *Invocation) { v.Body.(map[string]any)["messages"] = []any{map[string]any{"type": "connect"}} },
+		"post":             func(v *Invocation) { v.Method = http.MethodPost },
+		"service":          func(v *Invocation) { v.Service = "signalr" },
+		"operation":        func(v *Invocation) { v.Operation = "Send" },
+		"host":             func(v *Invocation) { v.URL = "wss://demo.webpubsub.azure.com.attacker.test/client/hubs/chat_hub" },
+		"private-link URL": func(v *Invocation) { v.URL = "wss://privatelink.webpubsub.azure.com/client/hubs/chat_hub" },
+		"numeric resource": func(v *Invocation) { v.URL = "wss://123.webpubsub.azure.com/client/hubs/chat_hub" },
+		"path":             func(v *Invocation) { v.URL = "wss://demo.webpubsub.azure.com/client/hubs/chat_hub/extra" },
+		"query":            func(v *Invocation) { v.URL += "?access_token=caller" },
+		"header":           func(v *Invocation) { v.Headers = map[string]string{"Authorization": "Bearer caller"} },
+		"missing body":     func(v *Invocation) { v.Body = nil },
+		"body file":        func(v *Invocation) { v.BodyFile = filepath.Join(root, "body") },
+		"missing output":   func(v *Invocation) { v.ResponseFile = "" },
+		"unknown message":  func(v *Invocation) { v.Body.(map[string]any)["messages"] = []any{map[string]any{"type": "connect"}} },
 		"duplicate ack": func(v *Invocation) {
 			v.Body.(map[string]any)["messages"] = []any{map[string]any{"type": "joinGroup", "ackId": 1}, map[string]any{"type": "ping", "ackId": 1}}
 		},
@@ -159,6 +162,41 @@ func TestAzureWebPubSubFailuresNeverPublishTokenOrOutput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzAzureWebPubSubTargetsNeverAcceptDirectPrivateLink(f *testing.F) {
+	for _, seed := range []string{
+		"demo.webpubsub.azure.com",
+		"privatelink.webpubsub.azure.com",
+		"demo.privatelink.webpubsub.azure.com",
+		"demo.webpubsub.azure.com.example.com",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, host string) {
+		for _, rawURL := range []string{
+			(&url.URL{Scheme: "wss", Host: host, Path: "/client/hubs/chat"}).String(),
+			(&url.URL{Scheme: "wss", Host: host, Path: "/clients/mqtt/hubs/chat"}).String(),
+		} {
+			var err error
+			if strings.Contains(rawURL, "/clients/mqtt/") {
+				_, _, err = parseAzureWebPubSubMQTTTarget(rawURL)
+			} else {
+				_, _, err = parseAzureWebPubSubTarget(rawURL)
+			}
+			if err != nil {
+				continue
+			}
+			parsed, parseErr := url.Parse(rawURL)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			resource, valid := azureWebPubSubResourceName(strings.ToLower(parsed.Hostname()))
+			if !valid || resource == "privatelink" {
+				t.Fatalf("accepted direct private-link or invalid Web PubSub resource host %q", parsed.Hostname())
+			}
+		}
+	})
 }
 
 func TestAzureWebPubSubProtocolMessageValidation(t *testing.T) {
