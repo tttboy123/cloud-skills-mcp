@@ -112,8 +112,12 @@ remain available through the guarded resource gateway.
   regional, or `us|eu` multi-region aiplatform endpoint and the v1beta1
   `BidiGenerateContent` path. It obtains the cloud-platform OAuth token from
   ADC, keeps it inside the Upgrade, enforces setup/setupComplete ordering,
-  bounds client/server messages and time, and atomically publishes validated
-  server JSON. Paid stateful sessions are mutation-only.
+  bounds client/server messages and time, dispatches only pre-approved bounded
+  tool-response templates with exact provider call IDs, and can recover from
+  GoAway or transport loss by retaining the provider resumption handle only in
+  memory and replaying only unacknowledged buffered messages. Caller-supplied
+  handles are rejected, `newHandle` is stripped from output, and validated
+  server JSON is published atomically. Paid stateful sessions are mutation-only.
 - Azure Web PubSub JSON/Protobuf WSS accepts only a public-cloud resource endpoint and
   the exact hub path. It obtains an Entra token, calls the fixed five-minute
   Generate Client Token API internally, keeps both tokens out of MCP, requires
