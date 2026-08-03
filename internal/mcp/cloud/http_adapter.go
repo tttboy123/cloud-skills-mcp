@@ -343,7 +343,10 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			if err != nil {
 				return InvocationResult{}, err
 			}
-			request.Body = newAWSSigV4EventStreamReader(ctx, request.Body, awsCredentials, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now, seed)
+			streamReader := newAWSSigV4EventStreamReader(ctx, request.Body, awsCredentials, strings.ToLower(invocation.Service), strings.ToLower(invocation.Region), adapter.config.Now, seed)
+			streamReader.pause = adapter.config.StreamPause
+			streamReader.interval = time.Duration(invocation.StreamIntervalMS) * time.Millisecond
+			request.Body = streamReader
 		}
 	} else {
 		if _, err := signAWSSigV4a(request, payloadHash, credentials, strings.ToLower(invocation.Service), regionSet, signingTime); err != nil {
@@ -923,6 +926,10 @@ func invokeSignedHTTP(client HTTPDoer, maxBodyBytes int64, request *http.Request
 	response, err := client.Do(request)
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("%s HTTP request: %w", providerName, err)
+	}
+	if response != nil && response.Body != nil && response.StatusCode >= 200 && response.StatusCode < 300 && invocation.Provider == ProviderAWS && strings.EqualFold(strings.TrimSpace(invocation.PayloadMode), awsPayloadModeEventStream) && (invocation.StreamIntervalMS != 0 || strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "application/vnd.amazon.eventstream")) {
+		response.Body = newAWSValidatingEventStreamReader(response.Body)
+		response.ContentLength = -1
 	}
 	output, err := readRESTResponseWithFile(response, maxBodyBytes, invocation.ResponseFile, invocation.MaxResponseFileBytes)
 	if err != nil {

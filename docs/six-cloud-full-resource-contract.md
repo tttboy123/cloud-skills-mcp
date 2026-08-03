@@ -44,7 +44,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
-| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
+| AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime Entra-authenticated WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated REST plus raw framed-protobuf gRPC over HTTP/2 against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
@@ -84,10 +84,12 @@ remain available through the guarded resource gateway.
   or SHA-256 over the decoded payload while streaming, then generate the
   checksum and trailer signatures in-process. Callers select only the
   algorithm and cannot provide checksum values or trailer headers.
-- Finite AWS SigV4 HTTP EventStream requests accept only bounded, CRC-valid
-  unsigned frames, then use the official SDK stream signer to create dated,
-  chained signing envelopes and a terminal frame. Interactive WebSocket
-  sessions remain a separate transport family.
+- Finite or bidirectional HTTP/2 AWS SigV4 EventStream requests accept only
+  bounded, CRC-valid unsigned frames, then use the official SDK stream signer
+  to create dated, chained signing envelopes and a terminal frame. Optional
+  pacing occurs only between complete logical frames; concurrent responses are
+  length/CRC validated and atomically published. Interactive WebSocket sessions
+  remain a separate transport family.
 - AWS AppSync GraphQL WSS accepts only a single finite IAM-authenticated
   subscription, separately signs the documented HTTPS `/graphql/connect` and
   `/graphql` requests, keeps dynamic subprotocol/start authorization internal,

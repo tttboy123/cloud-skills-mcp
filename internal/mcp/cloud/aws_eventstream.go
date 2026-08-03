@@ -35,7 +35,7 @@ func configureAWSEventStreamRequest(request *http.Request) error {
 	return nil
 }
 
-func newAWSSigV4EventStreamReader(ctx context.Context, source io.ReadCloser, credentials aws.Credentials, service, region string, signingTime func() time.Time, seed []byte) io.ReadCloser {
+func newAWSSigV4EventStreamReader(ctx context.Context, source io.ReadCloser, credentials aws.Credentials, service, region string, signingTime func() time.Time, seed []byte) *awsSigV4EventStreamReader {
 	return &awsSigV4EventStreamReader{
 		ctx: ctx, source: bufio.NewReader(source), sourceCloser: source,
 		signer: awsv4.NewStreamSigner(credentials, service, region, seed), now: signingTime,
@@ -53,6 +53,9 @@ type awsSigV4EventStreamReader struct {
 	encoder      *eventstream.Encoder
 	pending      []byte
 	done         bool
+	pause        func(context.Context, time.Duration) error
+	interval     time.Duration
+	frames       int
 }
 
 func (reader *awsSigV4EventStreamReader) Read(target []byte) (int, error) {
@@ -103,7 +106,16 @@ func (reader *awsSigV4EventStreamReader) loadNextFrame() error {
 	if err := reader.encoder.Encode(&encoded, message); err != nil {
 		return fmt.Errorf("re-encode AWS event stream frame: %w", err)
 	}
-	return reader.signAndEncode(encoded.Bytes())
+	if reader.frames > 0 && reader.interval > 0 && reader.pause != nil {
+		if err := reader.pause(reader.ctx, reader.interval); err != nil {
+			return fmt.Errorf("pace AWS event stream frames: %w", err)
+		}
+	}
+	if err := reader.signAndEncode(encoded.Bytes()); err != nil {
+		return err
+	}
+	reader.frames++
+	return nil
 }
 
 func (reader *awsSigV4EventStreamReader) signAndEncode(frame []byte) error {
@@ -122,6 +134,80 @@ func (reader *awsSigV4EventStreamReader) signAndEncode(frame []byte) error {
 	var encoded bytes.Buffer
 	if err := reader.encoder.Encode(&encoded, message); err != nil {
 		return fmt.Errorf("encode signed AWS event stream frame: %w", err)
+	}
+	reader.pending = encoded.Bytes()
+	return nil
+}
+
+func newAWSValidatingEventStreamReader(source io.ReadCloser) io.ReadCloser {
+	return &awsValidatingEventStreamReader{
+		source:       bufio.NewReader(source),
+		sourceCloser: source,
+		decoder:      eventstream.NewDecoder(),
+		encoder:      eventstream.NewEncoder(),
+	}
+}
+
+// awsValidatingEventStreamReader verifies every response frame before exposing
+// it to response_file publication. Decoding checks both EventStream CRCs; the
+// re-encoded bytes retain the logical headers and payload while preventing an
+// invalid or truncated frame from being published as a successful transcript.
+type awsValidatingEventStreamReader struct {
+	source       *bufio.Reader
+	sourceCloser io.Closer
+	decoder      *eventstream.Decoder
+	encoder      *eventstream.Encoder
+	pending      []byte
+	done         bool
+}
+
+func (reader *awsValidatingEventStreamReader) Read(target []byte) (int, error) {
+	if len(target) == 0 {
+		return 0, nil
+	}
+	if len(reader.pending) == 0 {
+		if reader.done {
+			return 0, io.EOF
+		}
+		if err := reader.loadNextFrame(); err != nil {
+			return 0, err
+		}
+	}
+	written := copy(target, reader.pending)
+	reader.pending = reader.pending[written:]
+	return written, nil
+}
+
+func (reader *awsValidatingEventStreamReader) Close() error {
+	reader.done = true
+	reader.pending = nil
+	return reader.sourceCloser.Close()
+}
+
+func (reader *awsValidatingEventStreamReader) loadNextFrame() error {
+	if _, err := reader.source.Peek(1); err != nil {
+		if err == io.EOF {
+			reader.done = true
+			return io.EOF
+		}
+		return fmt.Errorf("read AWS event stream response: %w", err)
+	}
+	prelude, err := reader.source.Peek(8)
+	if err != nil {
+		return fmt.Errorf("read AWS event stream response prelude: %w", err)
+	}
+	totalLength := binary.BigEndian.Uint32(prelude[:4])
+	headersLength := binary.BigEndian.Uint32(prelude[4:8])
+	if totalLength < awsEventStreamMinimumFrameBytes || totalLength > maxAWSEventStreamFrameBytes || headersLength > maxAWSEventStreamHeadersBytes || headersLength > totalLength-awsEventStreamMinimumFrameBytes {
+		return fmt.Errorf("AWS event stream response frame length is outside the bounded protocol limits")
+	}
+	message, err := reader.decoder.Decode(io.LimitReader(reader.source, int64(totalLength)), nil)
+	if err != nil {
+		return fmt.Errorf("decode AWS event stream response frame: %w", err)
+	}
+	var encoded bytes.Buffer
+	if err := reader.encoder.Encode(&encoded, message); err != nil {
+		return fmt.Errorf("re-encode AWS event stream response frame: %w", err)
 	}
 	reader.pending = encoded.Bytes()
 	return nil

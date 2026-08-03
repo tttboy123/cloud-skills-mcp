@@ -130,10 +130,10 @@ S3 `PutObject`/`UploadPart` 的 SigV4 或 SigV4a 流式上传使用 `payload_mod
 
 多区域 S3 endpoint 使用相同两个 `payload_mode`，把 `auth_scheme` 改为 `sigv4a` 并提供官网定义的 `region_set`；流式请求的 seed、每个 chunk 与可选 trailer 都由同一个服务端派生密钥链签名。
 
-需要 SigV4 EventStream 请求签名的有限 HTTP 流使用 `payload_mode=aws-eventstream`。`body_file` 是一个或多个连续的、CRC 有效但尚未添加签名外层的 Amazon EventStream 帧；服务端验证单帧边界后添加 `:date`、链式 `:chunk-signature` 和终止帧。交互式 WebSocket 会话不属于这个有限 HTTP 请求模式。
+需要 SigV4 EventStream 请求签名的有限或双向 HTTP/2 流使用 `payload_mode=aws-eventstream`。`body_file` 是一个或多个连续的、CRC 有效但尚未添加签名外层的 Amazon EventStream 帧；服务端验证单帧边界后添加 `:date`、链式 `:chunk-signature` 和终止帧。`stream_interval_ms` 可在完整逻辑帧之间节流，不能用 `stream_chunk_bytes` 切断预编码帧；启用节流时必须提供 `response_file`，server 会在上传仍继续时并发读取下行 EventStream，逐帧验证长度和两层 CRC，全部成功后才原子发布。交互式 WebSocket 会话仍属于独立传输族。
 
 ```json
-{"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-eventstream","service":"transcribe","operation":"StartStreamTranscription","region":"us-east-1","method":"POST","url":"https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription","body_file":"/approved/streams/audio.events","response_file":"/approved/streams/transcript.events","force":true}}
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"sigv4","payload_mode":"aws-eventstream","service":"health-agent","operation":"StartMedicalScribeListeningSession","region":"us-west-2","method":"POST","url":"https://streaming.health-agent.us-west-2.api.aws/medical-scribe-stream/","headers":{"x-amzn-medscribe-session-id":"<uuid>","x-amzn-medscribe-domain-id":"<domain-id>","x-amzn-medscribe-subscription-id":"<subscription-id>","x-amzn-medscribe-language-code":"en-US","x-amzn-medscribe-media-encoding":"pcm","x-amzn-medscribe-sample-rate":"16000"},"body_file":"/approved/streams/medical-scribe.events","response_file":"/approved/streams/transcript.events","stream_interval_ms":100,"force":true}}
 ```
 
 Amazon Transcribe 标准、Medical 和 Call Analytics 的交互式 WebSocket 使用 `auth_scheme=transcribe-ws`。server 内部生成最多 300 秒有效的 SigV4 Upgrade URL，把原始音频编码为 `AudioEvent`，再添加 `:date` 和链式 `:chunk-signature` 外层；下行双层 EventStream 的 CRC 和 JSON 都会验证，预签名 URL 永不返回 MCP：

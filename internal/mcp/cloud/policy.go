@@ -168,6 +168,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
+	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
+	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
 	if awsConnectHealthWebSocketScheme {
 		if err := validateAWSConnectHealthWebSocketInvocation(request); err != nil {
 			return err
@@ -495,14 +497,13 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || awsEventStreamScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}
 	if (request.StreamUserID != "" || request.StreamFormat != 0) && !(request.Provider == ProviderTencent && tencentScheme == authSchemeTencentMPSWS) {
 		return fmt.Errorf("stream_user_id and stream_format are supported only by Tencent MPS WebSocket")
 	}
-	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	if payloadMode != "" {
 		if request.Provider != ProviderAWS || (payloadMode != awsPayloadModeChunked && payloadMode != awsPayloadModeChunkedTrailer && payloadMode != awsPayloadModeEventStream) {
 			return fmt.Errorf("unsupported payload_mode %q", request.PayloadMode)
@@ -522,6 +523,12 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 		if payloadMode == awsPayloadModeEventStream && !strings.EqualFold(request.Method, http.MethodPost) {
 			return fmt.Errorf("aws-eventstream requires method POST")
+		}
+		if payloadMode == awsPayloadModeEventStream && request.StreamChunkBytes != 0 {
+			return fmt.Errorf("aws-eventstream accepts pre-encoded frames and does not support stream_chunk_bytes")
+		}
+		if payloadMode == awsPayloadModeEventStream && request.StreamIntervalMS != 0 && request.ResponseFile == "" {
+			return fmt.Errorf("paced aws-eventstream sessions require response_file")
 		}
 	}
 	checksumAlgorithm := strings.ToLower(strings.TrimSpace(request.ChecksumAlgorithm))
