@@ -26,6 +26,31 @@ and every provider has successful live acceptance with sanitized audit evidence.
 
 Verified slices:
 
+Alibaba Cloud ACR Enterprise Edition Docker/OCI Registry now uses direct HTTPS
+through `auth_scheme=acr-registry`. The gateway resolves only the official
+credentials-go RAM AKSK/STS/role chain, signs the fixed RPC V2
+`GetAuthorizationToken` request internally, and keeps its temporary login and
+the subsequent Registry Bearer token out of MCP, audit, and error output.
+Hermetic coverage binds the Enterprise instance ID, region, exact public/VPC or
+operator-pinned custom Registry endpoint, current `dockerauth`/`dockerauth-ee`
+realm families, Zhangjiakou exception, service audience, repository path,
+method, catalog/target/source scopes, and mutation gate. It covers Registry
+version/catalog, manifest, blob, tags, referrers, chunked/monolithic upload and
+cross-repository mount operations, plus bounded same-region OSS 307 blob
+downloads with Authorization removed and atomic response-file publication.
+Personal Edition remains an explicit credential-bound exclusion because its
+official interface requires a fixed Registry password and does not support
+`GetAuthorizationToken`. A dedicated ListTags live gate is implemented but
+remains pending operator RAM credentials and an existing readable repository.
+Implementation commit `04a069fdec5fae3a6491029a7dade6aa29605c53` passed
+remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck and four-platform
+release verification in
+[CI run 30837268830](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30837268830).
+Fresh local module verification, formatting, vet, race coverage (80.0% total,
+80.1% cloud package), build, protocol/install smoke, shell syntax, all six
+Skill validators, Actionlint, govulncheck, four-platform archives, and a
+ten-second ACR invocation/challenge fuzz run (226,104 executions) also passed.
+
 Google Artifact Registry and Artifact Registry-backed `gcr.io` Docker/OCI
 repositories now use direct HTTPS through `auth_scheme=artifact-registry`.
 The gateway resolves only the official ADC chain, sends its short-lived OAuth
