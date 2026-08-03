@@ -40,17 +40,20 @@ func TestAzureRealtimeWebSocketBoundarySupportsEntraAuthenticatedGAAndPreview(t 
 	}
 
 	for name, mutate := range map[string]func(*Invocation){
-		"post method":       func(value *Invocation) { value.Method = http.MethodPost },
-		"wrong host":        func(value *Invocation) { value.URL = "wss://example.com/openai/v1/realtime" },
-		"wrong path":        func(value *Invocation) { value.URL = "wss://demo.openai.azure.com/openai/v1/chat" },
-		"URL query":         func(value *Invocation) { value.URL += "?model=caller" },
-		"missing body":      func(value *Invocation) { value.Body = nil },
-		"missing response":  func(value *Invocation) { value.ResponseFile = "" },
-		"handshake headers": func(value *Invocation) { value.Headers = map[string]string{"OpenAI-Beta": "realtime=v1"} },
-		"chunk control":     func(value *Invocation) { value.StreamChunkBytes = 10 },
-		"bad GA query":      func(value *Invocation) { value.Parameters = map[string]any{"model": "x", "deployment": "y"} },
-		"credential event":  func(value *Invocation) { value.Body = map[string]any{"type": "session.update", "api_key": "forbidden"} },
-		"unknown scheme":    func(value *Invocation) { value.AuthScheme = "unknown" },
+		"post method":        func(value *Invocation) { value.Method = http.MethodPost },
+		"wrong host":         func(value *Invocation) { value.URL = "wss://example.com/openai/v1/realtime" },
+		"nested public host": func(value *Invocation) { value.URL = "wss://nested.demo.openai.azure.com/openai/v1/realtime" },
+		"government host":    func(value *Invocation) { value.URL = "wss://demo.openai.azure.us/openai/v1/realtime" },
+		"china host":         func(value *Invocation) { value.URL = "wss://demo.openai.azure.cn/openai/v1/realtime" },
+		"wrong path":         func(value *Invocation) { value.URL = "wss://demo.openai.azure.com/openai/v1/chat" },
+		"URL query":          func(value *Invocation) { value.URL += "?model=caller" },
+		"missing body":       func(value *Invocation) { value.Body = nil },
+		"missing response":   func(value *Invocation) { value.ResponseFile = "" },
+		"handshake headers":  func(value *Invocation) { value.Headers = map[string]string{"OpenAI-Beta": "realtime=v1"} },
+		"chunk control":      func(value *Invocation) { value.StreamChunkBytes = 10 },
+		"bad GA query":       func(value *Invocation) { value.Parameters = map[string]any{"model": "x", "deployment": "y"} },
+		"credential event":   func(value *Invocation) { value.Body = map[string]any{"type": "session.update", "api_key": "forbidden"} },
+		"unknown scheme":     func(value *Invocation) { value.AuthScheme = "unknown" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := base
@@ -222,4 +225,37 @@ func TestAzureRealtimeMalformedNDJSONIsRejectedBeforeCredentialsOrDial(t *testin
 	if err == nil || tokens.calls != 0 || dialed {
 		t.Fatalf("err=%v token calls=%d dialed=%v", err, tokens.calls, dialed)
 	}
+}
+
+func FuzzAzureOpenAIRealtimeHostNeverEscapesPublicCloud(f *testing.F) {
+	for _, seed := range []string{
+		"demo.openai.azure.com",
+		"nested.demo.openai.azure.com",
+		"demo.openai.azure.us",
+		"demo.openai.azure.cn",
+		"demo.openai.azure.com.example.com",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, host string) {
+		target := (&url.URL{Scheme: "wss", Host: host, Path: "/openai/v1/realtime"}).String()
+		invocation := Invocation{
+			Provider: ProviderAzure, Mode: ModeRead, AuthScheme: authSchemeAzureRealtimeWS,
+			Service: "openai", Operation: "RealtimeResponse", Method: http.MethodGet,
+			URL: target, Parameters: map[string]any{"model": "deployment"},
+			Body: map[string]any{"type": "response.create"}, ResponseFile: "/approved/realtime.ndjson",
+		}
+		if validateAzureRealtimeWebSocketInvocation(invocation) != nil {
+			return
+		}
+		parsed, err := url.Parse(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		normalized := strings.ToLower(parsed.Hostname())
+		resource := strings.TrimSuffix(normalized, ".openai.azure.com")
+		if resource == normalized || !endpointLabelPattern.MatchString(resource) {
+			t.Fatalf("accepted non-public or non-single-label Azure OpenAI Realtime host %q", normalized)
+		}
+	})
 }

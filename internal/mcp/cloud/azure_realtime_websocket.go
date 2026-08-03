@@ -52,8 +52,10 @@ func validateAzureRealtimeWebSocketInvocation(invocation Invocation) error {
 		return fmt.Errorf("Azure OpenAI Realtime WebSocket requires an official WSS URL without inline query parameters")
 	}
 	host := strings.ToLower(target.Hostname())
-	if host == ".openai.azure.com" || !strings.HasSuffix(host, ".openai.azure.com") {
-		return fmt.Errorf("Azure OpenAI Realtime WebSocket requires a resource.openai.azure.com host")
+	const publicRealtimeSuffix = ".openai.azure.com"
+	resource := strings.TrimSuffix(host, publicRealtimeSuffix)
+	if resource == host || !endpointLabelPattern.MatchString(resource) {
+		return fmt.Errorf("Azure OpenAI Realtime WebSocket requires an exact public-cloud resource.openai.azure.com host")
 	}
 	switch target.EscapedPath() {
 	case "/openai/v1/realtime":

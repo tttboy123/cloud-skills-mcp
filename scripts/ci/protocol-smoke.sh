@@ -28,9 +28,13 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"eventgrid-mqtt-ws","service":"eventgrid","operation":"SubscribeMQTT","method":"GET","url":"wss://namespace.westus2.eventgrid.azure.net.attacker.example/mqtt","body":{"client_id":"observer","subscriptions":[{"topic_filter":"events/#","qos":1}],"keep_alive_seconds":30,"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/eventgrid.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"servicebus-amqp-ws","service":"servicebus","operation":"PeekMessages","method":"GET","url":"wss://namespace.servicebus.windows.net.attacker.example/\u0024servicebus/websocket","body":{"queue":"orders","max_messages":1,"timeout_seconds":5},"response_file":"/tmp/servicebus.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"eventhubs-amqp-ws","service":"eventhubs","operation":"ReceiveEvents","method":"GET","url":"wss://namespace.servicebus.windows.net.attacker.example/\u0024servicebus/websocket","body":{"event_hub":"telemetry","partition_id":"0","start_position":{"earliest":true},"max_events":1,"timeout_seconds":5},"response_file":"/tmp/eventhubs.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://nested.resource.openai.azure.com/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://resource.openai.azure.us/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime-gov.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://resource.openai.azure.cn/openai/v1/realtime","parameters":{"model":"deployment"},"body":{"type":"response.create"},"response_file":"/tmp/realtime-cn.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
+    . as $responses |
     (map(select(.id == 1))[0].result.serverInfo.version) == "0.4.0-dev" and
     (map(select(.id == 2))[0].result.tools | length) == 19 and
     ([map(select(.id == 2))[0].result.tools[] |
@@ -59,7 +63,10 @@ jq -e -s '
     (map(select(.id == 13))[0].result.isError == true) and
     (map(select(.id == 13))[0].result.content[0].text | contains("namespace.servicebus.windows.net")) and
     (map(select(.id == 14))[0].result.isError == true) and
-    (map(select(.id == 14))[0].result.content[0].text | contains("namespace.servicebus.windows.net"))
+    (map(select(.id == 14))[0].result.content[0].text | contains("namespace.servicebus.windows.net")) and
+    ([15,16,17] | all(. as $id |
+      ($responses | map(select(.id == $id))[0].result.isError == true) and
+      ($responses | map(select(.id == $id))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host"))))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

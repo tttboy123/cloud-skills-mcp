@@ -196,6 +196,14 @@ remain available through the guarded resource gateway.
   Only `servicebus.windows.net`, `servicebus.usgovcloudapi.net`, and
   `servicebus.chinacloudapi.cn` namespace suffixes are accepted. Private-link,
   custom/lookalike, and retired Germany hosts fail closed.
+- Azure OpenAI Realtime accepts only the current official public-cloud
+  single-label `<resource>.openai.azure.com` WSS host. Its Entra token remains
+  internal, and guessed Azure Government/China, nested, private-link, custom,
+  or lookalike endpoints fail before credential resolution. The Government
+  model page states that its list includes all Azure OpenAI models offered there
+  and lists no Realtime model; Microsoft publishes no China Foundry Realtime
+  endpoint contract, so these sovereign transports are recorded as unavailable
+  rather than synthesized from generic cloud suffixes.
 - Service Bus exposes bounded queue/topic/subscription send, schedule/cancel,
   peek, receive, deferred-message and session-state operations. Only peek is
   read-only. ReceiveAndDelete and every PeekLock settlement require mutation
