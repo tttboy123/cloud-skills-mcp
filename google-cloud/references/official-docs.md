@@ -9,8 +9,11 @@
 - gRPC protocol over HTTP/2: https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md
 - Speech-to-Text streaming overview: https://docs.cloud.google.com/speech-to-text/docs/v1/transcribe-streaming-audio
 - Speech-to-Text v2 StreamingRecognize RPC: https://cloud.google.com/speech-to-text/v2/docs/reference/rpc/google.cloud.speech.v2
+- Gemini Live API stateful WebSocket message reference: https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/multimodal-live
+- Gemini Live API WebSocket and ADC proxy tutorial: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/live-api/get-started-websocket
+- Official Go Gen AI SDK Vertex Live endpoint, ADC Bearer header, setup ordering, and Bidi path: https://github.com/googleapis/go-genai/blob/85ce5bec1c6c460ce2a4fbbdf440d937ee4518d2/live.go
 - Cloud Asset Inventory: https://docs.cloud.google.com/asset-inventory/docs/asset-inventory-overview
 - Google Cloud MCP overview: https://docs.cloud.google.com/mcp/overview
 - Cloud Storage objects.get media and Range download: https://docs.cloud.google.com/storage/docs/json_api/v1/objects/get
 
-The adapter requests a token internally and sends it only to validated `googleapis.com` hosts. Public discovery documents are fetched without credentials. For `auth_scheme=grpc`, it sends and validates the official five-byte gRPC record framing over HTTP/2, requires `grpc-status=0`, and never accepts caller-supplied authentication or gRPC protocol-control headers.
+The adapter requests a token internally and sends it only to validated `googleapis.com` hosts. Public discovery documents are fetched without credentials. For `auth_scheme=grpc`, it sends and validates the official five-byte gRPC record framing over HTTP/2, requires `grpc-status=0`, and never accepts caller-supplied authentication or gRPC protocol-control headers. For `auth_scheme=vertex-live-ws`, it uses only the official global, regional, or `us|eu` multi-region aiplatform host and Bidi path, puts the ADC Bearer token only in the Upgrade header, enforces setup/setupComplete ordering, bounds messages and time, validates server JSON, and atomically publishes NDJSON.

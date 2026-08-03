@@ -46,7 +46,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 |---|---|---|
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime Entra-authenticated WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
-| Google Cloud | Google Auth ADC authenticated REST plus raw framed-protobuf gRPC over HTTP/2 against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
+| Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf gRPC over HTTP/2, and bounded Vertex/Gemini Live WSS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
 | Baidu AI Cloud | BCE signed HTTPS request against validated `baidubce.com` endpoints | BCE AK/SK or IAM/STS temporary AK/SK/session token |
@@ -108,6 +108,12 @@ remain available through the guarded resource gateway.
   validated transcript events after a normal provider close. Starting a
   session is always mutation-only; callers remain responsible for recording
   consent, PHI handling and trained clinical review.
+- Google Cloud Vertex/Gemini Live WSS accepts only the official global,
+  regional, or `us|eu` multi-region aiplatform endpoint and the v1beta1
+  `BidiGenerateContent` path. It obtains the cloud-platform OAuth token from
+  ADC, keeps it inside the Upgrade, enforces setup/setupComplete ordering,
+  bounds client/server messages and time, and atomically publishes validated
+  server JSON. Paid stateful sessions are mutation-only.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a

@@ -19,7 +19,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
 | Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
-| Google Cloud | Google Auth ADC + `googleapis.com` REST / gRPC HTTP/2 / Discovery Service | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
+| Google Cloud | Google Auth ADC + `googleapis.com` REST / gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2 | BCE AK/SK、IAM/STS temporary AK/SK/session token |
@@ -209,6 +209,14 @@ GCP 没有 REST transcoding 的 gRPC 方法使用 `auth_scheme=grpc`，仍然是
 ```
 
 这个原始传输入口覆盖 unary、client-streaming、server-streaming 和有限 bidirectional-streaming；消息字段和单消息大小仍必须遵守具体 RPC 的官方 protobuf contract，例如 Speech-to-Text v2 的首条配置/后续音频顺序以及每条音频请求 15 KB 限制。当前实现不把任意 JSON 猜测转换成 protobuf，因此协议覆盖与 schema 级易用性分别记录在 coverage matrix 中。
+
+Vertex AI / Gemini Enterprise Agent Platform Live API 使用 `auth_scheme=vertex-live-ws`。server 只连接官方 global、regional 或 `us|eu` multi-region aiplatform WSS endpoint，通过 ADC 获取 `cloud-platform` OAuth token，并且只把 token 放进内部 Upgrade header。`body.messages` 第一条必须是与 `project`/`region` 一致的完整 `setup.model`，收到 `setupComplete` 后才会发送 `clientContent`、`realtimeInput` 或 `toolResponse`；所有服务端 JSON 在达到 `turnComplete`、`goAway`、`max_messages` 或 `timeout_seconds` 边界后原子发布为 NDJSON。Live session 会产生云端推理成本并可携带工具响应，因此固定走 mutation gate：
+
+```json
+{"name":"gcp_api_mutate","arguments":{"auth_scheme":"vertex-live-ws","service":"aiplatform","operation":"BidiGenerateContent","project":"<project>","region":"global","method":"GET","url":"wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent","body":{"messages":[{"setup":{"model":"projects/<project>/locations/global/publishers/google/models/<live-model>","generationConfig":{"responseModalities":["TEXT"]}}},{"clientContent":{"turns":[{"role":"user","parts":[{"text":"Hello"}]}],"turnComplete":true}}],"max_messages":32,"timeout_seconds":30},"response_file":"/approved/results/vertex-live.ndjson","force":true}}
+```
+
+caller 不能提供 Authorization、API key、query token、非官方 host/path 或无界会话；ADC token 和握手信息不会进入 MCP 结果或审计。
 
 Alibaba Intelligent Speech Interaction 使用 `auth_scheme=nls-ws`。调用方只提供非秘密的 NLS 项目 AppKey、官方业务 payload、有限音频文件或文本段；server 从 credentials-go 的 RAM AKSK/STS 链内部签名固定 `CreateToken` RPC，缓存临时 Token，并只在已校验的 WSS 握手中使用。实时/短句识别分别使用 `SpeechTranscriber`、`SpeechRecognizer`，事件原子写入 NDJSON：
 

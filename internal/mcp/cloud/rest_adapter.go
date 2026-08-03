@@ -309,13 +309,14 @@ type HTTPDoer interface {
 }
 
 type GCPRESTConfig struct {
-	Tokens       TokenProvider
-	HTTP         HTTPDoer
-	GRPCHTTP     HTTPDoer
-	MaxBodyBytes int64
-	Timeout      time.Duration
-	AllowedHosts []string
-	StreamPause  func(context.Context, time.Duration) error
+	Tokens                  TokenProvider
+	HTTP                    HTTPDoer
+	GRPCHTTP                HTTPDoer
+	VertexLiveWebSocketDial gcpVertexLiveWebSocketDial
+	MaxBodyBytes            int64
+	Timeout                 time.Duration
+	AllowedHosts            []string
+	StreamPause             func(context.Context, time.Duration) error
 }
 
 type GCPRESTAdapter struct {
@@ -345,6 +346,9 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 			}
 		}
 	}
+	if config.VertexLiveWebSocketDial == nil {
+		config.VertexLiveWebSocketDial = defaultGCPVertexLiveWebSocketDial
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -356,8 +360,8 @@ func NewGCPRESTAdapter(config GCPRESTConfig) *GCPRESTAdapter {
 
 func (adapter *GCPRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC + ADC",
-		Version: "google-auth/v0.22+grpc-http2", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
+		Provider: ProviderGCP, Available: true, Adapter: "googleapis REST/gRPC/WSS + ADC",
+		Version: "google-auth/v0.22+grpc-http2+vertex-live-ws", CredentialSource: credentialSource(ProviderGCP), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through ADC; no gcloud subprocess fallback exists",
 	}, nil
 }
@@ -384,11 +388,14 @@ func (adapter *GCPRESTAdapter) Discover(ctx context.Context, request DiscoveryRe
 
 func (adapter *GCPRESTAdapter) Invoke(ctx context.Context, request Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(request.AuthScheme, "")
+	if scheme == authSchemeGCPVertexLiveWS {
+		return invokeGCPVertexLiveWebSocket(ctx, adapter, request)
+	}
 	if scheme == authSchemeGCPGRPC {
 		return invokeGCPGRPC(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Google Cloud auth_scheme must be grpc or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Google Cloud auth_scheme must be grpc, vertex-live-ws, or omitted for REST")
 	}
 	if err := validateRESTTargetWithEndpointHosts(ProviderGCP, request.Method, request.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
