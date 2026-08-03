@@ -169,14 +169,19 @@ func TestBaiduIoTCoreMQTTProtocolBoundsFailClosed(t *testing.T) {
 			value.Body.(map[string]any)["keep_alive_seconds"] = 29
 			return validateBaiduIoTCoreMQTTInvocation(value)
 		},
-		"subscription qos2": func() error {
+		"subscription qos3": func() error {
 			value := clone()
-			value.Body.(map[string]any)["subscriptions"].([]any)[0].(map[string]any)["qos"] = 2
+			value.Body.(map[string]any)["subscriptions"].([]any)[0].(map[string]any)["qos"] = 3
 			return validateBaiduIoTCoreMQTTInvocation(value)
 		},
 		"no subscription": func() error {
 			value := clone()
 			value.Body.(map[string]any)["subscriptions"] = []any{}
+			return validateBaiduIoTCoreMQTTInvocation(value)
+		},
+		"read unsubscription": func() error {
+			value := clone()
+			value.Body.(map[string]any)["unsubscriptions"] = []any{"sensors/#"}
 			return validateBaiduIoTCoreMQTTInvocation(value)
 		},
 		"message bound": func() error {
@@ -216,8 +221,8 @@ func TestBaiduIoTCoreMQTTProtocolBoundsFailClosed(t *testing.T) {
 		"publish wildcard": func() error { return validateBaiduIoTCoreMQTTTopic("commands/+", false) },
 		"bad hash":         func() error { return validateBaiduIoTCoreMQTTTopic("sensors/#/x", true) },
 		"bad plus":         func() error { return validateBaiduIoTCoreMQTTTopic("sensors/a+", true) },
-		"qos2 publish": func() error {
-			_, err := validateBaiduIoTCoreMQTTPublish("commands/a", "eA==", 2, baiduIoTCoreMQTTDefaultPayloadMax)
+		"qos3 publish": func() error {
+			_, err := validateBaiduIoTCoreMQTTPublish("commands/a", "eA==", 3, baiduIoTCoreMQTTDefaultPayloadMax)
 			return err
 		},
 		"bad base64": func() error {
@@ -253,7 +258,7 @@ func TestBaiduIoTCoreMQTTEncodesWillAndRetainedPublish(t *testing.T) {
 }
 
 func TestBaiduIoTCoreMQTTSupportsApprovedRaisedMessageLimit(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString(make([]byte, baiduIoTCoreMQTTDefaultPayloadMax+1))
+	payload := base64.StdEncoding.EncodeToString(make([]byte, baiduIoTCoreMQTTMaxPayloadBytes))
 	invocation := Invocation{
 		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: authSchemeBaiduIoTCoreMQTTWS,
 		Service: "iotcore", Operation: "ClientMQTT", Method: http.MethodGet,
@@ -265,6 +270,13 @@ func TestBaiduIoTCoreMQTTSupportsApprovedRaisedMessageLimit(t *testing.T) {
 	}
 	if err := validateBaiduIoTCoreMQTTInvocation(invocation); err != nil {
 		t.Fatalf("approved raised message limit rejected: %v", err)
+	}
+	plan, err := parseBaiduIoTCoreMQTTPlan(invocation.Body, "aop098js", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := encodeBaiduIoTCoreMQTTPublishForPlan(plan, plan.Publishes[0], 0); err != nil {
+		t.Fatalf("approved raised payload could not be encoded: %v", err)
 	}
 	invocation.Body.(map[string]any)["max_payload_bytes"] = baiduIoTCoreMQTTMaxPayloadBytes + 1
 	if err := validateBaiduIoTCoreMQTTInvocation(invocation); err == nil {
@@ -285,7 +297,7 @@ func TestBaiduIoTCoreMQTTEnforcesInboundMessageLimit(t *testing.T) {
 func TestBaiduIoTCoreMQTTRejectsMalformedBrokerPackets(t *testing.T) {
 	for name, packet := range map[string]awsMQTTPacket{
 		"not publish": {},
-		"qos2":        {Header: 0x34, Body: []byte{0x00, 0x01, 't'}},
+		"qos3":        {Header: 0x36, Body: []byte{0x00, 0x01, 't'}},
 		"missing id":  {Header: 0x32, Body: []byte{0x00, 0x01, 't'}},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -291,8 +291,9 @@ func TestLiveBaiduIoTCoreMQTTReadOnly(t *testing.T) {
 		Provider: ProviderBaidu, Mode: ModeRead, AuthScheme: authSchemeBaiduIoTCoreMQTTWS,
 		Service: "iotcore", Operation: "SubscribeMQTT", Method: http.MethodGet, URL: endpoint,
 		Body: map[string]any{
-			"client_id": clientID, "subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 1}},
-			"max_messages": 1, "timeout_seconds": 60,
+			"protocol_version": 5, "client_id": clientID,
+			"subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 2}},
+			"max_messages":  1, "timeout_seconds": 60,
 		},
 		ResponseFile: responseFile, MaxResponseFileBytes: 1024 * 1024,
 	}
@@ -314,8 +315,9 @@ func TestLiveBaiduIoTCoreMQTTReadOnly(t *testing.T) {
 		"auth_scheme": "iotcore-mqtt-ws", "service": "iotcore", "operation": "SubscribeMQTT",
 		"method": "GET", "url": endpoint,
 		"body": map[string]any{
-			"client_id": clientID, "subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 1}},
-			"max_messages": 1, "timeout_seconds": 60,
+			"protocol_version": 5, "client_id": clientID,
+			"subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 2}},
+			"max_messages":  1, "timeout_seconds": 60,
 		},
 		"response_file": responseFile,
 	})

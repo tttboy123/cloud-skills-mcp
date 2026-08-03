@@ -287,17 +287,22 @@ remain available through the guarded resource gateway.
   `/service/token` Basic exchange and path-derived Bearer capability internal.
   Registry redirects fail closed until an official safe redirect contract is
   verified. `TestLiveBaiduCCRReadOnly` is the opt-in read-only ListTags gate.
-- Baidu IoT Core MQTT 3.1.1 uses `auth_scheme=iotcore-mqtt-ws` and only the
+- Baidu IoT Core MQTT 3.1.1/5.0 uses `auth_scheme=iotcore-mqtt-ws` and only the
   exact `wss://<iot-core-id>.iot.gz.baidubce.com/mqtt` endpoint with WebSocket
   subprotocol `mqtt`. The server derives the documented application-permission
-  username/password from IAM AK/SK, implements CONNECT, up to 100 QoS 0/1
-  subscriptions in provider-compliant eight-entry batches, bounded PUBLISH,
-  PUBACK, PING and DISCONNECT, and never exports the derived
+  username/password from IAM AK/SK, implements CONNECT, up to 100 QoS 0/1/2
+  wildcard/shared subscriptions in provider-compliant eight-entry batches,
+  mutation-gated bounded UNSUBSCRIBE batches with version-aware UNSUBACK,
+  bounded PUBLISH, PUBACK, duplicate-safe bidirectional QoS 2
+  PUBREC/PUBREL/PUBCOMP, PING and DISCONNECT, and never exports the derived
   credential. `SubscribeMQTT` is read-only with atomic NDJSON output;
   `ClientMQTT` mutation-gates publishing, persistent sessions and Will plans.
   The 32 KiB default payload bound can be explicitly raised up to the
   documented 128 KiB instance maximum and is enforced bidirectionally;
-  outgoing messages are internally paced to the documented QoS 0/1 rates.
+  MQTT 5 additionally supports application properties, message expiry, Will
+  delay, Receive Maximum, SUBACK/UNSUBACK reason codes and server DISCONNECT while rejecting
+  unsupported properties and topic aliases. Outgoing messages are internally
+  paced to the documented QoS-specific rates.
   The documented IAM application format has no STS session-token field, so
   that credential shape is rejected. `TestLiveBaiduIoTCoreMQTTReadOnly` is the
   opt-in real broker gate and requires a message staged after subscription.
