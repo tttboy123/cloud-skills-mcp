@@ -26,6 +26,8 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"cloud_provider_status","arguments":{"provider":"aws"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"auth_scheme":"firebase-sse","service":"firebase-database","operation":"Listen","method":"GET","url":"https://demo.firebaseio.com.attacker.example/messages.json","body":{"max_events":1,"timeout_seconds":5},"response_file":"/tmp/events.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"eventgrid-mqtt-ws","service":"eventgrid","operation":"SubscribeMQTT","method":"GET","url":"wss://namespace.westus2.eventgrid.azure.net.attacker.example/mqtt","body":{"client_id":"observer","subscriptions":[{"topic_filter":"events/#","qos":1}],"keep_alive_seconds":30,"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/eventgrid.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"servicebus-amqp-ws","service":"servicebus","operation":"PeekMessages","method":"GET","url":"wss://namespace.servicebus.windows.net.attacker.example/$servicebus/websocket","body":{"queue":"orders","max_messages":1,"timeout_seconds":5},"response_file":"/tmp/servicebus.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"eventhubs-amqp-ws","service":"eventhubs","operation":"ReceiveEvents","method":"GET","url":"wss://namespace.servicebus.windows.net.attacker.example/$servicebus/websocket","body":{"event_hub":"telemetry","partition_id":"0","start_position":{"earliest":true},"max_events":1,"timeout_seconds":5},"response_file":"/tmp/eventhubs.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -53,7 +55,11 @@ jq -e -s '
     (map(select(.id == 11))[0].result.isError == true) and
     (map(select(.id == 11))[0].result.content[0].text | contains("official Realtime Database host")) and
     (map(select(.id == 12))[0].result.isError == true) and
-    (map(select(.id == 12))[0].result.content[0].text | contains("operator-pinned custom domain"))
+    (map(select(.id == 12))[0].result.content[0].text | contains("operator-pinned custom domain")) and
+    (map(select(.id == 13))[0].result.isError == true) and
+    (map(select(.id == 13))[0].result.content[0].text | contains("namespace.servicebus.windows.net")) and
+    (map(select(.id == 14))[0].result.isError == true) and
+    (map(select(.id == 14))[0].result.content[0].text | contains("namespace.servicebus.windows.net"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

@@ -18,7 +18,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
-| Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime、Voice Live WSS + Web PubSub 标准/可靠 JSON/Protobuf/MQTT + Event Grid MQTT v5 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
+| Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime、Voice Live WSS + Web PubSub 标准/可靠 JSON/Protobuf/MQTT + Event Grid MQTT v5 + Service Bus/Event Hubs AMQP 1.0 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS + Firebase Realtime Database SSE | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
@@ -251,6 +251,26 @@ Azure Event Grid Namespace MQTT broker 使用独立的 `auth_scheme=eventgrid-mq
 {"name":"azure_api_mutate","arguments":{"auth_scheme":"eventgrid-mqtt-ws","service":"eventgrid","operation":"ClientMQTT","method":"GET","url":"wss://<namespace>.<region>.eventgrid.azure.net/mqtt","body":{"client_id":"publisher-1","username":"workload-app","clean_start":false,"session_expiry_seconds":3600,"publishes":[{"topic":"orders/42","qos":1,"retain":true,"payload_base64":"Y3JlYXRlZA==","payload_format":1,"content_type":"text/plain","message_expiry_seconds":60,"response_topic":"orders/42/reply","correlation_data_base64":"cmVxdWVzdC00Mg==","user_properties":{"kind":"created"},"topic_alias":1}],"keep_alive_seconds":30,"max_messages":0,"timeout_seconds":30},"response_file":"/approved/results/eventgrid-publish.ndjson","force":true}}
 ```
 
+Azure Service Bus 数据面使用 `auth_scheme=servicebus-amqp-ws`，固定连接 `wss://<namespace>.servicebus.windows.net/$servicebus/websocket` 并协商 `amqp`。server 通过非 CLI Azure Identity 获取 Service Bus scope，Azure SDK 在进程内完成 SASL anonymous、CBS claim 与 AMQP 1.0 connection/session/link；调用方不能提供 bearer、SAS、connection string、WebSocket header 或 query。`PeekMessages` 是只读操作（最多 250 条）；发送、计划/取消、receive/settlement、deferred message 和 session state 都走 mutation gate。PeekLock 消息必须在同一次调用中显式 `complete|abandon|defer|dead_letter`，或选择破坏性的 `receive_and_delete`；lock token 和 session lock 永不输出：
+
+```json
+{"name":"azure_api_read","arguments":{"auth_scheme":"servicebus-amqp-ws","service":"servicebus","operation":"PeekMessages","method":"GET","url":"wss://<namespace>.servicebus.windows.net/$servicebus/websocket","body":{"topic":"orders","subscription":"analytics","sub_queue":"dead_letter","max_messages":25,"from_sequence_number":1,"timeout_seconds":30},"response_file":"/approved/results/servicebus-peek.ndjson"}}
+```
+
+```json
+{"name":"azure_api_mutate","arguments":{"auth_scheme":"servicebus-amqp-ws","service":"servicebus","operation":"ReceiveMessages","method":"GET","url":"wss://<namespace>.servicebus.windows.net/$servicebus/websocket","body":{"queue":"orders","max_messages":10,"timeout_seconds":30,"settlement":"complete"},"response_file":"/approved/results/servicebus-receive.ndjson","force":true}}
+```
+
+Azure Event Hubs 数据面使用 `auth_scheme=eventhubs-amqp-ws` 和同一个官方 AMQP-over-WSS endpoint；token 只进入内部 CBS。`GetProperties` 与按 partition 的 `ReceiveEvents` 是只读，`SendEvents` 是 mutation。receive 必须指定唯一的 earliest/latest/offset/sequence/enqueued-time 起点、1–256 条上限和 1–300 秒超时；owner/epoch capability 不向 MCP 暴露。发送最多 100 个 Base64 event，可指定 `partition_id` 或 `partition_key` 二选一：
+
+```json
+{"name":"azure_api_read","arguments":{"auth_scheme":"eventhubs-amqp-ws","service":"eventhubs","operation":"ReceiveEvents","method":"GET","url":"wss://<namespace>.servicebus.windows.net/$servicebus/websocket","body":{"event_hub":"telemetry","consumer_group":"$Default","partition_id":"0","start_position":{"earliest":true},"max_events":25,"timeout_seconds":30,"prefetch":25},"response_file":"/approved/results/eventhubs.ndjson"}}
+```
+
+```json
+{"name":"azure_api_mutate","arguments":{"auth_scheme":"eventhubs-amqp-ws","service":"eventhubs","operation":"SendEvents","method":"GET","url":"wss://<namespace>.servicebus.windows.net/$servicebus/websocket","body":{"event_hub":"telemetry","partition_key":"device-1","events":[{"body_base64":"eyJ2YWx1ZSI6MX0=","content_type":"application/json","message_id":"event-1","properties":{"device":"device-1"}}]},"response_file":"/approved/results/eventhubs-send.ndjson","force":true}}
+```
+
 GCP 查询：
 
 ```json
@@ -303,7 +323,7 @@ Alibaba Intelligent Speech Interaction 使用 `auth_scheme=nls-ws`。调用方�
 
 同一内部 Token 也用于 `auth_scheme=nls-rest`：`ShortSentenceRecognition` 把有限音频作为 `body_file` POST 到官方 `/stream/v1/asr`；`SpeechSynthesisREST` 用 GET/query 或 POST/JSON 调用 `/stream/v1/tts` 并把音频原子写入 `response_file`。Token 只注入 `X-NLS-Token` header，不进入 URL 或 MCP 输出。
 
-Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；Event Grid Namespace MQTT v5 使用 `auth_scheme=eventgrid-mqtt-ws` 和内部 Entra `OAUTH2-JWT` CONNECT/AUTH；两者都把凭证和临时 token 留在 server 内部。
+Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；Event Grid Namespace MQTT v5 使用 `auth_scheme=eventgrid-mqtt-ws` 和内部 Entra `OAUTH2-JWT` CONNECT/AUTH；Service Bus/Event Hubs 数据面使用 `servicebus-amqp-ws|eventhubs-amqp-ws` 和内部 Entra/CBS AMQP 1.0 over WSS。它们都把凭证、临时 token、CBS claim 和消息/会话锁留在 server 内部。
 
 Azure OpenAI Realtime、Voice Live 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|voice-live-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、Kinesis Video Signaling、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|kinesisvideo-signaling-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 

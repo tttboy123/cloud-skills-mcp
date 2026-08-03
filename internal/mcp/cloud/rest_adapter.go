@@ -36,6 +36,9 @@ type AzureRESTConfig struct {
 	ReliableProtobufWebPubSubWebSocketDial azureWebPubSubWebSocketDial
 	WebPubSubMQTTWebSocketDial             azureWebPubSubWebSocketDial
 	EventGridMQTTWebSocketDial             azureWebPubSubWebSocketDial
+	AMQPWebSocketDial                      azureAMQPWebSocketDial
+	ServiceBusAMQP                         azureServiceBusAMQPExecutor
+	EventHubsAMQP                          azureEventHubsAMQPExecutor
 	StreamPause                            func(context.Context, time.Duration) error
 	MaxBodyBytes                           int64
 	AllowedHosts                           []string
@@ -79,6 +82,16 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	if config.EventGridMQTTWebSocketDial == nil {
 		config.EventGridMQTTWebSocketDial = defaultAzureEventGridMQTTWebSocketDial
 	}
+	if config.AMQPWebSocketDial == nil {
+		config.AMQPWebSocketDial = defaultAzureAMQPWebSocketDial
+	}
+	credential := azureAMQPTokenCredential{provider: config.Tokens}
+	if config.ServiceBusAMQP == nil {
+		config.ServiceBusAMQP = &azureSDKServiceBusAMQPExecutor{credential: credential, dial: config.AMQPWebSocketDial}
+	}
+	if config.EventHubsAMQP == nil {
+		config.EventHubsAMQP = &azureSDKEventHubsAMQPExecutor{credential: credential, dial: config.AMQPWebSocketDial}
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -91,7 +104,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -109,6 +122,9 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"webpubsub_mqtt":      "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-connect-mqtt-websocket-client",
 		"eventgrid_mqtt":      "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-support",
 		"eventgrid_mqtt_auth": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-client-microsoft-entra-token-and-rbac",
+		"messaging_amqp":      "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-amqp-protocol-guide",
+		"servicebus_auth":     "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-authentication-and-authorization",
+		"eventhubs_auth":      "https://learn.microsoft.com/en-us/azure/event-hubs/authenticate-application",
 	})
 }
 
@@ -129,8 +145,14 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureEventGridMQTTWS {
 		return invokeAzureEventGridMQTT(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureServiceBusAMQPWS {
+		return invokeAzureServiceBusAMQP(ctx, adapter, request)
+	}
+	if scheme == authSchemeAzureEventHubsAMQPWS {
+		return invokeAzureEventHubsAMQP(ctx, adapter, request)
+	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {

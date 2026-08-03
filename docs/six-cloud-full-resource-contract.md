@@ -1,6 +1,6 @@
 # Six-cloud full-resource MCP contract
 
-Date: 2026-08-02
+Date: 2026-08-03
 Status: active goal contract
 
 ## Completion definition
@@ -45,7 +45,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
-| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, and Event Grid Namespace MQTT v5 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
+| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, Event Grid Namespace MQTT v5, and Service Bus/Event Hubs AMQP 1.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
@@ -185,6 +185,22 @@ remain available through the guarded resource gateway.
   IDs, wildcard/shared subscriptions, subscription identifiers, negative
   acknowledgements, server disconnect, 512-KiB packet, alias-10, keepalive-1160,
   and atomic mode-0600 Base64 NDJSON bounds.
+- Azure Service Bus and Event Hubs messaging data planes use AMQP 1.0 tunneled
+  through the exact public `$servicebus/websocket` endpoint with subprotocol
+  `amqp`. The official Azure Go SDK performs SASL anonymous negotiation, CBS
+  claim installation/refresh, AMQP connection/session/link framing, and broker
+  settlement. Only the non-CLI operator Azure Identity chain can acquire the
+  fixed Service Bus or Event Hubs Entra scope; caller bearer tokens, SAS,
+  connection strings, WebSocket headers, and query authentication are rejected.
+- Service Bus exposes bounded queue/topic/subscription send, schedule/cancel,
+  peek, receive, deferred-message and session-state operations. Only peek is
+  read-only. ReceiveAndDelete and every PeekLock settlement require mutation
+  approval; PeekLock settlement completes inside the same invocation, and
+  message lock tokens or session locks never cross the MCP boundary. Event
+  Hubs exposes read-only hub/partition properties and finite per-partition pull,
+  plus mutation-gated finite batch sends by partition ID or partition key.
+  Consumer owner/epoch capability is not exposed. Both protocols publish only
+  bounded sanitized mode-0600 NDJSON after the complete operation succeeds.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a
