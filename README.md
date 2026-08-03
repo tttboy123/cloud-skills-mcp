@@ -214,6 +214,14 @@ Amazon IVS Chat 消息数据面使用 `auth_scheme=ivs-chat-ws`，不是普通 S
 
 入口只接受官网当前列出的 7 个区域 endpoint，执行每连接 10 请求/秒节流，并验证 room ARN、用户、会话时长、1 KiB attributes、500 code points 消息、MESSAGE/EVENT/ERROR 帧及原子输出。调用方不能提交 token、capabilities、header/query 或任意 action；一次性 token、SigV4 Authorization 与 STS token 都不会进入 MCP 返回、错误或审计。
 
+Amazon Lex V2 流式文本会话使用 `auth_scheme=lex-v2-conversation`，不是普通 HTTPS 请求：server 先校验官方 `https://runtime-v2-lex.<region>.amazonaws.com` origin 与 bot/alias/locale/session URI，再用 AWS IAM/AKSK 链对请求和每个 `STREAMING-AWS4-HMAC-SHA256-EVENTS` 帧做内部签名，首个事件固定为 `ConfigurationEvent`，随后是 1–64 条 `TextInputEvent`：
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"lex-v2-conversation","service":"lex","operation":"StartConversation","region":"us-west-2","method":"POST","url":"https://runtime-v2-lex.us-west-2.amazonaws.com","body":{"bot_id":"ABCDEFGHIJ","bot_alias_id":"alias-1","locale_id":"en_US","session_id":"session-1","texts":[{"text":"hello","event_id":"lex-evt-1"}],"max_events":64,"timeout_seconds":60},"response_file":"/approved/results/lex.ndjson","force":true}}
+```
+
+响应只接受官方 TEXT 模式事件（TextResponse/Transcript/Heartbeat/IntentResult），未知事件、异常帧、含凭据字段的帧与 AUDIO 帧一律 fail closed；EOF 与超时只发布已到达内容，失败不落盘。调用方不能提交签名、token、capabilities、header/query 或任意 action；签名材料与 STS token 不会进入 MCP 返回、错误或审计。AUDIO/DTMF 输入模式仍是文档化的剩余协议族。
+
 其他使用标准 SigV4 Upgrade、而消息帧本身不需要额外 AWS 链式签名的官方双向 WebSocket 使用 `auth_scheme=sigv4-ws`。通用入口最多收发 256 帧或运行 300 秒；Bedrock AgentCore 目标还执行其官方 32 KiB 单帧上限。例如 `InvokeAgentRuntimeWithWebSocketStream`：
 
 ```json

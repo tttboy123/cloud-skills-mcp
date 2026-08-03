@@ -57,6 +57,10 @@
 - Amazon IVS Chat `DeleteMessage` and `DisconnectUser` moderation messages: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-deletemessage-publish.html and https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-disconnectuser-publish.html
 - Amazon IVS Chat subscribed Message/Event shapes and asynchronous errors: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-message-subscribe.html, https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-event-subscribe.html, and https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/error-messages.html
 - Amazon IVS Chat current regional HTTPS/WSS endpoints and messaging quotas: https://docs.aws.amazon.com/general/latest/gr/ivs.html
+- Amazon Lex V2 runtime `StartConversation` HTTP/2 bidirectional event stream, request/response syntax, events, and errors: https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_StartConversation.html
+- Amazon Lex V2 streaming API concepts, `ConfigurationEvent`, and text/audio/DTMF event ordering: https://docs.aws.amazon.com/lexv2/latest/dg/streaming-API.html
+- Amazon Lex V2 `ConfigurationEvent`, `TextInputEvent`, and response event shapes: https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_ConfigurationEvent.html, https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_TextInputEvent.html, and https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_StartConversationResponseEventStream.html
+- Amazon Lex V2 runtime endpoints and service signing name (`runtime-v2-lex`, `lex`): https://docs.aws.amazon.com/general/latest/gr/lex.html
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
 
