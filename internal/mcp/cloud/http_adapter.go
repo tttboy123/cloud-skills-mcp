@@ -200,18 +200,20 @@ func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]by
 		"connect_health_ws":                  "https://docs.aws.amazon.com/connecthealth/latest/userguide/ambient-documentation.html",
 		"ivs_chat_ws":                        "https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/welcome.html",
 		"ivs_chat_token":                     "https://docs.aws.amazon.com/ivs/latest/ChatAPIReference/API_CreateChatToken.html",
+		"lex_v2_conversation":                "https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_StartConversation.html",
+		"lex_v2_streaming":                   "https://docs.aws.amazon.com/lexv2/latest/dg/streaming-API.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
-	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSECR && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS && scheme != authSchemeAWSIVSChatWS {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, ecr, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, appsync-graphql-ws, or ivs-chat-ws")
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSECR && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS && scheme != authSchemeAWSIVSChatWS && scheme != authSchemeAWSLexV2Conversation {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, ecr, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, appsync-graphql-ws, ivs-chat-ws, or lex-v2-conversation")
 	}
 	if scheme == authSchemeAWSECR {
 		return invokeAWSECR(ctx, adapter, invocation)
 	}
-	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS || scheme == authSchemeAWSIVSChatWS {
+	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS || scheme == authSchemeAWSIVSChatWS || scheme == authSchemeAWSLexV2Conversation {
 		var validationErr error
 		switch scheme {
 		case authSchemeAWSSigV4WS:
@@ -230,6 +232,8 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			validationErr = validateAWSAppSyncGraphQLWebSocketInvocation(invocation, adapter.config.AllowedHosts)
 		case authSchemeAWSIVSChatWS:
 			validationErr = validateAWSIVSChatInvocation(invocation)
+		case authSchemeAWSLexV2Conversation:
+			validationErr = validateAWSLexV2Invocation(invocation)
 		}
 		if validationErr != nil {
 			return InvocationResult{}, validationErr
@@ -261,6 +265,9 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 		}
 		if scheme == authSchemeAWSIVSChatWS {
 			return invokeAWSIVSChatWebSocket(ctx, adapter, credentials, invocation)
+		}
+		if scheme == authSchemeAWSLexV2Conversation {
+			return invokeAWSLexV2Conversation(ctx, adapter, credentials, invocation)
 		}
 		return invokeAWSAppSyncGraphQLWebSocket(ctx, adapter, credentials, invocation)
 	}
