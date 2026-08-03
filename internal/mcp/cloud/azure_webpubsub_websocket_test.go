@@ -53,7 +53,7 @@ func TestAzureWebPubSubBoundaryRequiresExactEntraBackedProtocol(t *testing.T) {
 		"credential":       func(v *Invocation) { v.Body.(map[string]any)["client_secret"] = "caller" },
 		"role":             func(v *Invocation) { v.Body.(map[string]any)["roles"] = []any{"webpubsub.admin"} },
 		"unbounded":        func(v *Invocation) { v.Body.(map[string]any)["timeout_seconds"] = 301 },
-		"unknown protocol": func(v *Invocation) { v.Body.(map[string]any)["protocol"] = "protobuf-reliable" },
+		"unknown protocol": func(v *Invocation) { v.Body.(map[string]any)["protocol"] = "xml" },
 		"reliable missing ack": func(v *Invocation) {
 			v.Body.(map[string]any)["protocol"] = "json-reliable"
 			v.Body.(map[string]any)["messages"] = []any{map[string]any{"type": "joinGroup", "group": "room"}}

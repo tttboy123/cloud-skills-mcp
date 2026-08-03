@@ -26,16 +26,18 @@ import (
 const defaultRESTBodyLimit = 2 * 1024 * 1024
 
 type AzureRESTConfig struct {
-	Timeout                        time.Duration
-	Tokens                         AzureTokenProvider
-	HTTP                           HTTPDoer
-	WebSocketDial                  azureRealtimeWebSocketDial
-	WebPubSubWebSocketDial         azureWebPubSubWebSocketDial
-	ReliableWebPubSubWebSocketDial azureWebPubSubWebSocketDial
-	WebPubSubMQTTWebSocketDial     azureWebPubSubWebSocketDial
-	StreamPause                    func(context.Context, time.Duration) error
-	MaxBodyBytes                   int64
-	AllowedHosts                   []string
+	Timeout                                time.Duration
+	Tokens                                 AzureTokenProvider
+	HTTP                                   HTTPDoer
+	WebSocketDial                          azureRealtimeWebSocketDial
+	WebPubSubWebSocketDial                 azureWebPubSubWebSocketDial
+	ReliableWebPubSubWebSocketDial         azureWebPubSubWebSocketDial
+	ProtobufWebPubSubWebSocketDial         azureWebPubSubWebSocketDial
+	ReliableProtobufWebPubSubWebSocketDial azureWebPubSubWebSocketDial
+	WebPubSubMQTTWebSocketDial             azureWebPubSubWebSocketDial
+	StreamPause                            func(context.Context, time.Duration) error
+	MaxBodyBytes                           int64
+	AllowedHosts                           []string
 }
 
 type AzureRESTAdapter struct {
@@ -64,6 +66,12 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	if config.ReliableWebPubSubWebSocketDial == nil {
 		config.ReliableWebPubSubWebSocketDial = defaultAzureReliableWebPubSubWebSocketDial
 	}
+	if config.ProtobufWebPubSubWebSocketDial == nil {
+		config.ProtobufWebPubSubWebSocketDial = defaultAzureProtobufWebPubSubWebSocketDial
+	}
+	if config.ReliableProtobufWebPubSubWebSocketDial == nil {
+		config.ReliableProtobufWebPubSubWebSocketDial = defaultAzureReliableProtobufWebPubSubWebSocketDial
+	}
 	if config.WebPubSubMQTTWebSocketDial == nil {
 		config.WebPubSubMQTTWebSocketDial = defaultAzureWebPubSubMQTTWebSocketDial
 	}
@@ -79,7 +87,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-ws-reliable+mqtt",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-json-protobuf-reliable+mqtt5",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil

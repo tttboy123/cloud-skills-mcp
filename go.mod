@@ -14,6 +14,7 @@ require (
 	github.com/aws/smithy-go v1.27.6
 	github.com/coder/websocket v1.8.15
 	github.com/mark3labs/mcp-go v0.57.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (

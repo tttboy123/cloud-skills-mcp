@@ -45,7 +45,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
-| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime WSS and Entra-backed Web PubSub standard/reliable JSON and MQTT 3.1.1/5.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
+| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime WSS and Entra-backed Web PubSub standard/reliable JSON/Protobuf and MQTT 3.1.1/5.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf gRPC over HTTP/2, and bounded Vertex/Gemini Live WSS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
@@ -114,12 +114,14 @@ remain available through the guarded resource gateway.
   ADC, keeps it inside the Upgrade, enforces setup/setupComplete ordering,
   bounds client/server messages and time, and atomically publishes validated
   server JSON. Paid stateful sessions are mutation-only.
-- Azure Web PubSub JSON WSS accepts only a public-cloud resource endpoint and
+- Azure Web PubSub JSON/Protobuf WSS accepts only a public-cloud resource endpoint and
   the exact hub path. It obtains an Entra token, calls the fixed five-minute
   Generate Client Token API internally, keeps both tokens out of MCP, requires
-  `json.webpubsub.azure.v1` or its reliable JSON variant, bounds both
+  the exact standard/reliable JSON or Protobuf subprotocol, bounds both
   directions, rejects failed protocol acknowledgements, and atomically
-  publishes server JSON. Reliable mode keeps recovery state internal, uses
+  publishes sanitized logical NDJSON. Protobuf mode uses binary frames and the
+  official proto3 field schema for Any/binary data and streaming messages.
+  Reliable mode keeps recovery state internal, uses
   exact uint64 sequence acknowledgements, suppresses duplicates, and resends
   pending publisher messages for at most the documented one-minute recovery
   window. Sessions are mutation-only.
