@@ -143,6 +143,25 @@ build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
 validators, Actionlint, govulncheck, four-platform archives, and a five-second
 shared standard/MQTT endpoint fuzz run (170,545 executions) also passed.
 
+Google Cloud descriptor-driven ProtoJSON gRPC now gives every
+server-streaming method an explicit finite response-message and total-time
+bound. This closes the indefinite-wait gap for APIs such as Firestore `Listen`,
+Cloud Logging `TailLogEntries`, Speech `StreamingRecognize`, and Pub/Sub
+`StreamingPull` without adding service-specific transports: the supplied
+official `FileDescriptorSet` proves the RPC shape. The exact Firestore and
+Logging observation paths are read-only; lookalike `Listen` methods fail the
+read classifier, and Pub/Sub `StreamingPull` remains mutation-gated because
+its bidirectional requests can acknowledge messages or change ack deadlines.
+Complete frames are atomically published up to the caller's bound; partial
+frames and any already-known nonzero `grpc-status` fail closed. Implementation
+commit `b1843abe89c9d7007c8c0bd8024b93f2e7a22697` passed remote macOS,
+Ubuntu, ShellCheck, Actionlint, govulncheck, and four-platform release
+verification in [CI run 30815515763](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30815515763).
+Fresh local module verification, formatting, vet, race coverage (80.1% total,
+80.2% cloud package), build, protocol/install smoke, shell syntax, all six
+Skill validators, Actionlint, govulncheck, four-platform archives, and a
+five-second stream-bound fuzz run (126,616 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
