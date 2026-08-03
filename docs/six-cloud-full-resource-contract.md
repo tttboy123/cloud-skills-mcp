@@ -186,12 +186,16 @@ remain available through the guarded resource gateway.
   acknowledgements, server disconnect, 512-KiB packet, alias-10, keepalive-1160,
   and atomic mode-0600 Base64 NDJSON bounds.
 - Azure Service Bus and Event Hubs messaging data planes use AMQP 1.0 tunneled
-  through the exact public `$servicebus/websocket` endpoint with subprotocol
+  through the exact public, US Government, or China `$servicebus/websocket`
+  endpoint with subprotocol
   `amqp`. The official Azure Go SDK performs SASL anonymous negotiation, CBS
   claim installation/refresh, AMQP connection/session/link framing, and broker
   settlement. Only the non-CLI operator Azure Identity chain can acquire the
   fixed Service Bus or Event Hubs Entra scope; caller bearer tokens, SAS,
   connection strings, WebSocket headers, and query authentication are rejected.
+  Only `servicebus.windows.net`, `servicebus.usgovcloudapi.net`, and
+  `servicebus.chinacloudapi.cn` namespace suffixes are accepted. Private-link,
+  custom/lookalike, and retired Germany hosts fail closed.
 - Service Bus exposes bounded queue/topic/subscription send, schedule/cancel,
   peek, receive, deferred-message and session-state operations. Only peek is
   read-only. ReceiveAndDelete and every PeekLock settlement require mutation

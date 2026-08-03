@@ -158,25 +158,33 @@ func TestAzureEventHubsAMQPFailureNeverPublishesPartialFile(t *testing.T) {
 }
 
 func TestAzureEventHubsSDKOptionsAllowOnlyTheExactNamespaceWebSocketTarget(t *testing.T) {
-	var targets []string
-	executor := &azureSDKEventHubsAMQPExecutor{dial: func(_ context.Context, target string) (net.Conn, error) {
-		targets = append(targets, target)
-		return nil, errors.New("intentional dial stop")
-	}}
-	expected := "wss://telemetry.servicebus.windows.net/$servicebus/websocket"
-	for _, dial := range []func(context.Context, azeventhubs.WebSocketConnParams) (net.Conn, error){
-		executor.producerOptions("telemetry.servicebus.windows.net").NewWebSocketConn,
-		executor.consumerOptions("telemetry.servicebus.windows.net").NewWebSocketConn,
+	for _, fqdn := range []string{
+		"telemetry.servicebus.windows.net",
+		"telemetry.servicebus.usgovcloudapi.net",
+		"telemetry.servicebus.chinacloudapi.cn",
 	} {
-		if _, err := dial(t.Context(), azeventhubs.WebSocketConnParams{Host: expected}); err == nil {
-			t.Fatal("intentional exact-target dial failure was accepted")
-		}
-		if _, err := dial(t.Context(), azeventhubs.WebSocketConnParams{Host: "wss://evil.example/$servicebus/websocket"}); err == nil {
-			t.Fatal("unexpected SDK target was accepted")
-		}
-	}
-	if len(targets) != 2 || targets[0] != expected || targets[1] != expected {
-		t.Fatalf("dial targets=%q", targets)
+		t.Run(fqdn, func(t *testing.T) {
+			var targets []string
+			executor := &azureSDKEventHubsAMQPExecutor{dial: func(_ context.Context, target string) (net.Conn, error) {
+				targets = append(targets, target)
+				return nil, errors.New("intentional dial stop")
+			}}
+			expected := "wss://" + fqdn + azureAMQPWebSocketPath
+			for _, dial := range []func(context.Context, azeventhubs.WebSocketConnParams) (net.Conn, error){
+				executor.producerOptions(fqdn).NewWebSocketConn,
+				executor.consumerOptions(fqdn).NewWebSocketConn,
+			} {
+				if _, err := dial(t.Context(), azeventhubs.WebSocketConnParams{Host: expected}); err == nil {
+					t.Fatal("intentional exact-target dial failure was accepted")
+				}
+				if _, err := dial(t.Context(), azeventhubs.WebSocketConnParams{Host: "wss://evil.example/$servicebus/websocket"}); err == nil {
+					t.Fatal("unexpected SDK target was accepted")
+				}
+			}
+			if len(targets) != 2 || targets[0] != expected || targets[1] != expected {
+				t.Fatalf("dial targets=%q", targets)
+			}
+		})
 	}
 }
 

@@ -31,6 +31,42 @@ func serviceBusTestInvocation(root string) Invocation {
 	}
 }
 
+func TestAzureAMQPWebSocketTargetSupportsDocumentedActiveClouds(t *testing.T) {
+	tests := map[string]string{
+		"public":        "wss://orders.servicebus.windows.net/$servicebus/websocket",
+		"us government": "wss://orders.servicebus.usgovcloudapi.net/$servicebus/websocket",
+		"china":         "wss://orders.servicebus.chinacloudapi.cn/$servicebus/websocket",
+	}
+	for name, rawURL := range tests {
+		t.Run(name, func(t *testing.T) {
+			fqdn, err := parseAzureAMQPWebSocketTarget(rawURL)
+			if err != nil {
+				t.Fatalf("documented endpoint rejected: %v", err)
+			}
+			if fqdn != strings.TrimSuffix(strings.TrimPrefix(rawURL, "wss://"), azureAMQPWebSocketPath) {
+				t.Fatalf("fqdn=%q", fqdn)
+			}
+		})
+	}
+}
+
+func TestAzureAMQPWebSocketTargetRejectsUndocumentedOrAmbiguousClouds(t *testing.T) {
+	for name, rawURL := range map[string]string{
+		"public lookalike":        "wss://orders.servicebus.windows.net.attacker.example/$servicebus/websocket",
+		"government lookalike":    "wss://orders.servicebus.usgovcloudapi.net.attacker.example/$servicebus/websocket",
+		"china lookalike":         "wss://orders.servicebus.chinacloudapi.cn.attacker.example/$servicebus/websocket",
+		"government private link": "wss://orders.privatelink.servicebus.usgovcloudapi.net/$servicebus/websocket",
+		"china private link":      "wss://orders.privatelink.servicebus.chinacloudapi.cn/$servicebus/websocket",
+		"retired germany":         "wss://orders.servicebus.cloudapi.de/$servicebus/websocket",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseAzureAMQPWebSocketTarget(rawURL); err == nil {
+				t.Fatal("unsafe or retired endpoint accepted")
+			}
+		})
+	}
+}
+
 func TestAzureServiceBusAMQPValidationAndPolicy(t *testing.T) {
 	base := serviceBusTestInvocation(t.TempDir())
 	if err := validateInvocation(base, []string{filepath.Dir(base.ResponseFile)}); err != nil {
@@ -248,25 +284,34 @@ func TestAzureAMQPWebSocketDialRejectsMissingProtocolAndHandshakeFailures(t *tes
 }
 
 func TestAzureServiceBusSDKCanDialOnlyTheExactNamespaceWebSocketTarget(t *testing.T) {
-	var target string
-	ctx, cancel := context.WithCancel(t.Context())
-	executor := &azureSDKServiceBusAMQPExecutor{
-		credential: azureAMQPTokenCredential{provider: azureTokenProviderFunc(func(context.Context, string) (string, error) {
-			return "unused", nil
-		})},
-		dial: func(_ context.Context, requested string) (net.Conn, error) {
-			target = requested
-			cancel()
-			return nil, errors.New("intentional dial stop")
-		},
-	}
-	plan, err := parseAzureServiceBusAMQPPlan("PeekMessages", map[string]any{"queue": "orders", "max_messages": 1, "timeout_seconds": 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, _ = executor.Execute(ctx, "orders.servicebus.windows.net", plan)
-	if target != "wss://orders.servicebus.windows.net/$servicebus/websocket" {
-		t.Fatalf("SDK dial target=%q", target)
+	for _, fqdn := range []string{
+		"orders.servicebus.windows.net",
+		"orders.servicebus.usgovcloudapi.net",
+		"orders.servicebus.chinacloudapi.cn",
+	} {
+		t.Run(fqdn, func(t *testing.T) {
+			var target string
+			ctx, cancel := context.WithCancel(t.Context())
+			executor := &azureSDKServiceBusAMQPExecutor{
+				credential: azureAMQPTokenCredential{provider: azureTokenProviderFunc(func(context.Context, string) (string, error) {
+					return "unused", nil
+				})},
+				dial: func(_ context.Context, requested string) (net.Conn, error) {
+					target = requested
+					cancel()
+					return nil, errors.New("intentional dial stop")
+				},
+			}
+			plan, err := parseAzureServiceBusAMQPPlan("PeekMessages", map[string]any{"queue": "orders", "max_messages": 1, "timeout_seconds": 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, _ = executor.Execute(ctx, fqdn, plan)
+			expected := "wss://" + fqdn + azureAMQPWebSocketPath
+			if target != expected {
+				t.Fatalf("SDK dial target=%q want=%q", target, expected)
+			}
+		})
 	}
 }
 

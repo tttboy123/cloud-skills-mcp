@@ -30,6 +30,12 @@ const (
 	azureAMQPMaxPropertyBytes       = 64 * 1024
 )
 
+var azureAMQPActiveNamespaceSuffixes = [...]string{
+	".servicebus.windows.net",
+	".servicebus.usgovcloudapi.net",
+	".servicebus.chinacloudapi.cn",
+}
+
 type azureAMQPWebSocketDial func(context.Context, string) (net.Conn, error)
 
 type azureServiceBusAMQPExecutor interface {
@@ -69,15 +75,16 @@ func (credential azureAMQPTokenCredential) GetToken(ctx context.Context, options
 func parseAzureAMQPWebSocketTarget(rawURL string) (string, error) {
 	target, err := url.Parse(rawURL)
 	if err != nil || target.Scheme != "wss" || target.User != nil || target.Fragment != "" || target.RawQuery != "" || target.Hostname() == "" || target.EscapedPath() != azureAMQPWebSocketPath || target.Port() != "" && target.Port() != "443" {
-		return "", fmt.Errorf("Azure messaging AMQP requires the exact credential-free wss://namespace.servicebus.windows.net/$servicebus/websocket endpoint on port 443")
+		return "", fmt.Errorf("Azure messaging AMQP requires an exact credential-free active-cloud Service Bus namespace WSS endpoint on port 443")
 	}
 	host := strings.ToLower(target.Hostname())
-	const suffix = ".servicebus.windows.net"
-	name := strings.TrimSuffix(host, suffix)
-	if name == host || strings.Contains(name, ".") || !endpointLabelPattern.MatchString(name) {
-		return "", fmt.Errorf("Azure messaging AMQP host must be a public namespace.servicebus.windows.net endpoint")
+	for _, suffix := range azureAMQPActiveNamespaceSuffixes {
+		name := strings.TrimSuffix(host, suffix)
+		if name != host && !strings.Contains(name, ".") && endpointLabelPattern.MatchString(name) {
+			return host, nil
+		}
 	}
-	return host, nil
+	return "", fmt.Errorf("Azure messaging AMQP host must use exact namespace.servicebus.windows.net, namespace.servicebus.usgovcloudapi.net, or namespace.servicebus.chinacloudapi.cn endpoint form")
 }
 
 func defaultAzureAMQPWebSocketDial(ctx context.Context, target string) (net.Conn, error) {
