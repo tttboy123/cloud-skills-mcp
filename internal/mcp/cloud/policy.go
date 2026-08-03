@@ -37,6 +37,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 	}
 	switch provider {
 	case ProviderAzure:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureEventGridMQTTWS {
+			return strings.EqualFold(strings.TrimSpace(request.Operation), "SubscribeMQTT")
+		}
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureWebPubSubMQTTWS {
 			return strings.EqualFold(strings.TrimSpace(request.Operation), "SubscribeMQTT")
 		}
@@ -198,6 +201,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureVoiceLiveScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureVoiceLiveWS
 	azureWebPubSubScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubWS
 	azureWebPubSubMQTTScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubMQTTWS
+	azureEventGridMQTTScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureEventGridMQTTWS
 	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
@@ -308,6 +312,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateAzureWebPubSubMQTTInvocation(request); err != nil {
 			return err
 		}
+	} else if azureEventGridMQTTScheme {
+		if err := validateAzureEventGridMQTTInvocation(request, allowedEndpointHosts); err != nil {
+			return err
+		}
 	} else if baiduRTCAgentWebSocketScheme {
 		if err := validateBaiduRTCAgentWebSocketInvocation(request); err != nil {
 			return err
@@ -319,8 +327,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	switch request.Provider {
 	case ProviderAzure:
-		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureVoiceLiveWS && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureWebPubSubMQTTWS {
-			return fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
+		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureVoiceLiveWS && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureWebPubSubMQTTWS && azureScheme != authSchemeAzureEventGridMQTTWS {
+			return fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, or omitted for REST")
 		}
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPFirebaseSSE && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {

@@ -17,7 +17,7 @@ func TestAzureStatusDiscoveryAndFailures(t *testing.T) {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	output, err := adapter.Discover(t.Context(), DiscoveryRequest{})
-	if err != nil || !strings.Contains(string(output), "rest_api_reference") {
+	if err != nil || !strings.Contains(string(output), "rest_api_reference") || !strings.Contains(string(output), "eventgrid_mqtt_auth") {
 		t.Fatalf("discover=%s err=%v", output, err)
 	}
 }

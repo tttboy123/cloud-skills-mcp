@@ -35,6 +35,7 @@ type AzureRESTConfig struct {
 	ProtobufWebPubSubWebSocketDial         azureWebPubSubWebSocketDial
 	ReliableProtobufWebPubSubWebSocketDial azureWebPubSubWebSocketDial
 	WebPubSubMQTTWebSocketDial             azureWebPubSubWebSocketDial
+	EventGridMQTTWebSocketDial             azureWebPubSubWebSocketDial
 	StreamPause                            func(context.Context, time.Duration) error
 	MaxBodyBytes                           int64
 	AllowedHosts                           []string
@@ -75,6 +76,9 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	if config.WebPubSubMQTTWebSocketDial == nil {
 		config.WebPubSubMQTTWebSocketDial = defaultAzureWebPubSubMQTTWebSocketDial
 	}
+	if config.EventGridMQTTWebSocketDial == nil {
+		config.EventGridMQTTWebSocketDial = defaultAzureEventGridMQTTWebSocketDial
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -87,7 +91,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -96,13 +100,15 @@ func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, er
 func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryRequest) ([]byte, error) {
 	_ = ctx
 	return json.Marshal(map[string]string{
-		"rest_api_reference": "https://learn.microsoft.com/en-us/rest/api/azure/",
-		"authentication":     "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
-		"openai_realtime":    "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
-		"voice_live":         "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to",
-		"webpubsub_protocol": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
-		"webpubsub_reliable": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
-		"webpubsub_mqtt":     "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-connect-mqtt-websocket-client",
+		"rest_api_reference":  "https://learn.microsoft.com/en-us/rest/api/azure/",
+		"authentication":      "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
+		"openai_realtime":     "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
+		"voice_live":          "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to",
+		"webpubsub_protocol":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
+		"webpubsub_reliable":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
+		"webpubsub_mqtt":      "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-connect-mqtt-websocket-client",
+		"eventgrid_mqtt":      "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-support",
+		"eventgrid_mqtt_auth": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-client-microsoft-entra-token-and-rbac",
 	})
 }
 
@@ -120,8 +126,11 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureWebPubSubMQTTWS {
 		return invokeAzureWebPubSubMQTT(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureEventGridMQTTWS {
+		return invokeAzureEventGridMQTT(ctx, adapter, request)
+	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {
@@ -306,6 +315,8 @@ func azureScopeForInvocationWithEndpointHosts(rawURL, explicitAudience string, a
 		return "https://dashboard.azure.com/.default", nil
 	case strings.HasSuffix(host, ".webpubsub.azure.com"):
 		return "https://webpubsub.azure.com/.default", nil
+	case strings.HasSuffix(host, ".eventgrid.azure.net"):
+		return azureEventGridScope, nil
 	case strings.HasSuffix(host, ".service.signalr.net"):
 		return "https://signalr.azure.com/.default", nil
 	case strings.HasSuffix(host, ".digitaltwins.azure.net"):

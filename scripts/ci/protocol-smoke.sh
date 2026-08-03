@@ -25,6 +25,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"aws_api_mutate","arguments":{"service":"sts","operation":"assume-role","force":true}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"cloud_provider_status","arguments":{"provider":"aws"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"auth_scheme":"firebase-sse","service":"firebase-database","operation":"Listen","method":"GET","url":"https://demo.firebaseio.com.attacker.example/messages.json","body":{"max_events":1,"timeout_seconds":5},"response_file":"/tmp/events.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"eventgrid-mqtt-ws","service":"eventgrid","operation":"SubscribeMQTT","method":"GET","url":"wss://namespace.westus2.eventgrid.azure.net.attacker.example/mqtt","body":{"client_id":"observer","subscriptions":[{"topic_filter":"events/#","qos":1}],"keep_alive_seconds":30,"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/eventgrid.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -50,7 +51,9 @@ jq -e -s '
     (map(select(.id == 9))[0].result.content[0].text | contains("credential issuance")) and
     ((map(select(.id == 10))[0].result.content[0].text | fromjson).credential_status == "unverified") and
     (map(select(.id == 11))[0].result.isError == true) and
-    (map(select(.id == 11))[0].result.content[0].text | contains("official Realtime Database host"))
+    (map(select(.id == 11))[0].result.content[0].text | contains("official Realtime Database host")) and
+    (map(select(.id == 12))[0].result.isError == true) and
+    (map(select(.id == 12))[0].result.content[0].text | contains("operator-pinned custom domain"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"
