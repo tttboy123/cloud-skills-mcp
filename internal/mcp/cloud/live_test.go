@@ -974,6 +974,71 @@ func TestLiveAWSIVSChatMutation(t *testing.T) {
 	t.Logf("provider=aws service=ivschat operation=ClientChat outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
 }
 
+func TestLiveAWSChimeMessagingSubscribeReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_CHIME_MESSAGING") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AWS_CHIME_MESSAGING=1 for a real SigV4 Chime messaging WebSocket subscribe probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Amazon Chime messaging live validation", name)
+		}
+		return value
+	}
+	region := envDefault("CLOUD_SKILLS_LIVE_AWS_CHIME_MESSAGING_REGION", "us-east-1")
+	userARN := required("CLOUD_SKILLS_LIVE_AWS_CHIME_MESSAGING_USER_ARN")
+	sessionID := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_LIVE_AWS_CHIME_MESSAGING_SESSION_ID"))
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("cloud-skills-live-%d", time.Now().UTC().UnixNano())
+	}
+	runtime := DefaultRuntime()
+	root := t.TempDir()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	responseFile := filepath.Join(root, "chime-messaging.ndjson")
+	result := callCloudTool(t, c, "aws_api_read", map[string]any{
+		"auth_scheme": "chime-messaging-ws", "service": "chime-messaging", "operation": "SubscribeMessages",
+		"region": region, "method": "GET", "url": "wss://data-messaging.chime.aws/connect", "response_file": responseFile,
+		"body": map[string]any{
+			"user_arn": userARN, "session_id": sessionID,
+			"connect_expires_seconds": 60, "max_messages": 1, "timeout_seconds": 10,
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Amazon Chime messaging live subscribe failed: %s", cloudToolText(t, result))
+	}
+	output, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"), os.Getenv("AWS_SESSION_TOKEN")} {
+		if secret != "" && bytes.Contains(output, []byte(secret)) {
+			t.Fatal("Amazon Chime messaging live output leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAWS && events[index].Mode == ModeRead && events[index].Operation == "SubscribeMessages" && events[index].AuthScheme == authSchemeAWSChimeMessagingWS && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Amazon Chime messaging read audit event: %#v", events)
+	}
+	t.Logf("provider=aws service=chime-messaging operation=SubscribeMessages outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
+}
+
 func runLiveAWSECRRegistryRead(t *testing.T, public bool) {
 	t.Helper()
 	required := func(name string) string {

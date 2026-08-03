@@ -163,6 +163,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 		if provider == ProviderAWS && normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) == authSchemeAWSIVSChatWS && action == awsIVSChatSubscribeOperation {
 			return true
 		}
+		if provider == ProviderAWS && normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) == authSchemeAWSChimeMessagingWS && action == awsChimeMessagingSubscribeOperation {
+			return true
+		}
 		if provider == ProviderTencent && normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3) == authSchemeTencentPodcastWS && action == "texttopodcaststreamaudiows" {
 			return true
 		}
@@ -238,6 +241,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	awsAppSyncGraphQLWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSAppSyncGraphQLWS
 	awsIVSChatWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSIVSChatWS
 	awsLexV2ConversationScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSLexV2Conversation
+	awsChimeMessagingScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSChimeMessagingWS
 	awsECRScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSECR
 	alibabaNLSWebSocketScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSWS
 	alibabaNLSRESTScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSREST
@@ -305,6 +309,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 	} else if awsLexV2ConversationScheme {
 		if err := validateAWSLexV2Invocation(request); err != nil {
+			return err
+		}
+	} else if awsChimeMessagingScheme {
+		if err := validateAWSChimeMessagingInvocation(request); err != nil {
 			return err
 		}
 	} else if alibabaNLSWebSocketScheme {
@@ -470,10 +478,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
 		scheme := awsScheme
-		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSECR && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS && scheme != authSchemeAWSIVSChatWS && scheme != authSchemeAWSLexV2Conversation {
-			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, ecr, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, appsync-graphql-ws, ivs-chat-ws, or lex-v2-conversation")
+		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSECR && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS && scheme != authSchemeAWSIVSChatWS && scheme != authSchemeAWSLexV2Conversation && scheme != authSchemeAWSChimeMessagingWS {
+			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, ecr, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, appsync-graphql-ws, ivs-chat-ws, lex-v2-conversation, or chime-messaging-ws")
 		}
-		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSECR || scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS || scheme == authSchemeAWSIVSChatWS || scheme == authSchemeAWSLexV2Conversation) && !identifierPattern.MatchString(request.Region) {
+		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSECR || scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS || scheme == authSchemeAWSIVSChatWS || scheme == authSchemeAWSLexV2Conversation || scheme == authSchemeAWSChimeMessagingWS) && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("AWS SigV4 requires a valid region")
 		}
 		if scheme == authSchemeAWSSigV4a {
