@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -29,6 +30,7 @@ var azureWebPubSubHubPattern = regexp.MustCompile("^[A-Za-z][A-Za-z0-9_`,.\\[\\]
 type azureWebPubSubWebSocketDial func(context.Context, string, http.Header) (cloudWebSocketConnection, error)
 
 type azureWebPubSubPlan struct {
+	Protocol       string            `json:"protocol,omitempty"`
 	UserID         string            `json:"user_id,omitempty"`
 	Roles          []string          `json:"roles,omitempty"`
 	Groups         []string          `json:"groups,omitempty"`
@@ -98,6 +100,12 @@ func parseAzureWebPubSubPlan(body any) (azureWebPubSubPlan, error) {
 	if plan.UserID != "" && !azureWebPubSubBoundedValue(plan.UserID, 128) {
 		return azureWebPubSubPlan{}, fmt.Errorf("Azure Web PubSub user_id is invalid")
 	}
+	if plan.Protocol == "" {
+		plan.Protocol = "json"
+	}
+	if plan.Protocol != "json" && plan.Protocol != "json-reliable" {
+		return azureWebPubSubPlan{}, fmt.Errorf("Azure Web PubSub protocol must be json or json-reliable")
+	}
 	if len(plan.Roles) > 32 || len(plan.Groups) > 32 {
 		return azureWebPubSubPlan{}, fmt.Errorf("Azure Web PubSub token claims exceed the bounded count")
 	}
@@ -117,8 +125,11 @@ func parseAzureWebPubSubPlan(body any) (azureWebPubSubPlan, error) {
 	if plan.MaxMessages < 1 || plan.MaxMessages > azureWebPubSubMaxMessages || plan.TimeoutSeconds < 1 || plan.TimeoutSeconds > azureWebPubSubMaxTimeoutSeconds {
 		return azureWebPubSubPlan{}, fmt.Errorf("Azure Web PubSub response count or timeout is outside the finite bound")
 	}
+	if plan.Protocol == "json-reliable" && plan.MaxMessages < 2 {
+		return azureWebPubSubPlan{}, fmt.Errorf("Azure reliable Web PubSub max_messages must allow connected plus protocol output")
+	}
 	plan.encodedMessages = make([][]byte, len(plan.Messages))
-	ackIDs := make(map[int64]bool)
+	ackIDs := make(map[uint64]bool)
 	for index, raw := range plan.Messages {
 		canonical, ackID, err := validateAzureWebPubSubClientMessage(raw)
 		if err != nil {
@@ -130,17 +141,26 @@ func parseAzureWebPubSubPlan(body any) (azureWebPubSubPlan, error) {
 			}
 			ackIDs[ackID] = true
 		}
+		if plan.Protocol == "json-reliable" && ackID == 0 {
+			var message map[string]any
+			_ = json.Unmarshal(canonical, &message)
+			if message["type"] != "ping" {
+				return azureWebPubSubPlan{}, fmt.Errorf("Azure reliable Web PubSub publisher messages require ackId")
+			}
+		}
 		plan.encodedMessages[index] = canonical
 	}
 	return plan, nil
 }
 
-func validateAzureWebPubSubClientMessage(raw json.RawMessage) ([]byte, int64, error) {
+func validateAzureWebPubSubClientMessage(raw json.RawMessage) ([]byte, uint64, error) {
 	if len(raw) == 0 || len(raw) > maxRequestPayloadBytes || !json.Valid(raw) {
 		return nil, 0, fmt.Errorf("client message must be bounded JSON")
 	}
 	var message map[string]any
-	if json.Unmarshal(raw, &message) != nil || azureRealtimeContainsCredentialField(message) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&message) != nil || ensureJSONDecoderEOF(decoder) != nil || azureRealtimeContainsCredentialField(message) {
 		return nil, 0, fmt.Errorf("client message is invalid or contains credentials")
 	}
 	kind, ok := message["type"].(string)
@@ -162,13 +182,14 @@ func validateAzureWebPubSubClientMessage(raw json.RawMessage) ([]byte, int64, er
 	default:
 		return nil, 0, fmt.Errorf("unsupported client message type")
 	}
-	var ackID int64
+	var ackID uint64
 	if rawAck, exists := message["ackId"]; exists {
-		value, ok := rawAck.(float64)
-		if !ok || value < 1 || value > 9007199254740991 || value != float64(int64(value)) {
+		value, ok := rawAck.(json.Number)
+		parsed, err := strconv.ParseUint(string(value), 10, 64)
+		if !ok || err != nil || parsed == 0 {
 			return nil, 0, fmt.Errorf("ackId must be a positive unique integer")
 		}
-		ackID = int64(value)
+		ackID = parsed
 	}
 	canonical, err := json.Marshal(message)
 	if err != nil {
@@ -222,6 +243,9 @@ func invokeAzureWebPubSub(ctx context.Context, adapter *AzureRESTAdapter, invoca
 	clientToken, err := mintAzureWebPubSubClientToken(ctx, adapter, target, hub, plan, identityToken)
 	if err != nil {
 		return InvocationResult{}, err
+	}
+	if plan.Protocol == "json-reliable" {
+		return invokeAzureReliableWebPubSub(ctx, adapter, invocation, plan, clientToken)
 	}
 	sessionCtx, cancel := context.WithTimeout(ctx, time.Duration(plan.TimeoutSeconds)*time.Second)
 	defer cancel()
@@ -363,9 +387,314 @@ func readAzureWebPubSubServerMessage(ctx context.Context, connection cloudWebSoc
 	return canonical, kind == "system" && message["event"] == "disconnected", nil
 }
 
+func invokeAzureReliableWebPubSub(ctx context.Context, adapter *AzureRESTAdapter, invocation Invocation, plan azureWebPubSubPlan, clientToken string) (InvocationResult, error) {
+	sessionCtx, cancel := context.WithTimeout(ctx, time.Duration(plan.TimeoutSeconds)*time.Second)
+	defer cancel()
+	sink, err := newWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes, "Azure reliable Web PubSub WebSocket")
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	defer sink.abort()
+	pending := make(map[uint64][]byte)
+	for _, encoded := range plan.encodedMessages {
+		_, ackID, _ := validateAzureWebPubSubClientMessage(encoded)
+		if ackID != 0 {
+			pending[ackID] = encoded
+		}
+	}
+	baseTarget, _ := url.Parse(invocation.URL)
+	target := invocation.URL
+	headers := http.Header{"Authorization": []string{"Bearer " + clientToken}}
+	firstConnection := true
+	received := 0
+	var connectionID, reconnectionToken string
+	var lastSequence uint64
+	var recoveryDeadline time.Time
+
+	for received < plan.MaxMessages {
+		connection, err := adapter.config.ReliableWebPubSubWebSocketDial(sessionCtx, target, headers)
+		if err != nil {
+			if websocket.CloseStatus(err) == websocket.StatusPolicyViolation {
+				return InvocationResult{}, fmt.Errorf("Azure reliable Web PubSub recovery state expired")
+			}
+			if recoveryDeadline.IsZero() || time.Now().After(recoveryDeadline) {
+				return InvocationResult{}, fmt.Errorf("recover Azure reliable Web PubSub connection")
+			}
+			if err := adapter.config.StreamPause(sessionCtx, 500*time.Millisecond); err != nil {
+				return InvocationResult{}, fmt.Errorf("recover Azure reliable Web PubSub connection")
+			}
+			continue
+		}
+		connected, err := readAzureReliableConnected(sessionCtx, connection)
+		if err != nil {
+			connection.Close()
+			var readErr *azureReliableConnectedReadError
+			if !recoveryDeadline.IsZero() && errors.As(err, &readErr) {
+				if websocket.CloseStatus(readErr) == websocket.StatusPolicyViolation {
+					return InvocationResult{}, fmt.Errorf("Azure reliable Web PubSub recovery state expired")
+				}
+				if time.Now().Before(recoveryDeadline) {
+					if pauseErr := adapter.config.StreamPause(sessionCtx, 500*time.Millisecond); pauseErr == nil {
+						continue
+					}
+				}
+				return InvocationResult{}, fmt.Errorf("recover Azure reliable Web PubSub connection")
+			}
+			return InvocationResult{}, err
+		}
+		if connectionID != "" && connected.ConnectionID != connectionID {
+			connection.Close()
+			return InvocationResult{}, fmt.Errorf("Azure reliable Web PubSub recovered a different connection")
+		}
+		connectionID, reconnectionToken = connected.ConnectionID, connected.ReconnectionToken
+		recoveryDeadline = time.Time{}
+		if err := sink.writeMessage(connected.Sanitized); err != nil {
+			connection.Close()
+			return InvocationResult{}, err
+		}
+		received++
+		if received >= plan.MaxMessages {
+			connection.Close()
+			break
+		}
+		if firstConnection {
+			for index, message := range plan.encodedMessages {
+				if index > 0 && invocation.StreamIntervalMS > 0 {
+					if err := adapter.config.StreamPause(sessionCtx, time.Duration(invocation.StreamIntervalMS)*time.Millisecond); err != nil {
+						connection.Close()
+						return InvocationResult{}, fmt.Errorf("pace Azure reliable Web PubSub client messages")
+					}
+				}
+				if err := connection.Write(sessionCtx, cloudWebSocketMessageText, message); err != nil {
+					connection.Close()
+					return InvocationResult{}, fmt.Errorf("send Azure reliable Web PubSub client message")
+				}
+			}
+			firstConnection = false
+		} else {
+			for _, message := range plan.encodedMessages {
+				_, ackID, _ := validateAzureWebPubSubClientMessage(message)
+				if _, stillPending := pending[ackID]; !stillPending {
+					continue
+				}
+				if err := connection.Write(sessionCtx, cloudWebSocketMessageText, message); err != nil {
+					connection.Close()
+					return InvocationResult{}, fmt.Errorf("resend Azure reliable Web PubSub pending message")
+				}
+			}
+		}
+
+		recoverConnection := false
+		for received < plan.MaxMessages {
+			messageType, data, readErr := connection.Read(sessionCtx)
+			if errors.Is(readErr, context.DeadlineExceeded) {
+				connection.Close()
+				return finishAzureReliableWebPubSub(sink, received)
+			}
+			if readErr != nil {
+				if websocket.CloseStatus(readErr) == websocket.StatusNormalClosure {
+					connection.Close()
+					return finishAzureReliableWebPubSub(sink, received)
+				}
+				if websocket.CloseStatus(readErr) == websocket.StatusPolicyViolation {
+					connection.Close()
+					return InvocationResult{}, fmt.Errorf("Azure reliable Web PubSub recovery state expired")
+				}
+				if connectionID == "" || reconnectionToken == "" {
+					connection.Close()
+					return InvocationResult{}, fmt.Errorf("read Azure reliable Web PubSub response")
+				}
+				recoverConnection = true
+				recoveryDeadline = time.Now().Add(time.Minute)
+				break
+			}
+			message, kind, sequenceID, ackID, terminal, err := parseAzureReliableServerMessage(messageType, data)
+			if err != nil {
+				connection.Close()
+				return InvocationResult{}, err
+			}
+			if kind == "ack" {
+				delete(pending, ackID)
+			}
+			if kind == "message" {
+				if sequenceID <= lastSequence {
+					if err := writeAzureReliableSequenceAck(sessionCtx, connection, lastSequence); err != nil {
+						connection.Close()
+						return InvocationResult{}, err
+					}
+					continue
+				}
+				lastSequence = sequenceID
+			}
+			if err := sink.writeMessage(message); err != nil {
+				connection.Close()
+				return InvocationResult{}, err
+			}
+			received++
+			if kind == "message" {
+				if err := writeAzureReliableSequenceAck(sessionCtx, connection, lastSequence); err != nil {
+					connection.Close()
+					return InvocationResult{}, err
+				}
+			}
+			if terminal {
+				connection.Close()
+				return finishAzureReliableWebPubSub(sink, received)
+			}
+		}
+		connection.Close()
+		if !recoverConnection || received >= plan.MaxMessages {
+			break
+		}
+		recovery := *baseTarget
+		query := recovery.Query()
+		query.Set("awps_connection_id", connectionID)
+		query.Set("awps_reconnection_token", reconnectionToken)
+		recovery.RawQuery = query.Encode()
+		target = recovery.String()
+		headers = make(http.Header)
+	}
+	return finishAzureReliableWebPubSub(sink, received)
+}
+
+type azureReliableConnected struct {
+	ConnectionID      string
+	ReconnectionToken string
+	Sanitized         []byte
+}
+
+type azureReliableConnectedReadError struct {
+	cause error
+}
+
+func (*azureReliableConnectedReadError) Error() string {
+	return "Azure reliable Web PubSub did not return connected"
+}
+
+func (failure *azureReliableConnectedReadError) Unwrap() error {
+	return failure.cause
+}
+
+func readAzureReliableConnected(ctx context.Context, connection cloudWebSocketConnection) (azureReliableConnected, error) {
+	messageType, data, err := connection.Read(ctx)
+	if err != nil {
+		return azureReliableConnected{}, &azureReliableConnectedReadError{cause: err}
+	}
+	if messageType != cloudWebSocketMessageText || !json.Valid(data) {
+		return azureReliableConnected{}, fmt.Errorf("Azure reliable Web PubSub did not return connected")
+	}
+	var message map[string]any
+	if json.Unmarshal(data, &message) != nil || message["type"] != "system" || message["event"] != "connected" {
+		return azureReliableConnected{}, fmt.Errorf("Azure reliable Web PubSub did not return connected")
+	}
+	connectionID, idOK := message["connectionId"].(string)
+	reconnectionToken, tokenOK := message["reconnectionToken"].(string)
+	if !idOK || !tokenOK || !azureWebPubSubBoundedValue(connectionID, 512) || !azureWebPubSubBoundedValue(reconnectionToken, 16384) {
+		return azureReliableConnected{}, fmt.Errorf("Azure reliable Web PubSub returned invalid recovery state")
+	}
+	delete(message, "reconnectionToken")
+	sanitized, err := json.Marshal(message)
+	if err != nil {
+		return azureReliableConnected{}, fmt.Errorf("sanitize Azure reliable Web PubSub connected event")
+	}
+	return azureReliableConnected{ConnectionID: connectionID, ReconnectionToken: reconnectionToken, Sanitized: sanitized}, nil
+}
+
+func parseAzureReliableServerMessage(messageType cloudWebSocketMessageType, data []byte) ([]byte, string, uint64, uint64, bool, error) {
+	if messageType != cloudWebSocketMessageText || len(data) == 0 || len(data) > maxRequestPayloadBytes || !utf8.Valid(data) || !json.Valid(data) {
+		return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned invalid JSON")
+	}
+	var message map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if decoder.Decode(&message) != nil || ensureJSONDecoderEOF(decoder) != nil {
+		return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned invalid JSON")
+	}
+	kind, ok := message["type"].(string)
+	if !ok || kind == "system" && message["event"] == "connected" {
+		return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned an invalid protocol message")
+	}
+	var sequenceID uint64
+	var ackID uint64
+	terminal := false
+	switch kind {
+	case "ack":
+		value, valueOK := message["ackId"].(json.Number)
+		parsed, parseErr := strconv.ParseUint(string(value), 10, 64)
+		success, successOK := message["success"].(bool)
+		duplicate := false
+		if failure, ok := message["error"].(map[string]any); ok {
+			duplicate = failure["name"] == "Duplicate"
+		}
+		if !valueOK || parseErr != nil || parsed == 0 || !successOK || !success && !duplicate {
+			return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned a failed acknowledgement")
+		}
+		ackID = parsed
+	case "message":
+		value, valueOK := message["sequenceId"].(json.Number)
+		parsed, parseErr := strconv.ParseUint(string(value), 10, 64)
+		if !valueOK || parseErr != nil || parsed == 0 {
+			return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub message omitted sequenceId")
+		}
+		sequenceID = parsed
+	case "pong", "streamAck":
+	case "streamNack":
+		return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned a stream rejection")
+	case "streamClosed":
+		if _, failed := message["error"]; failed {
+			return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub stream closed with an error")
+		}
+	case "system":
+		if message["event"] != "disconnected" {
+			return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned an unsupported system event")
+		}
+		terminal = true
+	default:
+		return nil, "", 0, 0, false, fmt.Errorf("Azure reliable Web PubSub returned an unsupported message")
+	}
+	canonical, err := json.Marshal(message)
+	if err != nil {
+		return nil, "", 0, 0, false, fmt.Errorf("encode Azure reliable Web PubSub response")
+	}
+	return canonical, kind, sequenceID, ackID, terminal, nil
+}
+
+func writeAzureReliableSequenceAck(ctx context.Context, connection cloudWebSocketConnection, sequenceID uint64) error {
+	message, _ := json.Marshal(map[string]any{"type": "sequenceAck", "sequenceId": sequenceID})
+	if err := connection.Write(ctx, cloudWebSocketMessageText, message); err != nil {
+		return fmt.Errorf("acknowledge Azure reliable Web PubSub sequence")
+	}
+	return nil
+}
+
+func finishAzureReliableWebPubSub(sink *cloudWebSocketOutputSink, received int) (InvocationResult, error) {
+	metadata, err := sink.finish("")
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	var summary map[string]any
+	if json.Unmarshal(metadata, &summary) != nil {
+		return InvocationResult{}, fmt.Errorf("decode Azure reliable Web PubSub output metadata")
+	}
+	summary["messages"] = received
+	metadata, err = json.Marshal(summary)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("encode Azure reliable Web PubSub output metadata")
+	}
+	return InvocationResult{Output: metadata}, nil
+}
+
 func defaultAzureWebPubSubWebSocketDial(ctx context.Context, target string, headers http.Header) (cloudWebSocketConnection, error) {
+	return defaultAzureWebPubSubProtocolDial(ctx, target, headers, "json.webpubsub.azure.v1")
+}
+
+func defaultAzureReliableWebPubSubWebSocketDial(ctx context.Context, target string, headers http.Header) (cloudWebSocketConnection, error) {
+	return defaultAzureWebPubSubProtocolDial(ctx, target, headers, "json.reliable.webpubsub.azure.v1")
+}
+
+func defaultAzureWebPubSubProtocolDial(ctx context.Context, target string, headers http.Header, subprotocol string) (cloudWebSocketConnection, error) {
 	client := &http.Client{Transport: http.DefaultTransport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	connection, response, err := websocket.Dial(ctx, target, &websocket.DialOptions{HTTPClient: client, HTTPHeader: headers.Clone(), Subprotocols: []string{"json.webpubsub.azure.v1"}, CompressionMode: websocket.CompressionDisabled})
+	connection, response, err := websocket.Dial(ctx, target, &websocket.DialOptions{HTTPClient: client, HTTPHeader: headers.Clone(), Subprotocols: []string{subprotocol}, CompressionMode: websocket.CompressionDisabled})
 	if response != nil && response.Body != nil {
 		defer response.Body.Close()
 	}
@@ -375,7 +704,7 @@ func defaultAzureWebPubSubWebSocketDial(ctx context.Context, target string, head
 		}
 		return nil, fmt.Errorf("Azure Web PubSub WebSocket handshake failed")
 	}
-	if connection.Subprotocol() != "json.webpubsub.azure.v1" {
+	if connection.Subprotocol() != subprotocol {
 		connection.Close(websocket.StatusProtocolError, "missing required subprotocol")
 		return nil, fmt.Errorf("Azure Web PubSub did not negotiate the required JSON subprotocol")
 	}

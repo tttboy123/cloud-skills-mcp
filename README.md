@@ -196,13 +196,13 @@ Azure OpenAI Realtime 使用 `auth_scheme=realtime-ws`，server 通过非 CLI Az
 {"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://<resource>.openai.azure.com/openai/v1/realtime","parameters":{"model":"<deployment>"},"body":[{"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please assist the user."}]}},{"type":"response.create"}],"response_file":"/approved/results/realtime.ndjson"}}
 ```
 
-Azure Web PubSub 使用 `auth_scheme=webpubsub-ws`。server 先用 Entra scope `https://webpubsub.azure.com/.default` 调固定 `:generateToken` 数据面 API，再把五分钟 client token 仅放进内部 WSS Authorization header，并强制协商 `json.webpubsub.azure.v1`。join/leave、group publish、event、ping 以及 ack/message/system/stream 响应均有消息数和时间边界；所有会话固定走 mutation gate：
+Azure Web PubSub 使用 `auth_scheme=webpubsub-ws`。server 先用 Entra scope `https://webpubsub.azure.com/.default` 调固定 `:generateToken` 数据面 API，再把五分钟 client token 仅放进内部 WSS Authorization header。`body.protocol` 可选 `json`（默认）或 `json-reliable`；后者强制协商 `json.reliable.webpubsub.azure.v1`，自动发送高精度 `uint64` sequence ack，丢弃已确认重复消息，并在断线后用内部 recovery state 重连、重发未确认 publisher 消息。join/leave、group publish、event、ping 以及 ack/message/system/stream 响应均有消息数和时间边界；所有会话固定走 mutation gate：
 
 ```json
 {"name":"azure_api_mutate","arguments":{"auth_scheme":"webpubsub-ws","service":"webpubsub","operation":"ClientConnect","method":"GET","url":"wss://<resource>.webpubsub.azure.com/client/hubs/<hub>","body":{"roles":["webpubsub.joinLeaveGroup.<group>"],"groups":["<group>"],"messages":[{"type":"joinGroup","group":"<group>","ackId":1}],"max_messages":32,"timeout_seconds":30},"response_file":"/approved/results/webpubsub.ndjson","force":true}}
 ```
 
-Entra token、临时 client token 和 token API 响应都不会进入 MCP 结果或审计；caller 不能提供 access token、Authorization、query、非官方 host/path 或无界会话。
+要启用可靠模式，在同一 body 加入 `"protocol":"json-reliable"`，并为除 ping 外的 publisher 消息提供唯一正整数 `ackId`。Entra token、临时 client token、reconnection token 和 token API 响应都不会进入 MCP 结果或审计；caller 不能提供 access token、Authorization、recovery query、非官方 host/path 或无界会话。
 
 GCP 查询：
 

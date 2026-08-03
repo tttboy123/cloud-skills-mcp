@@ -26,14 +26,15 @@ import (
 const defaultRESTBodyLimit = 2 * 1024 * 1024
 
 type AzureRESTConfig struct {
-	Timeout                time.Duration
-	Tokens                 AzureTokenProvider
-	HTTP                   HTTPDoer
-	WebSocketDial          azureRealtimeWebSocketDial
-	WebPubSubWebSocketDial azureWebPubSubWebSocketDial
-	StreamPause            func(context.Context, time.Duration) error
-	MaxBodyBytes           int64
-	AllowedHosts           []string
+	Timeout                        time.Duration
+	Tokens                         AzureTokenProvider
+	HTTP                           HTTPDoer
+	WebSocketDial                  azureRealtimeWebSocketDial
+	WebPubSubWebSocketDial         azureWebPubSubWebSocketDial
+	ReliableWebPubSubWebSocketDial azureWebPubSubWebSocketDial
+	StreamPause                    func(context.Context, time.Duration) error
+	MaxBodyBytes                   int64
+	AllowedHosts                   []string
 }
 
 type AzureRESTAdapter struct {
@@ -59,6 +60,9 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	if config.WebPubSubWebSocketDial == nil {
 		config.WebPubSubWebSocketDial = defaultAzureWebPubSubWebSocketDial
 	}
+	if config.ReliableWebPubSubWebSocketDial == nil {
+		config.ReliableWebPubSubWebSocketDial = defaultAzureReliableWebPubSubWebSocketDial
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -71,7 +75,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-ws",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-ws-reliable",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -84,6 +88,7 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"authentication":     "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
 		"openai_realtime":    "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
 		"webpubsub_protocol": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
+		"webpubsub_reliable": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
 	})
 }
 

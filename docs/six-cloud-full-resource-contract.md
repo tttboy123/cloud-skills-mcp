@@ -117,9 +117,12 @@ remain available through the guarded resource gateway.
 - Azure Web PubSub JSON WSS accepts only a public-cloud resource endpoint and
   the exact hub path. It obtains an Entra token, calls the fixed five-minute
   Generate Client Token API internally, keeps both tokens out of MCP, requires
-  `json.webpubsub.azure.v1`, bounds both directions, rejects failed protocol
-  acknowledgements, and atomically publishes server JSON. Sessions are
-  mutation-only.
+  `json.webpubsub.azure.v1` or its reliable JSON variant, bounds both
+  directions, rejects failed protocol acknowledgements, and atomically
+  publishes server JSON. Reliable mode keeps recovery state internal, uses
+  exact uint64 sequence acknowledgements, suppresses duplicates, and resends
+  pending publisher messages for at most the documented one-minute recovery
+  window. Sessions are mutation-only.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a

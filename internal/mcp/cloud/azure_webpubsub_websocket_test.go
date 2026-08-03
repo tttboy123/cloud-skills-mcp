@@ -50,9 +50,18 @@ func TestAzureWebPubSubBoundaryRequiresExactEntraBackedProtocol(t *testing.T) {
 		"duplicate ack": func(v *Invocation) {
 			v.Body.(map[string]any)["messages"] = []any{map[string]any{"type": "joinGroup", "ackId": 1}, map[string]any{"type": "ping", "ackId": 1}}
 		},
-		"credential": func(v *Invocation) { v.Body.(map[string]any)["client_secret"] = "caller" },
-		"role":       func(v *Invocation) { v.Body.(map[string]any)["roles"] = []any{"webpubsub.admin"} },
-		"unbounded":  func(v *Invocation) { v.Body.(map[string]any)["timeout_seconds"] = 301 },
+		"credential":       func(v *Invocation) { v.Body.(map[string]any)["client_secret"] = "caller" },
+		"role":             func(v *Invocation) { v.Body.(map[string]any)["roles"] = []any{"webpubsub.admin"} },
+		"unbounded":        func(v *Invocation) { v.Body.(map[string]any)["timeout_seconds"] = 301 },
+		"unknown protocol": func(v *Invocation) { v.Body.(map[string]any)["protocol"] = "protobuf-reliable" },
+		"reliable missing ack": func(v *Invocation) {
+			v.Body.(map[string]any)["protocol"] = "json-reliable"
+			v.Body.(map[string]any)["messages"] = []any{map[string]any{"type": "joinGroup", "group": "room"}}
+		},
+		"reliable setup-only bound": func(v *Invocation) {
+			v.Body.(map[string]any)["protocol"] = "json-reliable"
+			v.Body.(map[string]any)["max_messages"] = 1
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid()
@@ -163,6 +172,9 @@ func TestAzureWebPubSubProtocolMessageValidation(t *testing.T) {
 			t.Fatalf("valid client message rejected: %s: %v", raw, err)
 		}
 	}
+	if _, ackID, err := validateAzureWebPubSubClientMessage([]byte(`{"type":"joinGroup","group":"room","ackId":9007199254740993}`)); err != nil || ackID != 9007199254740993 {
+		t.Fatalf("uint64 ackId=%d err=%v", ackID, err)
+	}
 	for _, raw := range []string{
 		`{"type":"event"}`,
 		`{"type":"joinGroup","group":"room","ackId":1.5}`,
@@ -204,6 +216,9 @@ func TestAzureWebPubSubProtocolMessageValidation(t *testing.T) {
 			t.Fatalf("invalid server message accepted: %s", raw)
 		}
 	}
+	if _, kind, sequenceID, _, _, err := parseAzureReliableServerMessage(cloudWebSocketMessageText, []byte(`{"type":"message","sequenceId":9007199254740993}`)); err != nil || kind != "message" || sequenceID != 9007199254740993 {
+		t.Fatalf("uint64 sequenceId=%d kind=%q err=%v", sequenceID, kind, err)
+	}
 }
 
 func TestDefaultAzureWebPubSubDialNegotiatesJSONSubprotocol(t *testing.T) {
@@ -230,3 +245,195 @@ func TestDefaultAzureWebPubSubDialNegotiatesJSONSubprotocol(t *testing.T) {
 		t.Fatalf("type=%d message=%s err=%v", messageType, message, err)
 	}
 }
+
+func TestDefaultAzureReliableWebPubSubDialNegotiatesReliableSubprotocol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := coderwebsocket.Accept(writer, request, &coderwebsocket.AcceptOptions{Subprotocols: []string{"json.reliable.webpubsub.azure.v1"}})
+		if err != nil {
+			return
+		}
+		defer connection.Close(coderwebsocket.StatusNormalClosure, "done")
+		_ = connection.Write(request.Context(), coderwebsocket.MessageText, []byte(`{"type":"pong"}`))
+	}))
+	defer server.Close()
+	connection, err := defaultAzureReliableWebPubSubWebSocketDial(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, message, err := connection.Read(t.Context()); err != nil || string(message) != `{"type":"pong"}` {
+		t.Fatalf("message=%s err=%v", message, err)
+	}
+}
+
+func TestAzureReliableWebPubSubRejectsInvalidRecoveryMessages(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"ack","ackId":1,"success":false,"error":{"name":"InternalServerError"}}`,
+		`{"type":"message"}`,
+		`{"type":"streamNack"}`,
+		`{"type":"streamClosed","error":{"name":"Forbidden"}}`,
+		`{"type":"system","event":"connected"}`,
+		`{"type":"system","event":"unknown"}`,
+		`{"type":"unknown"}`,
+	} {
+		if _, _, _, _, _, err := parseAzureReliableServerMessage(cloudWebSocketMessageText, []byte(raw)); err == nil {
+			t.Fatalf("invalid reliable message accepted: %s", raw)
+		}
+	}
+	for _, raw := range []string{
+		`{"type":"ack","ackId":1,"success":false,"error":{"name":"Duplicate"}}`,
+		`{"type":"pong"}`,
+		`{"type":"streamAck","streamId":"stream"}`,
+		`{"type":"streamClosed","streamId":"stream"}`,
+		`{"type":"system","event":"disconnected"}`,
+	} {
+		if _, _, _, _, _, err := parseAzureReliableServerMessage(cloudWebSocketMessageText, []byte(raw)); err != nil {
+			t.Fatalf("valid reliable message rejected: %s: %v", raw, err)
+		}
+	}
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{[]byte(`{"type":"system","event":"connected","connectionId":"connection"}`)}}
+	if _, err := readAzureReliableConnected(t.Context(), connection); err == nil {
+		t.Fatal("connected without recovery token accepted")
+	}
+}
+
+func TestAzureReliableWebPubSubRecoversAndAcknowledgesSequences(t *testing.T) {
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "reliable.ndjson")
+	firstConnection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"type":"system","event":"connected","connectionId":"connection-1","reconnectionToken":"private-reconnect-1"}`),
+		[]byte(`{"type":"ack","ackId":1,"success":true}`),
+		[]byte(`{"type":"message","from":"group","group":"room","sequenceId":1,"dataType":"text","data":"one"}`),
+	}}
+	secondConnection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"type":"system","event":"connected","connectionId":"connection-1","reconnectionToken":"private-reconnect-2"}`),
+		[]byte(`{"type":"message","from":"group","group":"room","sequenceId":1,"dataType":"text","data":"duplicate"}`),
+		[]byte(`{"type":"message","from":"group","group":"room","sequenceId":2,"dataType":"text","data":"two"}`),
+		[]byte(`{"type":"system","event":"disconnected"}`),
+	}}
+	connections := []cloudWebSocketConnection{firstConnection, &azureWebPubSubReadErrorConnection{err: io.ErrUnexpectedEOF}, secondConnection}
+	var targets []string
+	var headers []http.Header
+	dialCalls := 0
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{
+		Tokens: &staticAzureTokenProvider{token: "entra-token"},
+		HTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"token":"client-token"}`))}, nil
+		}),
+		ReliableWebPubSubWebSocketDial: func(_ context.Context, target string, header http.Header) (cloudWebSocketConnection, error) {
+			dialCalls++
+			targets = append(targets, target)
+			headers = append(headers, header.Clone())
+			if dialCalls == 2 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			connection := connections[0]
+			connections = connections[1:]
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAzure, Mode: ModeMutate, AuthScheme: "webpubsub-ws", Service: "webpubsub", Operation: "ClientConnect",
+		Method: http.MethodGet, URL: "wss://demo.webpubsub.azure.com/client/hubs/chat",
+		Body: map[string]any{
+			"protocol": "json-reliable",
+			"messages": []any{
+				map[string]any{"type": "joinGroup", "group": "room", "ackId": 1},
+				map[string]any{"type": "event", "event": "notify", "ackId": 2},
+			},
+			"max_messages": 6, "timeout_seconds": 30,
+		},
+		ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 4 || headers[0].Get("Authorization") != "Bearer client-token" || len(headers[1]) != 0 || len(headers[2]) != 0 || len(headers[3]) != 0 || !strings.Contains(targets[3], "awps_connection_id=connection-1") || !strings.Contains(targets[3], "awps_reconnection_token=private-reconnect-1") {
+		t.Fatalf("targets=%v headers=%#v", targets, headers)
+	}
+	if len(connections) != 0 {
+		t.Fatalf("unused connections=%d", len(connections))
+	}
+	written, err := os.ReadFile(responseFile)
+	if err != nil || bytes.Contains(written, []byte("private-reconnect")) || bytes.Contains(written, []byte("duplicate")) || !bytes.Contains(written, []byte(`"sequenceId":2`)) {
+		t.Fatalf("output=%s err=%v", written, err)
+	}
+	if strings.Contains(string(result.Output), "private-reconnect") || !bytes.Contains(result.Output, []byte(`"messages":6`)) {
+		t.Fatalf("result=%s", result.Output)
+	}
+	for index, connection := range []*fakeTencentWebSocketConnection{firstConnection, secondConnection} {
+		found := false
+		for _, write := range connection.writes {
+			if bytes.Contains(write.data, []byte(`"type":"sequenceAck"`)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("connection %d did not emit a sequenceAck: %#v", index, connection.writes)
+		}
+	}
+	resentEvent := false
+	for _, write := range secondConnection.writes {
+		if bytes.Contains(write.data, []byte(`"event":"notify"`)) && bytes.Contains(write.data, []byte(`"ackId":2`)) {
+			resentEvent = true
+		}
+		if bytes.Contains(write.data, []byte(`"joinGroup"`)) {
+			t.Fatal("acknowledged publisher message was resent")
+		}
+	}
+	if !resentEvent {
+		t.Fatalf("unacknowledged publisher message was not resent: %#v", secondConnection.writes)
+	}
+}
+
+func TestAzureReliableWebPubSubStopsOnExpiredRecoveryState(t *testing.T) {
+	responseFile := filepath.Join(t.TempDir(), "reliable.ndjson")
+	initial := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte(`{"type":"system","event":"connected","connectionId":"connection-1","reconnectionToken":"private-reconnect"}`),
+	}}
+	dials := 0
+	adapter := NewAzureRESTAdapter(AzureRESTConfig{
+		Tokens: &staticAzureTokenProvider{token: "entra-token"},
+		HTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"token":"client-token"}`))}, nil
+		}),
+		ReliableWebPubSubWebSocketDial: func(context.Context, string, http.Header) (cloudWebSocketConnection, error) {
+			dials++
+			if dials == 1 {
+				return initial, nil
+			}
+			return nil, coderwebsocket.CloseError{Code: coderwebsocket.StatusPolicyViolation, Reason: "private-reason"}
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderAzure, Mode: ModeMutate, AuthScheme: "webpubsub-ws", Service: "webpubsub", Operation: "ClientConnect",
+		Method: http.MethodGet, URL: "wss://demo.webpubsub.azure.com/client/hubs/chat",
+		Body: map[string]any{
+			"protocol": "json-reliable", "messages": []any{map[string]any{"type": "joinGroup", "group": "room", "ackId": 1}},
+			"max_messages": 2, "timeout_seconds": 30,
+		},
+		ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+	})
+	if err == nil || err.Error() != "Azure reliable Web PubSub recovery state expired" || dials != 2 {
+		t.Fatalf("err=%v dials=%d", err, dials)
+	}
+	if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
+		t.Fatalf("partial output published: %v", statErr)
+	}
+}
+
+type azureWebPubSubReadErrorConnection struct {
+	err error
+}
+
+func (connection *azureWebPubSubReadErrorConnection) Read(context.Context) (cloudWebSocketMessageType, []byte, error) {
+	return 0, nil, connection.err
+}
+
+func (*azureWebPubSubReadErrorConnection) Write(context.Context, cloudWebSocketMessageType, []byte) error {
+	return nil
+}
+
+func (*azureWebPubSubReadErrorConnection) Close() error { return nil }
