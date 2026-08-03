@@ -66,6 +66,7 @@ type Invocation struct {
 	Subscription           string
 	Audience               string
 	RegistryInstanceID     string
+	RegistryUserID         string
 	ACRScope               string
 	ACRSourceScope         string
 	AuthScheme             string
@@ -116,6 +117,7 @@ type AuditEvent struct {
 	Project            string         `json:"project,omitempty"`
 	Subscription       string         `json:"subscription,omitempty"`
 	RegistryInstanceID string         `json:"registry_instance_id,omitempty"`
+	RegistryUserID     string         `json:"registry_user_id,omitempty"`
 	ACRScope           string         `json:"acr_scope,omitempty"`
 	ACRSourceScope     string         `json:"acr_source_scope,omitempty"`
 	AuthVersion        string         `json:"auth_version,omitempty"`

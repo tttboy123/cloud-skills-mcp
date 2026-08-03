@@ -43,6 +43,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"auth_scheme":"artifact-registry","service":"artifact-registry","operation":"ListTags","method":"GET","url":"https://us-docker.pkg.dev.attacker.example/v2/project/repository/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"alicloud_api_read","arguments":{"auth_scheme":"acr-registry","service":"acr","operation":"ListTags","region":"cn-hangzhou","registry_instance_id":"cri-example123","method":"GET","url":"https://demo-registry.cn-hangzhou.cr.aliyuncs.com.attacker.example/v2/team/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"tencent_api_read","arguments":{"auth_scheme":"tcr-registry","service":"tcr","operation":"ListTags","region":"ap-guangzhou","registry_instance_id":"tcr-example123","method":"GET","url":"https://demo-tcr.tencentcloudcr.com.attacker.example/v2/team/app/tags/list"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"baiducloud_api_read","arguments":{"auth_scheme":"ccr-registry","service":"ccr","operation":"ListTags","region":"bj","registry_instance_id":"ccr-example12","registry_user_id":"iam-user-123","method":"GET","url":"https://ccr-example12-pub.cnc.bd.bj.baidubce.com.attacker.example/v2/team/app/tags/list"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -54,7 +55,7 @@ jq -e -s '
       (.inputSchema.required | index("force") != null)] | all) and
     ([map(select(.id == 2))[0].result.tools[] |
       select(.name | test("_api_(read|mutate)$")) |
-      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("registry_instance_id") and has("acr_scope") and has("acr_source_scope") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
+      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("registry_instance_id") and has("registry_user_id") and has("acr_scope") and has("acr_source_scope") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
     (["aws","azure","gcp","alicloud","tencent","baiducloud"] -
       [map(select(.id == 2))[0].result.tools[].name | select(endswith("_api_read")) | sub("_api_read$"; "")]) == [] and
     (map(select(.id == 3))[0].result.isError == true) and
@@ -101,7 +102,9 @@ jq -e -s '
     ($responses | map(select(.id == 28))[0].result.isError == true) and
     ($responses | map(select(.id == 28))[0].result.content[0].text | contains("exact Enterprise Edition public or VPC endpoint")) and
     ($responses | map(select(.id == 29))[0].result.isError == true) and
-    ($responses | map(select(.id == 29))[0].result.content[0].text | contains("exact Enterprise Edition public, VPC, or operator-pinned custom endpoint"))
+    ($responses | map(select(.id == 29))[0].result.content[0].text | contains("exact Enterprise Edition public, VPC, or operator-pinned custom endpoint")) and
+    ($responses | map(select(.id == 30))[0].result.isError == true) and
+    ($responses | map(select(.id == 30))[0].result.content[0].text | contains("exact Personal or Enterprise public, VPC, or operator-pinned custom endpoint"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

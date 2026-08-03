@@ -1,6 +1,6 @@
 interface:
   display_name: "Baidu AI Cloud"
-  short_description: "Operate BCE HTTPS and guarded RTC AI Agent WSS"
+  short_description: "Operate BCE, CCR Registry, and guarded RTC WSS"
   default_prompt: "Use $baidu-cloud to inspect or operate BCE resources safely."
 dependencies:
   tools:

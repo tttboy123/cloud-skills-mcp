@@ -239,6 +239,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureServiceBusAMQPScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureServiceBusAMQPWS
 	azureEventHubsAMQPScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureEventHubsAMQPWS
 	azureACRScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureACR
+	baiduCCRScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduCCR
 	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
@@ -394,6 +395,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateAzureEventHubsAMQPInvocation(request); err != nil {
 			return err
 		}
+	} else if baiduCCRScheme {
+		if err := validateBaiduCCRInvocation(request, allowedEndpointHosts); err != nil {
+			return err
+		}
 	} else if baiduRTCAgentWebSocketScheme {
 		if err := validateBaiduRTCAgentWebSocketInvocation(request); err != nil {
 			return err
@@ -413,8 +418,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Google Cloud auth_scheme must be artifact-registry, firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 		}
 	case ProviderBaidu:
-		if baiduScheme != "" && baiduScheme != authSchemeBaiduRTCAgentWS {
-			return fmt.Errorf("Baidu auth_scheme must be rtc-aiagent-ws or omitted for BCE signed REST")
+		if baiduScheme != "" && baiduScheme != authSchemeBaiduCCR && baiduScheme != authSchemeBaiduRTCAgentWS {
+			return fmt.Errorf("Baidu auth_scheme must be ccr-registry, rtc-aiagent-ws, or omitted for BCE signed REST")
 		}
 	case ProviderAWS:
 		if !identifierPattern.MatchString(request.Service) {
@@ -665,8 +670,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if !azureACRScheme && (request.ACRScope != "" || request.ACRSourceScope != "") {
 		return fmt.Errorf("acr_scope and acr_source_scope are supported only by Azure Container Registry auth_scheme=acr")
 	}
-	if !alibabaACRScheme && !tencentTCRScheme && request.RegistryInstanceID != "" {
-		return fmt.Errorf("registry_instance_id is supported only by Alibaba Cloud ACR or Tencent Cloud TCR Registry schemes")
+	if !alibabaACRScheme && !tencentTCRScheme && !baiduCCRScheme && request.RegistryInstanceID != "" {
+		return fmt.Errorf("registry_instance_id is supported only by Alibaba ACR, Tencent TCR, or Baidu CCR Registry schemes")
+	}
+	if !baiduCCRScheme && request.RegistryUserID != "" {
+		return fmt.Errorf("registry_user_id is supported only by Baidu CCR Registry auth_scheme=ccr-registry")
 	}
 	if request.StreamChunkBytes < 0 || request.StreamChunkBytes > maxRequestFileBytes {
 		return fmt.Errorf("stream_chunk_bytes must be between 1 and %d when provided", maxRequestFileBytes)

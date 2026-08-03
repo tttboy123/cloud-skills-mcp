@@ -96,14 +96,14 @@ func NewBaiduRESTAdapter(config BaiduRESTConfig) *BaiduRESTAdapter {
 }
 
 func (adapter *BaiduRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
-	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS + controlled RTC WSS", CredentialSource: credentialSource(ProviderBaidu)}
+	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS + CCR Registry HTTPS + controlled RTC WSS", CredentialSource: credentialSource(ProviderBaidu)}
 	if _, err := adapter.config.Credentials.Credentials(ctx); err != nil {
 		status.CredentialStatus = CredentialStatusMissingLocalMaterial
 		status.Message = err.Error()
 		return status, nil
 	}
 	status.Available = true
-	status.Version = bceAuthVersionV1 + "+" + bceAuthVersionV2
+	status.Version = bceAuthVersionV1 + "+" + bceAuthVersionV2 + "+ccr-registry"
 	status.CredentialStatus = CredentialStatusLocalMaterialPresent
 	status.Message = "local BCE credential material is present; validity remains unverified until a provider API call succeeds"
 	return status, nil
@@ -123,11 +123,19 @@ func (adapter *BaiduRESTAdapter) Discover(_ context.Context, request DiscoveryRe
 		result["documentation"] = "https://cloud.baidu.com/doc/RTC/s/hm8zjic1q"
 		result["websocket_documentation"] = "https://cloud.baidu.com/doc/RTC/s/Jmakuvimy"
 	}
+	if service == "CCR" {
+		result["documentation"] = "https://cloud.baidu.com/doc/CCR/index.html"
+		result["registry_credentials"] = "https://cloud.baidu.com/doc/CCR/s/Ql6bxdxv6"
+		result["personal_credentials"] = "https://cloud.baidu.com/doc/CCR/s/Rka7kqxvo"
+	}
 	return json.Marshal(result)
 }
 
 func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, "")
+	if scheme == authSchemeBaiduCCR {
+		return invokeBaiduCCR(ctx, adapter, invocation)
+	}
 	if scheme == authSchemeBaiduRTCAgentWS {
 		if err := validateBaiduRTCAgentWebSocketInvocation(invocation); err != nil {
 			return InvocationResult{}, err
@@ -139,7 +147,7 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 		return invokeBaiduRTCAgentWebSocket(ctx, adapter, credentials, invocation)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Baidu auth_scheme must be rtc-aiagent-ws or omitted for BCE signed REST")
+		return InvocationResult{}, fmt.Errorf("Baidu auth_scheme must be ccr-registry, rtc-aiagent-ws, or omitted for BCE signed REST")
 	}
 	if err := validateRESTTargetWithEndpointHosts(ProviderBaidu, invocation.Method, invocation.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err

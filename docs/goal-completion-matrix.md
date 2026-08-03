@@ -23,7 +23,8 @@ and every provider has successful live acceptance with sanitized audit evidence.
 | Skills service and official documentation mapping | Six direct-network `SKILL.md`, six `agents/openai.yaml`, provider `references/official-docs.md` files | Skill validator and live official-link review | Implemented |
 | Protocol, installer, security and cross-platform build gates | `scripts/ci/protocol-smoke.sh`, `install-smoke.sh`, `build-release.sh`, `.github/workflows/ci.yml` | Azure Web PubSub JSON/Protobuf/MQTT slice covers exact endpoint/schema validation, four PubSub subprotocols, official proto3 wire vectors, binary Any/stream messages, token containment, reliable recovery/sequence/publisher state, MQTT 3.1.1/5.0 QoS/state/property flow, and atomic failure behavior; Protobuf implementation run [30784347113](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30784347113) passed. Vertex Live recovery adds exact function-call ID response dispatch, atomic handler bounds, private handle sanitization, acknowledged-message replay, GoAway/unexpected-close reconnect, integer preservation, and two fuzz targets; implementation run [30785793131](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30785793131) passed macOS, Ubuntu, ShellCheck, security, and release jobs. Google schema-driven gRPC adds exact descriptor-selected methods, strict ProtoJSON request conversion, finite four-shape streaming, recursive unknown-wire rejection including `Any`, official 64-bit-safe output mapping, atomic NDJSON, and two fuzz targets; implementation run [30787842631](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30787842631) passed. Baidu RTC AI Agent adds exact BCE v1 create/private-token WSS/stop, internal license containment, concurrent bounded duplex streaming, fail-closed atomic output, mutation-only policy, a live mutation entrypoint, and a plan fuzz target; initial lifecycle run [30790805986](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30790805986) passed. The codec follow-up corrects the control field to official `config.audiocodec`, covers `raw`, `raw16k`, PCMA, PCMU, G.722, and variable-length Opus packet vectors, and internally derives `ac`/`ptime`/`plen`; implementation run [30792487473](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30792487473) passed. The static command follow-up strictly parses every documented non-event-correlated client command, rejects credential material and unsafe media URLs, and preserves pre/post-audio order; implementation run [30793969272](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30793969272) passed. The stateful media follow-up adds approved-root `image_file`, exact provider-triggered 16 KiB/Base64 upload framing, one-request consumption, and non-interleaved writes; implementation run [30795300185](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30795300185) passed. The Function Call follow-up implements the current nested JSON format, exact provider `session_id` correlation, bounded credential-free result/post-function templates, and fail-closed unknown/duplicate/overflow handling; implementation run [30796139810](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30796139810) passed | Fresh local module verification, formatting, vet, race suite (80.4% total / 80.4% cloud-package coverage), build, protocol/install smoke, shell syntax, six-Skill validation, Actionlint, govulncheck, 10-second Baidu RTC fuzzing (223,961 executions), and four-platform release builds passed; remote macOS/Ubuntu verification, ShellCheck, security scans, and release archives also passed |
 | Tencent Enterprise TCR resource protocol | Direct Docker/OCI Registry HTTP with internal TC3 `CreateInstanceToken(TokenType=temp)`, exact public/VPC/operator-pinned custom hosts, pre-credential path/method validation, temporary Basic containment, response-file support, and fail-closed redirects; Personal Edition is credential-bound | Hermetic signer/credential/path/upload/redirect tests, protocol smoke, Skill/docs mapping, and dedicated read-only ListTags live gate | Implemented; live pending |
-| Observable six-cloud acceptance | `TestLiveSixCloudReadOnly` selects providers and logs provider/outcome/bytes/request ID only; dedicated gates cover Baidu RTC, Alibaba MQ, Alibaba Enterprise ACR, Tencent CLS, Tencent Enterprise TCR, Azure ACR, private/public Amazon ECR, and Google Artifact Registry without printing response bodies or secrets | Requires operator-injected credentials and opt-in live flags; product gates additionally require their exact endpoint and existing resource identifiers | **Pending** |
+| Baidu CCR Enterprise/Personal resource protocol | Direct Docker/OCI Registry HTTP with fixed internal BCE v1 user/one-hour credential exchange, exact public/VPC/operator-pinned custom or Personal host validation, same-origin challenge/scope binding, response-file support, and fail-closed redirects | Hermetic signer/credential/path/upload/challenge/redirect tests, protocol smoke, Skill/docs mapping, and dedicated read-only ListTags live gate | Implemented; live pending |
+| Observable six-cloud acceptance | `TestLiveSixCloudReadOnly` selects providers and logs provider/outcome/bytes/request ID only; dedicated gates cover Baidu CCR, Baidu RTC, Alibaba MQ, Alibaba Enterprise ACR, Tencent CLS, Tencent Enterprise TCR, Azure ACR, private/public Amazon ECR, and Google Artifact Registry without printing response bodies or secrets | Requires operator-injected credentials and opt-in live flags; product gates additionally require their exact endpoint and existing resource identifiers | **Pending** |
 
 Verified slices:
 
@@ -327,6 +328,21 @@ govulncheck, four-platform archives, and a ten-second endpoint/path fuzz run
 (32,980 executions) also passed. Real TCR authorization remains pending the
 operator live gate and is not inferred from hermetic TC3/Registry tests.
 
+Baidu CCR Enterprise and Personal Registry now have a distinct
+`auth_scheme=ccr-registry` direct-HTTP path. The gateway validates exact
+official public/VPC/Personal or operator-pinned custom endpoints and every
+Registry path/method before resolving BCE credentials. Enterprise performs
+only the fixed BCE v1 IAM-user lookup and one-hour instance-password request;
+Personal performs only the fixed current-user lookup and one-hour token
+request. Both then validate an exact same-origin `/service/token` challenge,
+derive catalog/repository scopes, and keep temporary login, Basic and Bearer
+material out of MCP, audit and error output. Version/catalog, manifests, blobs,
+tags, referrers, monolithic/chunked uploads, cross-repository mounts,
+response-file handling, redirect rejection, policy/schema exposure, Skills,
+official references and a sanitized ListTags live gate are included. Real CCR
+authorization remains pending the operator live gate and is not inferred from
+hermetic BCE/Registry tests.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
@@ -407,6 +423,32 @@ go test ./internal/mcp/cloud -run TestLiveTencentTCRReadOnly -v
 This gate is read-only and records only sanitized outcome, byte count, and
 provider request ID evidence. Personal Edition is not accepted because its
 separate Registry password falls outside the AKSK/IAM-only Goal boundary.
+
+For Baidu CCR Personal Registry HTTP, provide an existing readable namespaced
+repository. The test uses only the BCE AKSK/IAM-STS chain, internally derives
+the one-hour Personal login and Registry Bearer token, and performs
+`/tags/list` without printing its body:
+
+```bash
+CLOUD_SKILLS_LIVE_BAIDU_CCR=1 \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_ENDPOINT=https://registry.baidubce.com \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_REPOSITORY=team/app \
+go test ./internal/mcp/cloud -run TestLiveBaiduCCRReadOnly -v
+```
+
+For Enterprise CCR, set its exact public/VPC or operator-pinned custom origin
+and add the non-secret resource identifiers required by the fixed temporary
+credential APIs:
+
+```bash
+CLOUD_SKILLS_LIVE_BAIDU_CCR=1 \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_ENDPOINT=https://ccr-xxxxxxxx-pub.cnc.bj.baidubce.com \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_REPOSITORY=team/app \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_REGION=bj \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_INSTANCE_ID=ccr-xxxxxxxx \
+CLOUD_SKILLS_LIVE_BAIDU_CCR_USER_ID=<iam-user-id> \
+go test ./internal/mcp/cloud -run TestLiveBaiduCCRReadOnly -v
+```
 
 For private ECR Registry HTTP, provide the exact registry origin and an
 existing pullable repository. The test resolves the region from the endpoint,

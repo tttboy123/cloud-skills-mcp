@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -190,6 +191,81 @@ func TestLiveBaiduRTCAgentMutation(t *testing.T) {
 		t.Fatalf("no succeeded Baidu RTC mutation audit event: %#v", events)
 	}
 	t.Logf("provider=baiducloud operation=RealtimeInteraction outcome=succeeded response_bytes=%d request_id=%q", len(data), succeeded.RequestID)
+}
+
+func TestLiveBaiduCCRReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_BAIDU_CCR") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_BAIDU_CCR=1 for a real BCE AKSK-backed CCR Registry ListTags probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Baidu CCR live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_BAIDU_CCR_ENDPOINT"), "/")
+	repository := required("CLOUD_SKILLS_LIVE_BAIDU_CCR_REPOSITORY")
+	arguments := map[string]any{
+		"auth_scheme": "ccr-registry", "service": "ccr", "operation": "ListTags",
+		"method": "GET", "url": endpoint + "/v2/" + repository + "/tags/list", "parameters": map[string]any{"n": 1},
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed == nil || parsed.Scheme != "https" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "" {
+		t.Fatal("CLOUD_SKILLS_LIVE_BAIDU_CCR_ENDPOINT must be a valid HTTPS Registry origin")
+	}
+	region, instanceID, userID := "", "", ""
+	if strings.EqualFold(parsed.Hostname(), baiduCCRPersonalHost) {
+		// Personal CCR resolves its current username and one-hour token directly from BCE AKSK.
+	} else {
+		region = required("CLOUD_SKILLS_LIVE_BAIDU_CCR_REGION")
+		instanceID = required("CLOUD_SKILLS_LIVE_BAIDU_CCR_INSTANCE_ID")
+		userID = required("CLOUD_SKILLS_LIVE_BAIDU_CCR_USER_ID")
+		arguments["region"] = region
+		arguments["registry_instance_id"] = instanceID
+		arguments["registry_user_id"] = userID
+	}
+	allowedHosts := parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_BAIDU_ALLOWED_ENDPOINT_HOSTS"))
+	invocation := Invocation{Provider: ProviderBaidu, Mode: ModeRead, AuthScheme: authSchemeBaiduCCR, Service: "ccr", Operation: "ListTags", Region: region, RegistryInstanceID: instanceID, RegistryUserID: userID, Method: http.MethodGet, URL: endpoint + "/v2/" + repository + "/tags/list", Parameters: map[string]any{"n": 1}}
+	if validateBaiduCCRInvocation(invocation, allowedHosts) != nil {
+		t.Fatal("Baidu CCR live endpoint, identifiers, or namespaced repository are invalid")
+	}
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "baiducloud_api_read", arguments)
+	if result.IsError {
+		t.Fatalf("Baidu CCR live read failed: %s", cloudToolText(t, result))
+	}
+	text := strings.TrimSpace(cloudToolText(t, result))
+	if text == "" {
+		t.Fatal("Baidu CCR returned an empty response")
+	}
+	for _, secret := range []string{os.Getenv("BCE_ACCESS_KEY_ID"), os.Getenv("BCE_SECRET_ACCESS_KEY"), os.Getenv("BCE_SESSION_TOKEN"), os.Getenv("BCE_SECURITY_TOKEN")} {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Fatal("Baidu CCR live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderBaidu && events[index].Mode == ModeRead && events[index].Operation == "ListTags" && events[index].AuthScheme == authSchemeBaiduCCR && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Baidu CCR read audit event: %#v", events)
+	}
+	t.Logf("provider=baiducloud service=ccr operation=ListTags outcome=succeeded response_bytes=%d request_id=%q", len(text), succeeded.RequestID)
 }
 
 func TestLiveAlibabaMQMutation(t *testing.T) {

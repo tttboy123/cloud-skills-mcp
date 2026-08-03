@@ -49,7 +49,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, ACR Enterprise Docker/OCI Registry HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles, ACR temporary login/Bearer tokens, and the derived NLS token remain internal |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS/CLS signed HTTPS, TCR Enterprise Docker/OCI Registry HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; TCR temporary Registry credentials remain internal, realtime ASR signs its documented temporary token, and WSS protocols without a Token field require the long-lived tuple |
-| Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token; RTC product license is server-only entitlement material |
+| Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints, CCR Enterprise/Personal Docker/OCI Registry HTTPS, plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token; CCR temporary login/Bearer credentials and RTC instance token remain internal; RTC product license is server-only entitlement material |
 
 The MCP server never returns, logs or writes credential material. Login,
 credential creation, credential export and access-token printing are not cloud
@@ -278,6 +278,15 @@ remain available through the guarded resource gateway.
   fail closed until an official redirect contract can be verified. Personal
   Edition remains credential-bound because it requires a separately configured
   Registry username/password rather than CAM AKSK/IAM.
+- Baidu CCR Enterprise and Personal Registry use `auth_scheme=ccr-registry`.
+  Enterprise binds the instance ID, IAM user ID and region to an exact public,
+  VPC, or operator-pinned custom endpoint, then signs only the fixed BCE v1
+  user-profile and one-hour instance-credential requests. Personal binds to
+  `registry.baidubce.com` and signs only the fixed current-user and one-hour
+  token requests. Both flows keep the temporary login, same-origin
+  `/service/token` Basic exchange and path-derived Bearer capability internal.
+  Registry redirects fail closed until an official safe redirect contract is
+  verified. `TestLiveBaiduCCRReadOnly` is the opt-in read-only ListTags gate.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an
