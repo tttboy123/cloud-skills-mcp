@@ -61,6 +61,13 @@
 - Amazon Lex V2 streaming API concepts, `ConfigurationEvent`, and text/audio/DTMF event ordering: https://docs.aws.amazon.com/lexv2/latest/dg/streaming-API.html
 - Amazon Lex V2 `ConfigurationEvent`, `TextInputEvent`, and response event shapes: https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_ConfigurationEvent.html, https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_TextInputEvent.html, and https://docs.aws.amazon.com/lexv2/latest/APIReference/API_runtime_StartConversationResponseEventStream.html
 - Amazon Lex V2 runtime endpoints and service signing name (`runtime-v2-lex`, `lex`): https://docs.aws.amazon.com/general/latest/gr/lex.html
+- Amazon Chime SDK Messaging WebSocket overview and step order (IAM policy, retrieve endpoint, connect, prefetch, process events): https://docs.aws.amazon.com/chime-sdk/latest/dg/websockets.html
+- Amazon Chime SDK Messaging connect API, SigV4 `GET /connect` query parameters (`X-Amz-Algorithm`, `X-Amz-Credential`, `X-Amz-Date`, `X-Amz-Expires`, `X-Amz-SignedHeaders`, `sessionId`, `userArn`), and the `chime` signing service: https://docs.aws.amazon.com/chime-sdk/latest/dg/connect-api.html
+- Amazon Chime SDK Messaging `GetMessagingSessionEndpoint` request/response and `MessagingSessionEndpoint` URL shape: https://docs.aws.amazon.com/chime-sdk/latest/APIReference/API_GetMessagingSessionEndpoint.html and https://docs.aws.amazon.com/chime-sdk/latest/APIReference/API_messaging-chime_MessagingSessionEndpoint.html
+- Amazon Chime SDK Messaging WebSocket message structures: `Headers` (`x-amz-chime-event-type`, `x-amz-chime-message-type`, `x-amz-chime-event-reason`), `Payload` JSON string, event types and payload formats: https://docs.aws.amazon.com/chime-sdk/latest/dg/message-structures.html
+- Amazon Chime SDK Messaging `chime:Connect` and `chime:GetMessagingSessionEndpoint` IAM actions on AppInstanceUser resources: https://docs.aws.amazon.com/chime-sdk/latest/dg/define-iam-policy.html
+- Amazon Chime SDK Messaging WebSocket close codes and reconnect guidance: https://docs.aws.amazon.com/chime-sdk/latest/dg/handle-disconnects.html
+- Official Chime SDK JS messaging session implementation that retrieves the endpoint and SigV4-presigns `/connect` with service `chime`: https://github.com/aws/amazon-chime-sdk-js/tree/main/src/messagingsession
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
 
@@ -72,3 +79,17 @@ and Channel ARN scope, signs the provider endpoint for 299 seconds with the STS
 token inside the canonical query, Base64-encodes only bounded SDP/ICE JSON,
 paces messages to provider quotas, correlates asynchronous status errors, and
 atomically decodes supported events without exposing the signed URL.
+
+`auth_scheme=chime-messaging-ws` implements the Amazon Chime SDK Messaging
+WebSocket event-stream contract. The server signs the fixed
+`GET https://messaging-chime.<region>.amazonaws.com/endpoints/messaging-session`
+request with the AWS SDK chain and the documented `chime` signing name, rejects
+any returned endpoint other than the official `wss://data-messaging.chime.aws`
+host, then SigV4-presigns `GET /connect` with a bounded `X-Amz-Expires`, the
+caller's official AppInstanceUser ARN as `userArn`, a unique `sessionId`, an
+optional `prefetch-on=connect`, and the STS token only inside the canonical
+query (mirroring the official Chime JS SDK `DefaultSigV4` process and verified
+against the AWS SDK Go v2 presigner). Events are validated against the
+documented `x-amz-chime-event-type` table and `STANDARD|CONTROL|SYSTEM` message
+types, `Payload` JSON strings are decoded and bounded, and atomic NDJSON is
+published without exposing the signed URL, STS token, or SigV4 material.
