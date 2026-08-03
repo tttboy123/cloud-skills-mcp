@@ -77,6 +77,22 @@ build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
 validators, Actionlint, govulncheck, four-platform archives, and a five-second
 AMQP plan fuzz run (158,828 executions) also passed.
 
+Azure messaging sovereign endpoint routing now accepts only the three active
+official Service Bus namespace suffixes: public Azure
+`servicebus.windows.net`, Azure US Government
+`servicebus.usgovcloudapi.net`, and Azure operated by 21Vianet
+`servicebus.chinacloudapi.cn`. Service Bus and Event Hubs preserve the exact
+`$servicebus/websocket` WSS target through the Azure SDK. Lookalike hosts,
+private-link aliases, custom domains, and the retired Microsoft Cloud Germany
+suffix fail closed; credentials and CBS tokens remain internal. Implementation
+commit `999761951b1c8d376033848ab230018ba5263838` passed remote macOS, Ubuntu,
+ShellCheck, Actionlint, govulncheck and four-platform release verification in
+[CI run 30810688615](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30810688615).
+Fresh local module verification, formatting, vet, race coverage (80.1% total),
+build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
+validators, Actionlint, govulncheck, four-platform archives, and a five-second
+endpoint allowlist fuzz run (128,000 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
