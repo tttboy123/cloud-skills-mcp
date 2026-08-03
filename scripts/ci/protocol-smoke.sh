@@ -46,6 +46,7 @@ trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"tencent_api_read","arguments":{"auth_scheme":"tcr-registry","service":"tcr","operation":"ListTags","region":"ap-guangzhou","registry_instance_id":"tcr-example123","method":"GET","url":"https://demo-tcr.tencentcloudcr.com.attacker.example/v2/team/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"baiducloud_api_read","arguments":{"auth_scheme":"ccr-registry","service":"ccr","operation":"ListTags","region":"bj","registry_instance_id":"ccr-example12","registry_user_id":"iam-user-123","method":"GET","url":"https://ccr-example12-pub.cnc.bd.bj.baidubce.com.attacker.example/v2/team/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"baiducloud_api_read","arguments":{"auth_scheme":"iotcore-mqtt-ws","service":"iotcore","operation":"SubscribeMQTT","method":"GET","url":"wss://aop098js.iot.gz.baidubce.com.attacker.example/mqtt","body":{"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/#","qos":1}],"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/baidu-iotcore.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"iot-mqtt-ws","service":"iotdevicegateway","operation":"SubscribeMQTT","region":"us-west-2","method":"GET","url":"wss://account-ats.iot.us-west-2.amazonaws.com.attacker.example/mqtt","body":{"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/#","qos":1}],"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/aws-iot.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -108,7 +109,9 @@ jq -e -s '
     ($responses | map(select(.id == 30))[0].result.isError == true) and
     ($responses | map(select(.id == 30))[0].result.content[0].text | contains("exact Personal or Enterprise public, VPC, or operator-pinned custom endpoint")) and
     ($responses | map(select(.id == 31))[0].result.isError == true) and
-    ($responses | map(select(.id == 31))[0].result.content[0].text | contains("exact single-instance official endpoint"))
+    ($responses | map(select(.id == 31))[0].result.content[0].text | contains("exact single-instance official endpoint")) and
+    ($responses | map(select(.id == 32))[0].result.isError == true) and
+    ($responses | map(select(.id == 32))[0].result.content[0].text | contains("region or endpoint allowlist"))
 ' "${RESPONSES}" >/dev/null
 
 printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"baiducloud_api_mutate","arguments":{"auth_scheme":"iotcore-http-pub","service":"iotcore","operation":"PublishHTTP","method":"POST","url":"https://aop098js.iot.gz.baidubce.com.attacker.example/pub","body":{"topic":"commands/device-1","qos":1,"payload_base64":"dHVybi1vbg=="},"force":true}}}' |

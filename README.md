@@ -157,13 +157,30 @@ Amazon Transcribe 标准、Medical 和 Call Analytics 的交互式 WebSocket 使
 
 PCM 默认按 100ms 分片；压缩音频或特殊采样布局可显式设置 `stream_chunk_bytes`/`stream_interval_ms`。Medical 改用 `/medical-stream-transcription-websocket`、`StartMedicalStreamTranscriptionWebSocket` 并提供 `specialty`/`type`；Call Analytics 改用 `/call-analytics-stream-transcription-websocket` 和对应 operation。需要 `ConfigurationEvent` 时把配置对象放在 `body`，音频仍放在 `body_file`；它和后述 Connect Health 是允许二者并用的两个受控协议。
 
-AWS IoT Core 的 IAM/SigV4 MQTT 3.1.1/5.0 订阅使用 `auth_scheme=iot-mqtt-ws`。普通 SigV4 HTTPS 已能发布 `/topics/<topic>`，但不能订阅；该模式由 server 内部生成五分钟 WSS 签名、协商 `mqtt`、发送 clean-start CONNECT/SUBSCRIBE、验证对应版本的 CONNACK/SUBACK reason code、确认 QoS 1 消息，并在消息数或超时边界到达后原子发布 Base64 NDJSON。`protocol_version` 可为 `4`（默认）或 `5`：
+AWS IoT Core 的 IAM/SigV4 MQTT 3.1.1/5.0 使用 `auth_scheme=iot-mqtt-ws`。只读 `SubscribeMQTT` 由 server 内部生成五分钟 WSS 签名、协商 `mqtt`、发送 clean-start CONNECT/SUBSCRIBE、验证对应版本的 CONNACK/SUBACK reason code、确认 QoS 1 下行消息，并在消息数或超时边界到达后原子发布 Base64 NDJSON。`protocol_version` 可为 `4`（默认）或 `5`：
 
 ```json
 {"name":"aws_api_read","arguments":{"auth_scheme":"iot-mqtt-ws","service":"iotdevicegateway","operation":"SubscribeMQTT","region":"us-west-2","method":"GET","url":"wss://<account>-ats.iot.us-west-2.amazonaws.com/mqtt","body":{"protocol_version":5,"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/+/temperature","qos":1}],"max_messages":10,"timeout_seconds":30},"response_file":"/approved/results/mqtt.ndjson"}}
 ```
 
-MQTT 5 CONNECT 显式限制 Receive Maximum 和 128 KiB Maximum Packet Size，并把 Topic Alias Maximum 保持为 0；下行支持 Payload Format、Message Expiry、Content Type、Response Topic、Correlation Data 和有序 User Properties，拒绝 AWS 不支持的 QoS 2/Subscription Identifier 以及未协商的 Topic Alias。STS session token 遵循 AWS IoT 官网的特殊规则：只在 canonical query 签名完成后追加；签名 URL、Token 和 MQTT 握手控制都不进入 MCP 输出。调用方不能提交 query/header、持久会话或无边界订阅。
+需要 WSS 发布、retained/Last Will、退订或持久会话时使用 mutation-only `ClientMQTT`。MQTT 3.1.1 用 `clean_start=false` 恢复/创建 broker 账户配额控制的持久会话；MQTT 5 再用最长 7 天的 `session_expiry_seconds`，并可通过 `disconnect_session_expiry_seconds` 在 DISCONNECT 更新或清理会话。恢复持久会话时即使不新增订阅，AWS 也可能在 CONNACK 后立即下发已存 QoS 1 消息，因此必须同时声明 `max_messages`、`timeout_seconds` 和 `response_file`。`publishes`、`will` 均支持 QoS 0/1、retained、Base64 payload；MQTT 5 还支持 Payload Format、Content Type、Message Expiry、Response Topic、Correlation Data 和保持顺序的 User Properties。QoS 1 出站逐条等待 PUBACK，普通 publish 按单连接 500/s 自动节流，retained publish 按默认账户 50/s 且同 topic 1/s 的官网配额节流；最多 64 条 publish，订阅和退订各受官方单包 8 条配额约束：
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"iot-mqtt-ws","service":"iotdevicegateway","operation":"ClientMQTT","region":"us-west-2","method":"GET","url":"wss://<account>-ats.iot.us-west-2.amazonaws.com/mqtt","body":{"protocol_version":5,"client_id":"device-1","clean_start":false,"session_expiry_seconds":3600,"disconnect_session_expiry_seconds":0,"subscriptions":[{"topic_filter":"devices/device-1/in","qos":1}],"unsubscriptions":["devices/device-1/legacy"],"publishes":[{"topic":"devices/device-1/status","qos":1,"retain":true,"payload_base64":"b25saW5l","payload_format":1,"content_type":"text/plain","message_expiry_seconds":60}],"will":{"topic":"devices/device-1/status","qos":1,"retain":true,"payload_base64":"b2ZmbGluZQ==","payload_format":1,"content_type":"text/plain"},"max_messages":1,"timeout_seconds":30},"response_file":"/approved/results/mqtt-client.ndjson","force":true}}
+```
+
+MQTT 5 CONNECT 显式限制 Receive Maximum 和 128 KiB Maximum Packet Size，并把 Topic Alias Maximum 保持为 0；收发两侧都支持上述 AWS 官方属性，客户端还验证 broker 的 Maximum QoS、Retain Available、Maximum Packet Size、Receive Maximum、Session Present、Server Keep Alive 和版本化 ACK/DISCONNECT reason code。AWS 不支持 QoS 2 和 Subscription Identifier，官方支持属性表也未列出 Will Delay，因此这些输入会 fail closed。STS session token 遵循 AWS IoT 官网的特殊规则：只在 canonical query 签名完成后追加；签名 URL、Token 和 MQTT 握手控制都不进入 MCP 输出。调用方不能提交 query/header、凭证或无边界会话。
+
+真实数据面 mutation gate 会在同一条精确 topic 上完成 MQTT 5 持久会话、Will、QoS 1 订阅和发布，收到自身发布后用 DISCONNECT expiry 0 清理 session；不会留下 retained message：
+
+```bash
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT=1 \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_ENDPOINT=wss://<account>-ats.iot.<region>.amazonaws.com/mqtt \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_REGION=<region> \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_TOPIC='cloud-skills/live/<unique>' \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_CLIENT_ID='cloud-skills-live-unique' \
+go test ./internal/mcp/cloud -run TestLiveAWSIoTMQTTMutation -v
+```
 
 Kinesis Video Streams WebRTC Signaling 使用 `auth_scheme=kinesisvideo-signaling-ws`。先通过普通 SigV4 HTTPS `GetSignalingChannelEndpoint` 取得 WSS endpoint；随后 mutation 调用只提交 Channel ARN、Master/Viewer 角色和有限的 SDP/ICE JSON 消息。server 使用官方 299 秒 `kinesisvideo` SigV4 查询算法，把 Channel ARN、Viewer Client ID 以及可选 STS token 全部纳入 canonical query，签名 URL 永不返回 MCP：
 

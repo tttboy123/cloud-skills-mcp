@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,93 @@ import (
 	"sync"
 	"testing"
 )
+
+func TestLiveAWSIoTMQTTMutation(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_IOT_MQTT") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AWS_IOT_MQTT=1 for an explicitly approved IAM MQTT publish/subscribe session")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for AWS IoT MQTT live validation", name)
+		}
+		return value
+	}
+	endpoint := required("CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_ENDPOINT")
+	region := required("CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_REGION")
+	topic := required("CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_TOPIC")
+	clientID := required("CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_CLIENT_ID")
+	payload := []byte("cloud-skills-live-" + clientID)
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "aws-iot-mqtt.ndjson")
+	body := map[string]any{
+		"protocol_version": 5, "client_id": clientID, "clean_start": true,
+		"session_expiry_seconds": 60, "disconnect_session_expiry_seconds": 0,
+		"subscriptions": []any{map[string]any{"topic_filter": topic, "qos": 1}},
+		"publishes": []any{map[string]any{
+			"topic": topic, "qos": 1, "payload_base64": base64.StdEncoding.EncodeToString(payload),
+			"payload_format": 1, "content_type": "text/plain", "message_expiry_seconds": 60,
+			"user_properties": []any{map[string]any{"name": "source", "value": "cloud-skills-live"}},
+		}},
+		"will": map[string]any{
+			"topic": topic, "qos": 1, "payload_base64": base64.StdEncoding.EncodeToString([]byte("unexpected-disconnect")),
+			"payload_format": 1, "content_type": "text/plain", "message_expiry_seconds": 60,
+		},
+		"max_messages": 1, "timeout_seconds": 60,
+	}
+	invocation := Invocation{
+		Provider: ProviderAWS, Mode: ModeMutate, AuthScheme: authSchemeAWSIoTMQTTWS,
+		Service: awsIoTMQTTService, Operation: "ClientMQTT", Region: region,
+		Method: http.MethodGet, URL: endpoint, Body: body,
+		ResponseFile: responseFile, MaxResponseFileBytes: 1024 * 1024,
+	}
+	if err := validateAWSIoTMQTTWebSocketInvocation(invocation, nil); err != nil {
+		t.Fatalf("AWS IoT MQTT live endpoint or client plan is invalid: %v", err)
+	}
+	runtime := DefaultRuntime()
+	runtime.AllowMutations = true
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "aws_api_mutate", map[string]any{
+		"force": true, "auth_scheme": authSchemeAWSIoTMQTTWS, "service": awsIoTMQTTService,
+		"operation": "ClientMQTT", "region": region, "method": http.MethodGet,
+		"url": endpoint, "body": body, "response_file": responseFile,
+	})
+	if result.IsError {
+		t.Fatalf("AWS IoT MQTT live mutation failed: %s", cloudToolText(t, result))
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil || len(data) == 0 || !strings.Contains(string(data), base64.StdEncoding.EncodeToString(payload)) {
+		t.Fatalf("read AWS IoT MQTT live response: bytes=%d matched=%t err=%v", len(data), strings.Contains(string(data), base64.StdEncoding.EncodeToString(payload)), err)
+	}
+	resultText := cloudToolText(t, result)
+	for _, secret := range []string{os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"), os.Getenv("AWS_SESSION_TOKEN"), "X-Amz-Signature"} {
+		if secret != "" && (strings.Contains(string(data), secret) || strings.Contains(resultText, secret)) {
+			t.Fatal("AWS IoT MQTT live result leaked IAM credential or presign material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAWS && events[index].Mode == ModeMutate && events[index].Operation == "ClientMQTT" && events[index].AuthScheme == authSchemeAWSIoTMQTTWS && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded AWS IoT MQTT mutation audit event: %#v", events)
+	}
+	t.Logf("provider=aws service=iotdevicegateway operation=ClientMQTT outcome=succeeded response_bytes=%d request_id=%q", len(data), succeeded.RequestID)
+}
 
 func TestLiveSixCloudReadOnly(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_TEST") != "1" {

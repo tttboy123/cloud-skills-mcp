@@ -105,13 +105,19 @@ remain available through the guarded resource gateway.
   `/graphql` requests, keeps dynamic subprotocol/start authorization internal,
   validates the realtime message lifecycle, and atomically publishes sanitized
   data payloads before sending `stop`.
-- AWS IoT WSS accepts finite read-only MQTT 3.1.1 and MQTT 5 subscriptions over
-  the exact `/mqtt` endpoint. It keeps SigV4/STS query authorization internal,
-  supports only AWS QoS 0/1, validates MQTT 5 properties and reason codes,
-  advertises bounded receive/128 KiB packet limits and zero topic aliases,
-  honors broker keepalive, and atomically publishes Base64 NDJSON. Persistent
-  sessions, subscription identifiers, QoS 2 and caller-provided handshake
-  material are excluded; publishing remains available through signed HTTPS.
+- AWS IoT WSS accepts finite read-only `SubscribeMQTT` and mutation-only
+  `ClientMQTT` plans over the exact `/mqtt` endpoint for MQTT 3.1.1 and MQTT 5.
+  It keeps SigV4/STS query authorization internal; supports AWS QoS 0/1
+  subscribe, unsubscribe, publish/PUBACK, retained messages and Last Will;
+  implements MQTT 3 persistent sessions plus MQTT 5 Clean Start, CONNECT and
+  DISCONNECT Session Expiry; preserves the provider-supported PUBLISH/Will
+  properties; validates Session Present, Maximum QoS, Retain Available,
+  Receive Maximum, Maximum Packet Size, Server Keep Alive, ACK and DISCONNECT
+  reason codes; and atomically publishes bounded Base64 NDJSON. The client
+  advertises a 128 KiB packet limit and zero topic aliases. QoS 2,
+  subscription identifiers, Will Delay, caller-provided handshake material,
+  credentials, and unbounded sessions are excluded by the provider or gateway
+  boundary. Signed HTTPS `/topics/<topic>` publishing remains available.
 - AWS Kinesis Video WebRTC Signaling WSS accepts exact provider-generated
   endpoints and mutation-only `ConnectAsMaster|ConnectAsViewer` plans. It keeps
   the 299-second SigV4 query, Channel ARN, Viewer ID and STS token internal;

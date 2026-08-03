@@ -132,7 +132,7 @@ func TestAWSAdapterCollectsFiniteIoTMQTTSubscriptionWithoutExposingSignedURL(t *
 		},
 	})
 	result, err := adapter.Invoke(t.Context(), Invocation{
-		Provider: ProviderAWS, AuthScheme: "iot-mqtt-ws", Service: "iotdevicegateway", Operation: "SubscribeMQTT",
+		Provider: ProviderAWS, Mode: ModeRead, AuthScheme: "iot-mqtt-ws", Service: "iotdevicegateway", Operation: "SubscribeMQTT",
 		Region: "us-west-2", Method: http.MethodGet, URL: "wss://account-prefix-ats.iot.us-west-2.amazonaws.com/mqtt",
 		Body: map[string]any{
 			"client_id": "observer-1", "max_messages": 2, "timeout_seconds": 30,
@@ -250,7 +250,7 @@ func TestAWSIoTMQTTRejectedSubscriptionLeavesNoOutput(t *testing.T) {
 		},
 	})
 	_, err := adapter.Invoke(t.Context(), Invocation{
-		Provider: ProviderAWS, AuthScheme: "iot-mqtt-ws", Service: "iotdevicegateway", Operation: "SubscribeMQTT",
+		Provider: ProviderAWS, Mode: ModeRead, AuthScheme: "iot-mqtt-ws", Service: "iotdevicegateway", Operation: "SubscribeMQTT",
 		Region: "us-west-2", Method: http.MethodGet, URL: "wss://account-prefix-ats.iot.us-west-2.amazonaws.com/mqtt",
 		Body: map[string]any{
 			"client_id": "observer-1", "subscriptions": []any{map[string]any{"topic_filter": "sensors/#", "qos": 1}}, "max_messages": 1, "timeout_seconds": 30,
@@ -285,7 +285,7 @@ func TestAWSIoTMQTTDoesNotExceedMessageLimitBeforeSubAck(t *testing.T) {
 		},
 	})
 	_, err := adapter.Invoke(t.Context(), Invocation{
-		Provider: ProviderAWS, AuthScheme: "iot-mqtt-ws", Service: "iotdevicegateway", Operation: "SubscribeMQTT",
+		Provider: ProviderAWS, Mode: ModeRead, AuthScheme: "iot-mqtt-ws", Service: "iotdevicegateway", Operation: "SubscribeMQTT",
 		Region: "us-west-2", Method: http.MethodGet, URL: "wss://account-prefix-ats.iot.us-west-2.amazonaws.com/mqtt",
 		Body: map[string]any{
 			"client_id": "observer-1", "subscriptions": []any{map[string]any{"topic_filter": "sensors/#", "qos": 0}}, "max_messages": 1, "timeout_seconds": 30,
