@@ -3,6 +3,7 @@ package cloud
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -158,6 +159,183 @@ func TestAWSLexV2PlanBounds(t *testing.T) {
 	bad(func() map[string]any { body := baseBody(); body["timeout_seconds"] = 301; return body }(), "max_events 1..256")
 	bad(func() map[string]any { body := baseBody(); body["bogus"] = true; return body }(), "protocol schema")
 	bad(map[string]any{"bot_id": "ABCDEFGHIJ", "bot_alias_id": "alias-1", "locale_id": "en_US", "session_id": "session-1", "texts": []any{map[string]any{"text": "hello"}}, "token": "x"}, "credential-free")
+}
+
+func TestAWSLexV2AudioDTMFPlanBounds(t *testing.T) {
+	baseBody := func() map[string]any {
+		return map[string]any{
+			"bot_id": "ABCDEFGHIJ", "bot_alias_id": "alias-1", "locale_id": "en_US", "session_id": "session-1",
+			"conversation_mode": "AUDIO",
+			"audio_base64":      base64.StdEncoding.EncodeToString([]byte("audio-bytes")),
+			"dtmf":              "12#",
+			"texts":             []any{map[string]any{"text": "hello", "event_id": "lex-evt-1"}},
+			"max_events":        10, "timeout_seconds": 30,
+		}
+	}
+	good := func(body map[string]any) {
+		t.Helper()
+		if _, err := parseAWSLexV2Plan(body, "us-west-2"); err != nil {
+			t.Fatalf("valid AUDIO plan rejected: %v", err)
+		}
+	}
+	bad := func(body map[string]any, fragment string) {
+		t.Helper()
+		if _, err := parseAWSLexV2Plan(body, "us-west-2"); err == nil || !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("expected error containing %q, got %v", fragment, err)
+		}
+	}
+	good(baseBody())
+	audioPlan, err := parseAWSLexV2Plan(baseBody(), "us-west-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audioPlan.ConversationMode != "AUDIO" || string(audioPlan.AudioChunk) != "audio-bytes" || strings.Join(audioPlan.DTMF, "") != "12#" {
+		t.Fatalf("plan=%#v", audioPlan)
+	}
+	good(func() map[string]any {
+		body := baseBody()
+		body["conversation_mode"] = "text"
+		body["audio_base64"] = ""
+		body["dtmf"] = ""
+		return body
+	}())
+	bad(func() map[string]any { body := baseBody(); body["conversation_mode"] = "VIDEO"; return body }(), "conversation_mode must be TEXT or AUDIO")
+	bad(func() map[string]any {
+		body := baseBody()
+		body["audio_base64"] = "not-base64!!"
+		return body
+	}(), "audio_base64")
+	bad(func() map[string]any {
+		body := baseBody()
+		body["audio_base64"] = base64.StdEncoding.EncodeToString(make([]byte, 256*1024+1))
+		return body
+	}(), "audio_base64")
+	bad(func() map[string]any { body := baseBody(); body["dtmf"] = "12!#"; return body }(), "invalid character")
+	bad(func() map[string]any { body := baseBody(); body["dtmf"] = strings.Repeat("1", 33); return body }(), "32-character")
+	bad(func() map[string]any {
+		body := baseBody()
+		body["conversation_mode"] = "TEXT"
+		body["audio_base64"] = base64.StdEncoding.EncodeToString([]byte("x"))
+		return body
+	}(), "TEXT mode accepts only text events")
+	bad(func() map[string]any {
+		body := baseBody()
+		body["conversation_mode"] = "TEXT"
+		body["dtmf"] = "1"
+		return body
+	}(), "TEXT mode accepts only text events")
+	bad(func() map[string]any {
+		body := baseBody()
+		body["audio_base64"] = ""
+		body["dtmf"] = ""
+		body["texts"] = []any{}
+		return body
+	}(), "AUDIO mode requires audio, DTMF, or text input")
+}
+
+func TestAWSLexV2AudioConversationSignsAudioDTMFAndPublishesSanitizedOutput(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	var conversationModeHeader string
+	var eventTypes []string
+	var eventPayloads [][]byte
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		conversationModeHeader = request.Header.Get("x-amz-lex-conversation-mode")
+		encoded, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		decoder := eventstream.NewDecoder()
+		encodedReader := bytes.NewReader(encoded)
+		for encodedReader.Len() > 0 {
+			message, err := decoder.Decode(encodedReader, nil)
+			if err != nil {
+				return nil, err
+			}
+			if message.Headers.Get(eventstream.ChunkSignatureHeader) == nil {
+				return nil, errors.New("missing chunk signature")
+			}
+			if len(message.Payload) == 0 {
+				continue
+			}
+			inner, err := eventstream.NewDecoder().Decode(bytes.NewReader(message.Payload), nil)
+			if err != nil {
+				return nil, err
+			}
+			eventTypes = append(eventTypes, inner.Headers.Get(eventstream.EventTypeHeader).String())
+			eventPayloads = append(eventPayloads, append([]byte(nil), inner.Payload...))
+		}
+		reader, writer := io.Pipe()
+		go func() {
+			defer writer.Close()
+			for _, frame := range [][]byte{
+				encodeAWSHTTP2TestEvent(t, "AudioResponseEvent", "application/json", []byte(`{"eventId":"res-audio","audioChunk":"aGVsbG8tYXVkaW8=","contentType":"audio/lpcm; sample-rate=8000; sample-size-bits=16; channel-count=1; is-big-endian=false"}`)),
+				encodeAWSHTTP2TestEvent(t, "PlaybackInterruptionEvent", "application/json", []byte(`{"eventId":"res-interrupt","causedByEventId":"lex-dtmf-1","eventReason":"TEXT_DETECTED"}`)),
+				encodeAWSHTTP2TestEvent(t, "TextResponseEvent", "application/json", []byte(`{"eventId":"res-text","messages":[{"content":"audio received","contentType":"PlainText"}]}`)),
+			} {
+				if _, err := writer.Write(frame); err != nil {
+					return
+				}
+			}
+		}()
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "X-Amzn-Requestid": []string{"lex-audio-req"}},
+			Body: reader,
+		}, nil
+	})
+	adapter := NewAWSRESTAdapter(AWSRESTConfig{
+		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "private-secret", SessionToken: "private-session"}},
+		HTTP:        doer, Now: func() time.Time { return now },
+	})
+	directory := t.TempDir()
+	invocation := validAWSLexV2Invocation(directory)
+	invocation.Body = map[string]any{
+		"bot_id": "ABCDEFGHIJ", "bot_alias_id": "alias-1", "locale_id": "en_US", "session_id": "session-1",
+		"conversation_mode": "AUDIO",
+		"audio_base64":      base64.StdEncoding.EncodeToString([]byte("audio-bytes")),
+		"dtmf":              "12#",
+		"texts":             []any{map[string]any{"text": "hello", "event_id": "lex-evt-1"}},
+		"max_events":        10, "timeout_seconds": 30,
+	}
+	result, err := adapter.Invoke(t.Context(), invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conversationModeHeader != "AUDIO" {
+		t.Fatalf("conversation mode header=%q", conversationModeHeader)
+	}
+	wantTypes := []string{"ConfigurationEvent", "AudioInputEvent", "DTMFInputEvent", "DTMFInputEvent", "DTMFInputEvent", "TextInputEvent"}
+	if strings.Join(eventTypes, ",") != strings.Join(wantTypes, ",") {
+		t.Fatalf("event types=%#v", eventTypes)
+	}
+	var audioEvent map[string]any
+	if json.Unmarshal(eventPayloads[1], &audioEvent) != nil || audioEvent["contentType"] != awsLexV2AudioContentType || audioEvent["audioChunk"] != base64.StdEncoding.EncodeToString([]byte("audio-bytes")) {
+		t.Fatalf("audio event=%s", eventPayloads[1])
+	}
+	var dtmfEvent map[string]any
+	if json.Unmarshal(eventPayloads[2], &dtmfEvent) != nil || dtmfEvent["inputCharacter"] != "1" || dtmfEvent["eventId"] != "lex-dtmf-1" {
+		t.Fatalf("dtmf event=%s", eventPayloads[2])
+	}
+	output, err := os.ReadFile(invocation.ResponseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"eventType":"AudioResponseEvent"`, `"audio_base64":"aGVsbG8tYXVkaW8="`,
+		`"eventType":"PlaybackInterruptionEvent"`, `"TEXT_DETECTED"`, `"causedByEventId":"lex-dtmf-1"`,
+		`"eventType":"TextResponseEvent"`, `"audio received"`,
+	} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Fatalf("output missing %s: %s", want, output)
+		}
+	}
+	for _, secret := range []string{"AKIDEXAMPLE", "private-secret", "private-session"} {
+		if bytes.Contains(output, []byte(secret)) || bytes.Contains(result.Output, []byte(secret)) {
+			t.Fatalf("output leaked %q", secret)
+		}
+	}
+	if result.RequestID != "lex-audio-req" {
+		t.Fatalf("request id=%q", result.RequestID)
+	}
 }
 
 func TestAWSLexV2ConversationSignsEventsAndPublishesSanitizedTranscript(t *testing.T) {

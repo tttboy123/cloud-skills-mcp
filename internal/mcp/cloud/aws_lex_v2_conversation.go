@@ -3,6 +3,7 @@ package cloud
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,11 @@ const (
 	awsLexV2MaxAttributeValueRunes = 1024
 	awsLexV2MaxMessages            = 10
 	awsLexV2MaxInterpretations     = 5
+	awsLexV2MaxAudioChunkBytes     = 256 * 1024
+	awsLexV2MaxDTMFChars           = 32
+	awsLexV2AudioContentType       = "audio/lpcm; sample-rate=8000; sample-size-bits=16; channel-count=1; is-big-endian=false"
+	awsLexV2ConversationModeText   = "TEXT"
+	awsLexV2ConversationModeAudio  = "AUDIO"
 )
 
 var awsLexV2ResponseContentTypes = map[string]struct{}{
@@ -56,8 +62,11 @@ type awsLexV2RawPlan struct {
 	BotAliasID        string                 `json:"bot_alias_id"`
 	LocaleID          string                 `json:"locale_id"`
 	SessionID         string                 `json:"session_id"`
+	ConversationMode  string                 `json:"conversation_mode,omitempty"`
 	RequestAttributes map[string]string      `json:"request_attributes,omitempty"`
 	SessionAttributes map[string]string      `json:"session_attributes,omitempty"`
+	AudioBase64       string                 `json:"audio_base64,omitempty"`
+	DTMF              string                 `json:"dtmf,omitempty"`
 	Texts             []awsLexV2RawTextEvent `json:"texts"`
 	MaxEvents         int                    `json:"max_events,omitempty"`
 	TimeoutSeconds    int                    `json:"timeout_seconds,omitempty"`
@@ -74,8 +83,11 @@ type awsLexV2Plan struct {
 	BotAliasID        string
 	LocaleID          string
 	SessionID         string
+	ConversationMode  string
 	RequestAttributes map[string]string
 	SessionAttributes map[string]string
+	AudioChunk        []byte
+	DTMF              []string
 	Texts             []awsLexV2TextPlan
 	MaxEvents         int
 	Timeout           time.Duration
@@ -142,14 +154,47 @@ func parseAWSLexV2Plan(body any, region string) (awsLexV2Plan, error) {
 	if len(raw.SessionID) < 2 || len(raw.SessionID) > 100 || !awsLexV2SessionIDPattern(raw.SessionID) {
 		return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 session_id must be 2..100 characters of [0-9a-zA-Z._:-]")
 	}
+	conversationMode := strings.ToUpper(strings.TrimSpace(raw.ConversationMode))
+	if conversationMode == "" {
+		conversationMode = awsLexV2ConversationModeText
+	}
+	if conversationMode != awsLexV2ConversationModeText && conversationMode != awsLexV2ConversationModeAudio {
+		return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 conversation_mode must be TEXT or AUDIO")
+	}
 	if err := validateAWSLexV2Attributes("request_attributes", raw.RequestAttributes); err != nil {
 		return awsLexV2Plan{}, err
 	}
 	if err := validateAWSLexV2Attributes("session_attributes", raw.SessionAttributes); err != nil {
 		return awsLexV2Plan{}, err
 	}
-	if len(raw.Texts) < 1 || len(raw.Texts) > awsLexV2MaxTextEvents {
+	var audioChunk []byte
+	if strings.TrimSpace(raw.AudioBase64) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(raw.AudioBase64)
+		if err != nil || len(decoded) == 0 || len(decoded) > awsLexV2MaxAudioChunkBytes {
+			return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 audio_base64 must decode to 1..%d bytes of audio/lpcm", awsLexV2MaxAudioChunkBytes)
+		}
+		audioChunk = decoded
+	}
+	var dtmf []string
+	if strings.TrimSpace(raw.DTMF) != "" {
+		if len(raw.DTMF) > awsLexV2MaxDTMFChars {
+			return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 dtmf exceeds its documented %d-character bound", awsLexV2MaxDTMFChars)
+		}
+		for _, character := range raw.DTMF {
+			if !strings.ContainsRune("ABCD0123456789#*", character) {
+				return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 dtmf contains an invalid character")
+			}
+			dtmf = append(dtmf, string(character))
+		}
+	}
+	if conversationMode == awsLexV2ConversationModeText && (audioChunk != nil || len(dtmf) != 0) {
+		return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 TEXT mode accepts only text events")
+	}
+	if len(raw.Texts) > awsLexV2MaxTextEvents || (conversationMode == awsLexV2ConversationModeText && len(raw.Texts) < 1) {
 		return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 requires 1..%d text events", awsLexV2MaxTextEvents)
+	}
+	if conversationMode == awsLexV2ConversationModeAudio && len(raw.Texts) == 0 && audioChunk == nil && len(dtmf) == 0 {
+		return awsLexV2Plan{}, fmt.Errorf("Amazon Lex V2 AUDIO mode requires audio, DTMF, or text input")
 	}
 	texts := make([]awsLexV2TextPlan, 0, len(raw.Texts))
 	for index, rawText := range raw.Texts {
@@ -183,7 +228,8 @@ func parseAWSLexV2Plan(body any, region string) (awsLexV2Plan, error) {
 	}
 	return awsLexV2Plan{
 		BotID: raw.BotID, BotAliasID: raw.BotAliasID, LocaleID: raw.LocaleID, SessionID: raw.SessionID,
-		RequestAttributes: raw.RequestAttributes, SessionAttributes: raw.SessionAttributes,
+		ConversationMode: conversationMode, RequestAttributes: raw.RequestAttributes, SessionAttributes: raw.SessionAttributes,
+		AudioChunk: audioChunk, DTMF: dtmf,
 		Texts: texts, MaxEvents: maxEvents, Timeout: time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }
@@ -262,8 +308,12 @@ func validateAWSLexV2Attributes(name string, attributes map[string]string) error
 }
 
 func encodeAWSLexV2RequestEvents(plan awsLexV2Plan, now time.Time) ([]byte, error) {
+	responseContentType := "text/plain; charset=utf-8"
+	if plan.ConversationMode == awsLexV2ConversationModeAudio {
+		responseContentType = awsLexV2AudioContentType
+	}
 	configuration := map[string]any{
-		"responseContentType":   "text/plain; charset=utf-8",
+		"responseContentType":   responseContentType,
 		"eventId":               "lex-cfg-1",
 		"clientTimestampMillis": now.UnixMilli(),
 	}
@@ -284,6 +334,37 @@ func encodeAWSLexV2RequestEvents(plan awsLexV2Plan, now time.Time) ([]byte, erro
 		return nil, fmt.Errorf("encode Amazon Lex V2 configuration event")
 	}
 	events[0].payload = configurationPayload
+	if plan.AudioChunk != nil {
+		event := map[string]any{
+			"audioChunk":            base64.StdEncoding.EncodeToString(plan.AudioChunk),
+			"contentType":           awsLexV2AudioContentType,
+			"eventId":               "lex-audio-1",
+			"clientTimestampMillis": now.UnixMilli(),
+		}
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return nil, fmt.Errorf("encode Amazon Lex V2 audio event")
+		}
+		events = append(events, struct {
+			eventType string
+			payload   []byte
+		}{eventType: "AudioInputEvent", payload: payload})
+	}
+	for index, character := range plan.DTMF {
+		event := map[string]any{
+			"inputCharacter":        character,
+			"eventId":               fmt.Sprintf("lex-dtmf-%d", index+1),
+			"clientTimestampMillis": now.UnixMilli(),
+		}
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return nil, fmt.Errorf("encode Amazon Lex V2 DTMF event")
+		}
+		events = append(events, struct {
+			eventType string
+			payload   []byte
+		}{eventType: "DTMFInputEvent", payload: payload})
+	}
 	for _, text := range plan.Texts {
 		event := map[string]any{"text": text.Text, "eventId": text.EventID}
 		if text.ClientTimestampMS != 0 {
@@ -333,7 +414,7 @@ func invokeAWSLexV2Conversation(ctx context.Context, adapter *AWSRESTAdapter, cr
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build Amazon Lex V2 conversation request")
 	}
-	request.Header.Set("x-amz-lex-conversation-mode", "TEXT")
+	request.Header.Set("x-amz-lex-conversation-mode", plan.ConversationMode)
 	if err := configureAWSEventStreamRequest(request); err != nil {
 		return InvocationResult{}, err
 	}
@@ -392,7 +473,7 @@ func invokeAWSLexV2Conversation(ctx context.Context, adapter *AWSRESTAdapter, cr
 		if messageType != nil && messageType.String() == eventstream.ExceptionMessageType || isAWSLexV2Exception(eventType) {
 			return InvocationResult{}, fmt.Errorf("Amazon Lex V2 conversation failed with %s", eventType)
 		}
-		sanitized, err := sanitizeAWSLexV2ResponseEvent(eventType, message.Payload)
+		sanitized, err := sanitizeAWSLexV2ResponseEvent(plan.ConversationMode, eventType, message.Payload)
 		if err != nil {
 			return InvocationResult{}, err
 		}
@@ -417,7 +498,7 @@ func isAWSLexV2Exception(eventType string) bool {
 	return false
 }
 
-func sanitizeAWSLexV2ResponseEvent(eventType string, payload []byte) ([]byte, error) {
+func sanitizeAWSLexV2ResponseEvent(conversationMode, eventType string, payload []byte) ([]byte, error) {
 	var object map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
@@ -461,7 +542,31 @@ func sanitizeAWSLexV2ResponseEvent(eventType string, payload []byte) ([]byte, er
 		}
 		sanitized = map[string]any{"eventType": eventType, "eventId": eventID, "sessionId": sessionID, "inputMode": inputMode, "interpretations": interpretations}
 	case "AudioResponseEvent", "PlaybackInterruptionEvent":
-		return nil, fmt.Errorf("Amazon Lex V2 returned an unexpected audio event in TEXT mode")
+		if conversationMode != awsLexV2ConversationModeAudio {
+			return nil, fmt.Errorf("Amazon Lex V2 returned an unexpected audio event in TEXT mode")
+		}
+		if eventType == "AudioResponseEvent" {
+			audioChunk, _ := object["audioChunk"].(string)
+			contentType, _ := object["contentType"].(string)
+			decoded, err := base64.StdEncoding.DecodeString(audioChunk)
+			if err != nil || len(decoded) == 0 || len(decoded) > awsLexV2MaxAudioChunkBytes || !strings.HasPrefix(strings.ToLower(contentType), "audio/lpcm") {
+				return nil, fmt.Errorf("Amazon Lex V2 returned an invalid audio response")
+			}
+			sanitized = map[string]any{"eventType": eventType, "eventId": eventID, "contentType": contentType, "audio_base64": audioChunk}
+		} else {
+			eventReason, _ := object["eventReason"].(string)
+			if _, ok := map[string]struct{}{"DTMF_START_DETECTED": {}, "TEXT_DETECTED": {}, "VOICE_START_DETECTED": {}}[eventReason]; !ok {
+				return nil, fmt.Errorf("Amazon Lex V2 returned an invalid playback interruption reason")
+			}
+			causedByEventID, _ := object["causedByEventId"].(string)
+			if causedByEventID != "" && (len(causedByEventID) < 2 || len(causedByEventID) > awsLexV2MaxEventID || !awsLexV2SessionIDPattern(causedByEventID)) {
+				return nil, fmt.Errorf("Amazon Lex V2 returned an invalid playback interruption event ID")
+			}
+			sanitized = map[string]any{"eventType": eventType, "eventId": eventID, "eventReason": eventReason}
+			if causedByEventID != "" {
+				sanitized["causedByEventId"] = causedByEventID
+			}
+		}
 	default:
 		return nil, fmt.Errorf("Amazon Lex V2 returned unexpected event type %q", eventType)
 	}
