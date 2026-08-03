@@ -93,6 +93,23 @@ build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
 validators, Actionlint, govulncheck, four-platform archives, and a five-second
 endpoint allowlist fuzz run (128,000 executions) also passed.
 
+Azure OpenAI Realtime endpoint routing now accepts only the current official
+single-label public-cloud `<resource>.openai.azure.com` host. Nested public
+subdomains, guessed Azure Government/China suffixes, private-link/custom hosts,
+and lookalikes fail before credential resolution. The official Realtime page
+publishes only the public endpoint and public Global deployment regions; the
+Azure Government model page states that its list includes all Azure OpenAI
+models offered there and lists no Realtime model, while Microsoft publishes no
+Azure China Foundry Realtime endpoint contract. This sovereign mapping is now
+recorded as explicitly unavailable rather than pending guessed implementation.
+Implementation commit `e45852af75d408a209d1e62e3da68946bc0ba22d` passed
+remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck, and four-platform
+release verification in [CI run 30811775660](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30811775660).
+Fresh local module verification, formatting, vet, race coverage (80.1% total),
+build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
+validators, Actionlint, govulncheck, four-platform archives, and a five-second
+endpoint fuzz run (58,666 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
