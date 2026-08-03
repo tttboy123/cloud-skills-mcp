@@ -385,7 +385,7 @@ go test ./internal/mcp/cloud -run TestLiveAlibabaMQMutation -v
 
 Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；Event Grid Namespace MQTT v5 使用 `auth_scheme=eventgrid-mqtt-ws` 和内部 Entra `OAUTH2-JWT` CONNECT/AUTH；Service Bus/Event Hubs 数据面使用 `servicebus-amqp-ws|eventhubs-amqp-ws` 和内部 Entra/CBS AMQP 1.0 over WSS。它们都把凭证、临时 token、CBS claim 和消息/会话锁留在 server 内部。
 
-Azure OpenAI Realtime、Voice Live 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|voice-live-ws|webpubsub-ws`，GCP Artifact Registry OCI HTTP 与原生 HTTP/2 分别使用 `auth_scheme=artifact-registry|grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、Kinesis Video Signaling、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|kinesisvideo-signaling-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，RocketMQ 4.x HTTP 数据面使用 `mq`，ACR 企业版 Registry 使用 `acr-registry`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；CLS 旧版数据面使用独立的 `cls` q-sign 入口；TCR 企业版 Registry 使用 `tcr-registry`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；CCR 企业版/个人版 Registry 使用 `auth_scheme=ccr-registry`；IoT Core MQTT 3.1.1 WSS 使用 `auth_scheme=iotcore-mqtt-ws`，server 内部从 IAM AK/SK 派生应用权限 CONNECT 凭证；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+Azure OpenAI Realtime、Voice Live 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|voice-live-ws|webpubsub-ws`，GCP Artifact Registry OCI HTTP 与原生 HTTP/2 分别使用 `auth_scheme=artifact-registry|grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、Kinesis Video Signaling、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|kinesisvideo-signaling-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，RocketMQ 4.x HTTP 数据面使用 `mq`，ACR 企业版 Registry 使用 `acr-registry`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；CLS 旧版数据面使用独立的 `cls` q-sign 入口；TCR 企业版 Registry 使用 `tcr-registry`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；CCR 企业版/个人版 Registry 使用 `auth_scheme=ccr-registry`；IoT Core HTTPS 发布与 MQTT 3.1.1 WSS 分别使用 `iotcore-http-pub|iotcore-mqtt-ws`，server 内部从 IAM AK/SK 派生应用权限凭证，并把 HTTP 短期 token 或 MQTT CONNECT 凭证留在内部；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 
 Tencent CLS 当前管理面与新增功能优先走 API 3.0 `tc3`。仍公开的旧版 CLS 数据面签名必须显式使用 `auth_scheme=cls`，server 只接受精确的 `<region>.cls.tencentcs.com` 公网域名或 `<region>.cls.tencentyun.com` 同地域内网域名，按官网 `q-sign-algorithm=sha1` 规则签名，并在 CAM 临时凭证场景把 token 仅放入内部 `X-Cls-Token`。例如读取旧版 logset：
 
@@ -452,6 +452,12 @@ Baidu IoT Core 的 IAM 应用权限 MQTT 3.1.1 数据面使用 `auth_scheme=iotc
 {"name":"baiducloud_api_read","arguments":{"auth_scheme":"iotcore-mqtt-ws","service":"iotcore","operation":"SubscribeMQTT","method":"GET","url":"wss://<iot-core-id>.iot.gz.baidubce.com/mqtt","body":{"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/+/temperature","qos":1}],"max_messages":1,"timeout_seconds":60},"response_file":"/approved/results/baidu-iotcore.ndjson"}}
 ```
 
+同一 IAM 应用权限也支持官网 HTTP Publish。`auth_scheme=iotcore-http-pub` 只接受精确的 `POST https://<iot-core-id>.iot.gz.baidubce.com/pub`；server 内部调用固定 `/auth` 获得 60 秒 token，再以 `token` header 调 `/pub?topic=...&qos=0|1`。调用方只能提交 topic、QoS 与 Base64 或受控 `body_file` payload。默认 32 KiB、获批实例最多 128 KiB，并按官网 50 QPS/IP 节流；短期 token、派生 username/password、AK/SK 都不会进入 MCP、审计或错误。发布必须走 mutation gate：
+
+```json
+{"name":"baiducloud_api_mutate","arguments":{"auth_scheme":"iotcore-http-pub","service":"iotcore","operation":"PublishHTTP","method":"POST","url":"https://<iot-core-id>.iot.gz.baidubce.com/pub","body":{"topic":"commands/device-1","qos":1,"payload_base64":"dHVybi1vbg=="},"force":true}}
+```
+
 真实 read-only gate 需要 operator 先把同一 BCE IAM AK/SK 绑定为该实例的应用权限，并在订阅启动后向匹配 topic 投递一条消息：
 
 ```bash
@@ -463,6 +469,18 @@ go test ./internal/mcp/cloud -run TestLiveBaiduIoTCoreMQTTReadOnly -v
 ```
 
 该 gate 原子读取一条 NDJSON 消息、检查成功审计事件和凭证不泄露；尚未注入 operator 凭证与消息时，不能把 hermetic 官方签名向量当作真实云端通过。
+
+HTTP Publish 的真实 mutation gate 使用同一 IAM 应用权限；清空 BCE session-token 变量并选择一次性 topic/payload：
+
+```bash
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB=1 \
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_ENDPOINT=https://<iot-core-id>.iot.gz.baidubce.com/pub \
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_TOPIC='commands/test' \
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_PAYLOAD_BASE64='Y2xvdWQtc2tpbGxzLWxpdmU=' \
+go test ./internal/mcp/cloud -run TestLiveBaiduIoTCoreHTTPPubMutation -v
+```
+
+该测试仅在显式 opt-in 时启用 mutation gate，校验官网 `{"message":"ok"}` 和成功审计事件，不打印 payload 或凭证。
 
 Baidu RTC AI Agent 文本、音频、图片与 Function Call 双工会话必须走 mutation gate。`app_id`、非敏感 `config`、device/user 标识、终止条件和 `audio_codec` 放在 body。`messages`/`final_messages` 分别在音频前/后发送，合计最多 64 条，并严格解析官网的打断、文本、直接 TTS、自动打断、设备/GIS、云音乐、ASR 模式、system prompt、动态变量、三方透传、角色、增强 Query、MCP Tools 变更、直接音乐和会议纪要静态指令；未声明的 server event、license 激活、原始图片帧与调用方自造的 `[F]:` 结果不能伪装成普通字符串。需要图片时把单个非空文件放在 `image_file`，可在 body 设 `image_mode="image_generate"`；server 只在收到精确的 `[E]:[UPLOAD_IMAGE]` 后按官网 16 KiB 分片协议上传一次，并保证图片帧不会与并发音频帧交错。配置了图片但会话未请求、未配置图片却收到请求、或重复请求都会 fail closed。Function Call 通过 body `function_results` 按 `function_name` 预声明最多 32 个无凭证 `ok|error` 结果模板，并用 `max_function_calls` 限制本次调用数；server 严格解析 provider 的嵌套 JSON，只复用其 `session_id` 生成响应，未知函数、重复 session、旧 `[F]:[C]:` 格式和带凭证参数均 fail closed。模板可含 `message` 或官网 `post_function` 的 `text|prompt|play_music` 组合，但类型必须唯一，且 `text` 与 `prompt` 不可并存。`audio_codec` 支持官网列出的 `raw|raw16k|pcma|pcmu|g722|opus`，server 会把同值写入控制面 `config.audiocodec` 与内部 WSS `ac`。固定码率文件按 `stream_interval_ms=20..200`（默认 20）分包，`stream_chunk_bytes` 必须与编码/时长严格相符；Opus 使用 `opus_packet_time_ms=20|40|60` 和覆盖整个文件的 `opus_packet_lengths`，server 内部生成 `ptime`/`plen`。WSS 结果以 text/Base64-binary NDJSON 原子发布，创建后的任何失败都会尝试签名 stop：
 

@@ -104,6 +104,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 		}
 	case ProviderBaidu:
 		scheme := normalizedAuthScheme(request.AuthScheme, "")
+		if scheme == authSchemeBaiduIoTCoreHTTPPub {
+			return false
+		}
 		if scheme == authSchemeBaiduIoTCoreMQTTWS {
 			return strings.EqualFold(strings.TrimSpace(request.Operation), "SubscribeMQTT")
 		}
@@ -244,6 +247,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureEventHubsAMQPScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureEventHubsAMQPWS
 	azureACRScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureACR
 	baiduCCRScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduCCR
+	baiduIoTCoreHTTPPubScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduIoTCoreHTTPPub
 	baiduIoTCoreMQTTWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduIoTCoreMQTTWS
 	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
@@ -404,6 +408,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateBaiduCCRInvocation(request, allowedEndpointHosts); err != nil {
 			return err
 		}
+	} else if baiduIoTCoreHTTPPubScheme {
+		if err := validateBaiduIoTCoreHTTPPubInvocation(request); err != nil {
+			return err
+		}
 	} else if baiduIoTCoreMQTTWebSocketScheme {
 		if err := validateBaiduIoTCoreMQTTInvocation(request); err != nil {
 			return err
@@ -427,8 +435,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Google Cloud auth_scheme must be artifact-registry, firebase-sse, grpc, vertex-live-ws, or omitted for REST")
 		}
 	case ProviderBaidu:
-		if baiduScheme != "" && baiduScheme != authSchemeBaiduCCR && baiduScheme != authSchemeBaiduIoTCoreMQTTWS && baiduScheme != authSchemeBaiduRTCAgentWS {
-			return fmt.Errorf("Baidu auth_scheme must be ccr-registry, iotcore-mqtt-ws, rtc-aiagent-ws, or omitted for BCE signed REST")
+		if baiduScheme != "" && baiduScheme != authSchemeBaiduCCR && baiduScheme != authSchemeBaiduIoTCoreHTTPPub && baiduScheme != authSchemeBaiduIoTCoreMQTTWS && baiduScheme != authSchemeBaiduRTCAgentWS {
+			return fmt.Errorf("Baidu auth_scheme must be ccr-registry, iotcore-http-pub, iotcore-mqtt-ws, rtc-aiagent-ws, or omitted for BCE signed REST")
 		}
 	case ProviderAWS:
 		if !identifierPattern.MatchString(request.Service) {
@@ -772,7 +780,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
-	if request.Body != nil && request.BodyFile != "" && !awsConnectHealthWebSocketScheme && !awsWebSocketScheme && !alibabaNLSWebSocketScheme && !baiduRTCAgentWebSocketScheme {
+	if request.Body != nil && request.BodyFile != "" && !awsConnectHealthWebSocketScheme && !awsWebSocketScheme && !alibabaNLSWebSocketScheme && !baiduIoTCoreHTTPPubScheme && !baiduRTCAgentWebSocketScheme {
 		return fmt.Errorf("body and body_file are mutually exclusive")
 	}
 	if request.BodyFile != "" {

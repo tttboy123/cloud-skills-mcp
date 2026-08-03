@@ -98,7 +98,7 @@ func TestBCEEnvironmentCredentialAndStatus(t *testing.T) {
 	}
 	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{})
 	status, err := adapter.Status(t.Context())
-	if err != nil || !status.Available || status.Version != bceAuthVersionV1+"+"+bceAuthVersionV2+"+ccr-registry+iotcore-mqtt-ws" || status.CredentialStatus != "local-material-present" {
+	if err != nil || !status.Available || status.Version != bceAuthVersionV1+"+"+bceAuthVersionV2+"+ccr-registry+iotcore-http-pub+iotcore-mqtt-ws" || status.CredentialStatus != "local-material-present" {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	t.Setenv("BCE_ACCESS_KEY_ID", "")

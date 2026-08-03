@@ -252,10 +252,10 @@ func validateBaiduIoTCoreMQTTTopic(topic string, filter bool) error {
 
 func deriveBaiduIoTCoreIAMMQTTCredential(iotCoreID string, credentials BCECredentials, timestamp time.Time) (string, string, error) {
 	if !baiduIoTCoreIDPattern.MatchString(iotCoreID) || credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
-		return "", "", fmt.Errorf("Baidu IoT Core MQTT requires a valid instance and complete BCE IAM AK/SK")
+		return "", "", fmt.Errorf("Baidu IoT Core application permission requires a valid instance and complete BCE IAM AK/SK")
 	}
 	if credentials.SessionToken != "" {
-		return "", "", fmt.Errorf("Baidu IoT Core MQTT application permission does not document a BCE session-token field")
+		return "", "", fmt.Errorf("Baidu IoT Core application permission does not document a BCE session-token field")
 	}
 	now := timestamp.UTC()
 	milliseconds := now.UnixMilli()

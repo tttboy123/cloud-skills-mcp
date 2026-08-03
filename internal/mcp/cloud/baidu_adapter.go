@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -62,7 +63,9 @@ type BaiduRESTConfig struct {
 }
 
 type BaiduRESTAdapter struct {
-	config BaiduRESTConfig
+	config             BaiduRESTConfig
+	iotHTTPPubMu       sync.Mutex
+	iotHTTPPubNextSlot time.Time
 }
 
 func NewBaiduRESTAdapter(config BaiduRESTConfig) *BaiduRESTAdapter {
@@ -100,14 +103,14 @@ func NewBaiduRESTAdapter(config BaiduRESTConfig) *BaiduRESTAdapter {
 }
 
 func (adapter *BaiduRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
-	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS + CCR Registry HTTPS + controlled RTC and IoT Core MQTT WSS", CredentialSource: credentialSource(ProviderBaidu)}
+	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS + CCR Registry HTTPS + controlled IoT Core HTTP/MQTT and RTC WSS", CredentialSource: credentialSource(ProviderBaidu)}
 	if _, err := adapter.config.Credentials.Credentials(ctx); err != nil {
 		status.CredentialStatus = CredentialStatusMissingLocalMaterial
 		status.Message = err.Error()
 		return status, nil
 	}
 	status.Available = true
-	status.Version = bceAuthVersionV1 + "+" + bceAuthVersionV2 + "+ccr-registry+iotcore-mqtt-ws"
+	status.Version = bceAuthVersionV1 + "+" + bceAuthVersionV2 + "+ccr-registry+iotcore-http-pub+iotcore-mqtt-ws"
 	status.CredentialStatus = CredentialStatusLocalMaterialPresent
 	status.Message = "local BCE credential material is present; validity remains unverified until a provider API call succeeds"
 	return status, nil
@@ -137,6 +140,7 @@ func (adapter *BaiduRESTAdapter) Discover(_ context.Context, request DiscoveryRe
 		result["application_permissions"] = "https://cloud.baidu.com/doc/IoTCore/s/Gkfeuwrpr"
 		result["connection"] = "https://cloud.baidu.com/doc/IoTCore/s/hk7omsfcl"
 		result["mqtt_compatibility"] = "https://cloud.baidu.com/doc/IoTCore/s/ikahmphms"
+		result["http_publish"] = "https://cloud.baidu.com/doc/IoTCore/s/okck4e7k4"
 	}
 	return json.Marshal(result)
 }
@@ -149,6 +153,9 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 	if scheme == authSchemeBaiduIoTCoreMQTTWS {
 		return invokeBaiduIoTCoreMQTT(ctx, adapter, invocation)
 	}
+	if scheme == authSchemeBaiduIoTCoreHTTPPub {
+		return invokeBaiduIoTCoreHTTPPub(ctx, adapter, invocation)
+	}
 	if scheme == authSchemeBaiduRTCAgentWS {
 		if err := validateBaiduRTCAgentWebSocketInvocation(invocation); err != nil {
 			return InvocationResult{}, err
@@ -160,7 +167,7 @@ func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocati
 		return invokeBaiduRTCAgentWebSocket(ctx, adapter, credentials, invocation)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Baidu auth_scheme must be ccr-registry, iotcore-mqtt-ws, rtc-aiagent-ws, or omitted for BCE signed REST")
+		return InvocationResult{}, fmt.Errorf("Baidu auth_scheme must be ccr-registry, iotcore-http-pub, iotcore-mqtt-ws, rtc-aiagent-ws, or omitted for BCE signed REST")
 	}
 	if err := validateRESTTargetWithEndpointHosts(ProviderBaidu, invocation.Method, invocation.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err

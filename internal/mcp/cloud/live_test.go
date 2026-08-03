@@ -347,6 +347,75 @@ func TestLiveBaiduIoTCoreMQTTReadOnly(t *testing.T) {
 	t.Logf("provider=baiducloud service=iotcore operation=SubscribeMQTT outcome=succeeded response_bytes=%d request_id=%q", len(data), succeeded.RequestID)
 }
 
+func TestLiveBaiduIoTCoreHTTPPubMutation(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB=1 for a real IAM application-permission HTTPS publish")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Baidu IoT Core HTTP publish live validation", name)
+		}
+		return value
+	}
+	if strings.TrimSpace(os.Getenv("BCE_SESSION_TOKEN")) != "" || strings.TrimSpace(os.Getenv("BCE_SECURITY_TOKEN")) != "" {
+		t.Fatal("Baidu IoT Core application permission documents IAM AK/SK only; clear BCE session-token variables for this live gate")
+	}
+	endpoint := required("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_ENDPOINT")
+	topic := required("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_TOPIC")
+	payloadBase64 := required("CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_PAYLOAD_BASE64")
+	invocation := Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: authSchemeBaiduIoTCoreHTTPPub,
+		Service: "iotcore", Operation: "PublishHTTP", Method: http.MethodPost, URL: endpoint,
+		Body: map[string]any{"topic": topic, "qos": 1, "payload_base64": payloadBase64},
+	}
+	if err := validateBaiduIoTCoreHTTPPubInvocation(invocation); err != nil {
+		t.Fatalf("Baidu IoT Core HTTP publish live endpoint or payload plan is invalid: %v", err)
+	}
+	runtime := DefaultRuntime()
+	runtime.AllowMutations = true
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "baiducloud_api_mutate", map[string]any{
+		"auth_scheme": "iotcore-http-pub", "service": "iotcore", "operation": "PublishHTTP",
+		"method": "POST", "url": endpoint,
+		"body":  map[string]any{"topic": topic, "qos": 1, "payload_base64": payloadBase64},
+		"force": true,
+	})
+	if result.IsError {
+		t.Fatalf("Baidu IoT Core HTTP live publish failed: %s", cloudToolText(t, result))
+	}
+	resultText := cloudToolText(t, result)
+	if !strings.Contains(resultText, `"message"`) || !strings.Contains(strings.ToLower(resultText), "ok") {
+		t.Fatalf("Baidu IoT Core HTTP publish did not return the documented success response: %s", resultText)
+	}
+	for _, secret := range []string{os.Getenv("BCE_ACCESS_KEY_ID"), os.Getenv("BCE_SECRET_ACCESS_KEY"), "bceiam@"} {
+		if secret != "" && strings.Contains(resultText, secret) {
+			t.Fatal("Baidu IoT Core HTTP live result leaked IAM credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderBaidu && events[index].Mode == ModeMutate && events[index].Operation == "PublishHTTP" && events[index].AuthScheme == authSchemeBaiduIoTCoreHTTPPub && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Baidu IoT Core HTTP publish audit event: %#v", events)
+	}
+	t.Logf("provider=baiducloud service=iotcore operation=PublishHTTP outcome=succeeded response_bytes=%d request_id=%q", len(resultText), succeeded.RequestID)
+}
+
 func TestLiveAlibabaMQMutation(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_ALIBABA_MQ") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_ALIBABA_MQ=1 for an explicitly approved RocketMQ 4.x HTTP consume probe")

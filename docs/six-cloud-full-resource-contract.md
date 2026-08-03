@@ -49,7 +49,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, ACR Enterprise Docker/OCI Registry HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles, ACR temporary login/Bearer tokens, and the derived NLS token remain internal |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS/CLS signed HTTPS, TCR Enterprise Docker/OCI Registry HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; TCR temporary Registry credentials remain internal, realtime ASR signs its documented temporary token, and WSS protocols without a Token field require the long-lived tuple |
-| Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints, CCR Enterprise/Personal Docker/OCI Registry HTTPS, plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token; CCR temporary login/Bearer credentials and RTC instance token remain internal; RTC product license is server-only entitlement material |
+| Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints, CCR Enterprise/Personal Docker/OCI Registry HTTPS, IAM application-permission IoT Core HTTP Publish and MQTT WSS, plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token for generic BCE/CCR; IoT Core application permission uses IAM AK/SK only; derived IoT HTTP/MQTT credentials, CCR login/Bearer credentials and RTC instance token remain internal; RTC product license is server-only entitlement material |
 
 The MCP server never returns, logs or writes credential material. Login,
 credential creation, credential export and access-token printing are not cloud
@@ -301,6 +301,16 @@ remain available through the guarded resource gateway.
   The documented IAM application format has no STS session-token field, so
   that credential shape is rejected. `TestLiveBaiduIoTCoreMQTTReadOnly` is the
   opt-in real broker gate and requires a message staged after subscription.
+- Baidu IoT Core HTTP Publish uses mutation-only
+  `auth_scheme=iotcore-http-pub` on the exact single-instance HTTPS `/pub`
+  endpoint. The caller provides only topic, QoS 0/1, and one bounded Base64 or
+  approved-root file payload. The server derives the same IAM application
+  credential, exchanges it at fixed same-origin `/auth` for a 60-second token,
+  and uses that token only on the internal `/pub` request. It enforces the
+  documented topic and 32/128 KiB payload bounds, 50 QPS/IP rate, success
+  response, mutation approval, and secret-free output. Session credentials and
+  caller tokens fail closed. `TestLiveBaiduIoTCoreHTTPPubMutation` is the
+  explicit opt-in real publish gate.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an
@@ -354,6 +364,10 @@ remain available through the guarded resource gateway.
 - Baidu IoT Core MQTT uses the separate `iotcore-mqtt-ws` application-permission
   signature and exact WSS transport; it does not expose a generic MQTT tunnel,
   raw signed URL, caller-provided password, or arbitrary broker host.
+- Baidu IoT Core HTTP Publish uses the same application-permission derivation
+  behind `iotcore-http-pub`, but keeps the fixed `/auth` token exchange and
+  `/pub` request entirely server-side; it does not expose a token or generic
+  caller-selected HTTP sequence.
 - Baidu RTC AI Agent uses `auth_scheme=rtc-aiagent-ws`: the MCP body is a
   credential-free bounded plan, the adapter signs fixed BCE v1 create and stop
   requests, keeps the returned instance token inside the exact WSS URL, and

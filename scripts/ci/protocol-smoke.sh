@@ -12,7 +12,8 @@ BINARY=$1
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
 
 RESPONSES=$(mktemp)
-trap 'rm -f "${RESPONSES}"' EXIT
+MUTATION_RESPONSES=$(mktemp)
+trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}"' EXIT
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"1"}}}'
@@ -109,5 +110,14 @@ jq -e -s '
     ($responses | map(select(.id == 31))[0].result.isError == true) and
     ($responses | map(select(.id == 31))[0].result.content[0].text | contains("exact single-instance official endpoint"))
 ' "${RESPONSES}" >/dev/null
+
+printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"baiducloud_api_mutate","arguments":{"auth_scheme":"iotcore-http-pub","service":"iotcore","operation":"PublishHTTP","method":"POST","url":"https://aop098js.iot.gz.baidubce.com.attacker.example/pub","body":{"topic":"commands/device-1","qos":1,"payload_base64":"dHVybi1vbg=="},"force":true}}}' |
+  env -i HOME=/nonexistent PATH=/usr/bin:/bin CLOUD_SKILLS_ALLOW_MUTATIONS=1 "${BINARY}" > "${MUTATION_RESPONSES}"
+
+jq -e '
+  .id == 32 and
+  .result.isError == true and
+  (.result.content[0].text | contains("exact single-instance official endpoint"))
+' "${MUTATION_RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

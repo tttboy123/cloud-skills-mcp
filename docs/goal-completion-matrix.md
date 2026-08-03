@@ -375,6 +375,20 @@ protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
 govulncheck, four-platform archives, and a ten-second endpoint/plan fuzz run
 (68,953 executions) also passed.
 
+Baidu IoT Core HTTP Publish now has a separate mutation-only
+`auth_scheme=iotcore-http-pub` direct-HTTPS path. It validates the exact
+single-instance `/pub` endpoint and credential-free topic/QoS/payload plan
+before resolving IAM AK/SK; reuses the official application-permission
+signature vector; performs fixed same-origin `/auth` and `/pub` requests; and
+keeps the 60-second token plus derived username/password internal. The 32 KiB
+default and explicit 128 KiB approved-instance payload bounds, topic rules,
+50 QPS/IP pacing, strict success response, body-file policy, mutation gate,
+protocol smoke, and credential/error containment are covered hermetically.
+Real cloud acceptance remains pending the explicit
+`TestLiveBaiduIoTCoreHTTPPubMutation` gate with an operator-bound IAM
+application and disposable topic; no live success is inferred from hermetic
+HTTP or signature tests.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
@@ -496,6 +510,22 @@ go test ./internal/mcp/cloud -run TestLiveBaiduIoTCoreMQTTReadOnly -v
 
 This gate is read-only, atomically records one received message, and checks a
 sanitized succeeded audit event. It does not print the message or credentials.
+
+For Baidu IoT Core HTTP Publish, bind the same long-lived BCE IAM AK/SK as an
+application permission, clear BCE session-token variables, choose a disposable
+topic, and explicitly approve the mutation:
+
+```bash
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB=1 \
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_ENDPOINT=https://<iot-core-id>.iot.gz.baidubce.com/pub \
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_TOPIC='commands/test' \
+CLOUD_SKILLS_LIVE_BAIDU_IOTCORE_HTTP_PUB_PAYLOAD_BASE64='Y2xvdWQtc2tpbGxzLWxpdmU=' \
+go test ./internal/mcp/cloud -run TestLiveBaiduIoTCoreHTTPPubMutation -v
+```
+
+The test enables mutation approval only inside its runtime, validates the
+documented `{"message":"ok"}` response and succeeded audit event, and does not
+print payload or credentials.
 
 For private ECR Registry HTTP, provide the exact registry origin and an
 existing pullable repository. The test resolves the region from the endpoint,

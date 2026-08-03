@@ -114,12 +114,12 @@ func TestBaiduDiscoveryMapsRTCAgentLifecycleDocuments(t *testing.T) {
 	}
 }
 
-func TestBaiduDiscoveryMapsIoTCoreMQTTDocuments(t *testing.T) {
+func TestBaiduDiscoveryMapsIoTCoreHTTPAndMQTTDocuments(t *testing.T) {
 	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
 		Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "unused", SecretAccessKey: "unused"}},
 	})
 	output, err := adapter.Discover(t.Context(), DiscoveryRequest{Provider: ProviderBaidu, Service: "iotcore"})
-	if err != nil || !strings.Contains(string(output), "IoTCore/s/Gkfeuwrpr") || !strings.Contains(string(output), "IoTCore/s/hk7omsfcl") || !strings.Contains(string(output), "IoTCore/s/ikahmphms") {
+	if err != nil || !strings.Contains(string(output), "IoTCore/s/Gkfeuwrpr") || !strings.Contains(string(output), "IoTCore/s/okck4e7k4") || !strings.Contains(string(output), "IoTCore/s/hk7omsfcl") || !strings.Contains(string(output), "IoTCore/s/ikahmphms") {
 		t.Fatalf("output=%s err=%v", output, err)
 	}
 }

@@ -141,6 +141,17 @@ The official application-permission contract has no STS session-token field, so
 this scheme rejects one rather than dropping it. A dedicated live read gate
 remains pending operator IAM application binding and a staged topic message.
 
+Baidu IoT Core HTTP Publish is a separate mutation-only
+`auth_scheme=iotcore-http-pub` direct-HTTPS protocol. It accepts only exact
+single-instance `POST /pub` targets and a credential-free topic/QoS/payload
+plan. The server derives the same IAM application username/password, exchanges
+it at fixed same-origin `/auth` for a 60-second internal token, and publishes
+one raw payload through `/pub?topic=...&qos=0|1`. The default 32 KiB and
+explicit 128 KiB approved-instance bounds, topic rules, documented 50 QPS/IP
+limit, success response, mutation gate, and credential containment are
+enforced. A dedicated opt-in mutation live gate remains pending operator IAM
+application binding and a disposable topic.
+
 Credential minting/export and caller-supplied signed URLs, SAS, bearer tokens,
 API keys, or Authorization headers remain intentionally outside the public MCP
 surface. The only credential entrypoints are operator-controlled AKSK,
