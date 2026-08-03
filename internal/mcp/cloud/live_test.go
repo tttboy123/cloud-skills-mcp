@@ -322,6 +322,59 @@ func TestLiveTencentCLSReadOnly(t *testing.T) {
 	t.Logf("provider=tencent operation=GetLogset outcome=succeeded response_bytes=%d request_id=%q", len(text), succeeded.RequestID)
 }
 
+func TestLiveAzureACRReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AZURE_ACR") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AZURE_ACR=1 for a real ACR scoped-token read probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Azure ACR live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_AZURE_ACR_ENDPOINT"), "/")
+	repository := required("CLOUD_SKILLS_LIVE_AZURE_ACR_REPOSITORY")
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "azure_api_read", map[string]any{
+		"auth_scheme": "acr", "service": "acr", "operation": "ListTags",
+		"method": "GET", "url": endpoint + "/v2/" + repository + "/tags/list",
+		"parameters": map[string]any{"n": 1}, "acr_scope": "repository:" + repository + ":pull",
+	})
+	if result.IsError {
+		t.Fatalf("Azure ACR live read failed: %s", cloudToolText(t, result))
+	}
+	text := strings.TrimSpace(cloudToolText(t, result))
+	if text == "" {
+		t.Fatal("Azure ACR returned an empty response")
+	}
+	if secret := os.Getenv("AZURE_CLIENT_SECRET"); secret != "" && strings.Contains(text, secret) {
+		t.Fatal("Azure ACR live result leaked operator credential material")
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAzure && events[index].Mode == ModeRead && events[index].Operation == "ListTags" && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil || succeeded.ACRScope != "repository:"+repository+":pull" {
+		t.Fatalf("no succeeded Azure ACR read audit event: %#v", events)
+	}
+	t.Logf("provider=azure operation=ListTags scope=%s outcome=succeeded response_bytes=%d request_id=%q", succeeded.ACRScope, len(text), succeeded.RequestID)
+}
+
 func parseLiveProviderStatus(text string) (ProviderStatus, error) {
 	var status ProviderStatus
 	if err := json.Unmarshal([]byte(text), &status); err != nil {
