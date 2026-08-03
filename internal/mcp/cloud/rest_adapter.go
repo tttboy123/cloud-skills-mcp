@@ -26,13 +26,14 @@ import (
 const defaultRESTBodyLimit = 2 * 1024 * 1024
 
 type AzureRESTConfig struct {
-	Timeout       time.Duration
-	Tokens        AzureTokenProvider
-	HTTP          HTTPDoer
-	WebSocketDial azureRealtimeWebSocketDial
-	StreamPause   func(context.Context, time.Duration) error
-	MaxBodyBytes  int64
-	AllowedHosts  []string
+	Timeout                time.Duration
+	Tokens                 AzureTokenProvider
+	HTTP                   HTTPDoer
+	WebSocketDial          azureRealtimeWebSocketDial
+	WebPubSubWebSocketDial azureWebPubSubWebSocketDial
+	StreamPause            func(context.Context, time.Duration) error
+	MaxBodyBytes           int64
+	AllowedHosts           []string
 }
 
 type AzureRESTAdapter struct {
@@ -55,6 +56,9 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	if config.WebSocketDial == nil {
 		config.WebSocketDial = defaultAzureRealtimeWebSocketDial
 	}
+	if config.WebPubSubWebSocketDial == nil {
+		config.WebPubSubWebSocketDial = defaultAzureWebPubSubWebSocketDial
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -67,7 +71,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-ws",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -79,6 +83,7 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"rest_api_reference": "https://learn.microsoft.com/en-us/rest/api/azure/",
 		"authentication":     "https://learn.microsoft.com/en-us/azure/developer/go/sdk/authentication/credential-chains",
 		"openai_realtime":    "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
+		"webpubsub_protocol": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
 	})
 }
 
@@ -87,8 +92,11 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureRealtimeWS {
 		return invokeAzureRealtimeWebSocket(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureWebPubSubWS {
+		return invokeAzureWebPubSub(ctx, adapter, request)
+	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {

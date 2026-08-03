@@ -37,6 +37,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 	}
 	switch provider {
 	case ProviderAzure:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureWebPubSubWS {
+			return false
+		}
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureRealtimeWS {
 			switch strings.ToLower(strings.TrimSpace(request.Operation)) {
 			case "realtimeresponse", "realtimetranscription", "realtimesession":
@@ -172,6 +175,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	gcpVertexLiveWebSocketScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPVertexLiveWS
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
+	azureWebPubSubScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
 	if awsConnectHealthWebSocketScheme {
@@ -261,6 +265,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateAzureRealtimeWebSocketInvocation(request); err != nil {
 			return err
 		}
+	} else if azureWebPubSubScheme {
+		if err := validateAzureWebPubSubInvocation(request); err != nil {
+			return err
+		}
 	} else {
 		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
@@ -268,8 +276,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	switch request.Provider {
 	case ProviderAzure:
-		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS {
-			return fmt.Errorf("Azure auth_scheme must be realtime-ws or omitted for REST")
+		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureWebPubSubWS {
+			return fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, or omitted for REST")
 		}
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
@@ -505,7 +513,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || awsEventStreamScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || gcpVertexLiveWebSocketScheme || azureRealtimeScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || awsEventStreamScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || gcpVertexLiveWebSocketScheme || azureRealtimeScheme || azureWebPubSubScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}

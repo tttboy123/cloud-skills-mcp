@@ -18,7 +18,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
-| Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
+| Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS + Web PubSub JSON WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` REST / gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
@@ -196,6 +196,14 @@ Azure OpenAI Realtime 使用 `auth_scheme=realtime-ws`，server 通过非 CLI Az
 {"name":"azure_api_read","arguments":{"auth_scheme":"realtime-ws","service":"openai","operation":"RealtimeResponse","method":"GET","url":"wss://<resource>.openai.azure.com/openai/v1/realtime","parameters":{"model":"<deployment>"},"body":[{"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please assist the user."}]}},{"type":"response.create"}],"response_file":"/approved/results/realtime.ndjson"}}
 ```
 
+Azure Web PubSub 使用 `auth_scheme=webpubsub-ws`。server 先用 Entra scope `https://webpubsub.azure.com/.default` 调固定 `:generateToken` 数据面 API，再把五分钟 client token 仅放进内部 WSS Authorization header，并强制协商 `json.webpubsub.azure.v1`。join/leave、group publish、event、ping 以及 ack/message/system/stream 响应均有消息数和时间边界；所有会话固定走 mutation gate：
+
+```json
+{"name":"azure_api_mutate","arguments":{"auth_scheme":"webpubsub-ws","service":"webpubsub","operation":"ClientConnect","method":"GET","url":"wss://<resource>.webpubsub.azure.com/client/hubs/<hub>","body":{"roles":["webpubsub.joinLeaveGroup.<group>"],"groups":["<group>"],"messages":[{"type":"joinGroup","group":"<group>","ackId":1}],"max_messages":32,"timeout_seconds":30},"response_file":"/approved/results/webpubsub.ndjson","force":true}}
+```
+
+Entra token、临时 client token 和 token API 响应都不会进入 MCP 结果或审计；caller 不能提供 access token、Authorization、query、非官方 host/path 或无界会话。
+
 GCP 查询：
 
 ```json
@@ -234,7 +242,7 @@ Alibaba Intelligent Speech Interaction 使用 `auth_scheme=nls-ws`。调用方�
 
 同一内部 Token 也用于 `auth_scheme=nls-rest`：`ShortSentenceRecognition` 把有限音频作为 `body_file` POST 到官方 `/stream/v1/asr`；`SpeechSynthesisREST` 用 GET/query 或 POST/JSON 调用 `/stream/v1/tts` 并把音频原子写入 `response_file`。Token 只注入 `X-NLS-Token` header，不进入 URL 或 MCP 输出。
 
-Azure OpenAI Realtime 使用 `auth_scheme=realtime-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+Azure OpenAI Realtime 与 Web PubSub JSON WSS 分别使用 `auth_scheme=realtime-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 
 Tencent ASR WebSocket 有限音频流示例：
 
