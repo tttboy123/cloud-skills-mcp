@@ -167,6 +167,37 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 			}
 		},
 		"invalid image mode": func(value *Invocation) { value.Body.(map[string]any)["image_mode"] = "caller-defined" },
+		"invalid function result": func(value *Invocation) {
+			value.Body.(map[string]any)["function_results"] = map[string]any{"adjust_volume": map[string]any{"result": "maybe"}}
+			value.Body.(map[string]any)["max_function_calls"] = 1
+		},
+		"caller function session": func(value *Invocation) {
+			value.Body.(map[string]any)["function_results"] = map[string]any{"adjust_volume": map[string]any{"session_id": "caller", "result": "ok"}}
+			value.Body.(map[string]any)["max_function_calls"] = 1
+		},
+		"duplicate post function type": func(value *Invocation) {
+			value.Body.(map[string]any)["function_results"] = map[string]any{"birthday": map[string]any{
+				"result": "ok", "post_function": []any{
+					map[string]any{"type": "text", "content": "first"},
+					map[string]any{"type": "text", "content": "second"},
+				},
+			}}
+			value.Body.(map[string]any)["max_function_calls"] = 1
+		},
+		"text and prompt post functions": func(value *Invocation) {
+			value.Body.(map[string]any)["function_results"] = map[string]any{"birthday": map[string]any{
+				"result": "ok", "post_function": []any{
+					map[string]any{"type": "text", "content": "fixed"},
+					map[string]any{"type": "prompt", "query": "generate"},
+				},
+			}}
+			value.Body.(map[string]any)["max_function_calls"] = 1
+		},
+		"function result credential material": func(value *Invocation) {
+			value.Body.(map[string]any)["function_results"] = map[string]any{"fetch": map[string]any{"result": "ok", "message": "Authorization: Bearer caller-secret"}}
+			value.Body.(map[string]any)["max_function_calls"] = 1
+		},
+		"function calls without results": func(value *Invocation) { value.Body.(map[string]any)["max_function_calls"] = 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid()
@@ -175,6 +206,130 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 				t.Fatal("unsafe Baidu RTC AI Agent invocation accepted")
 			}
 		})
+	}
+}
+
+func TestBaiduRTCFunctionCallResponseCorrelatesProviderSession(t *testing.T) {
+	plan, err := parseBaiduRTCAgentPlan(map[string]any{
+		"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:volume up"},
+		"function_results": map[string]any{
+			"adjust_volume": map[string]any{
+				"result": "ok", "post_function": []any{
+					map[string]any{"type": "text", "content": "volume adjusted"},
+					map[string]any{"type": "play_music", "query": "play a confirmation sound", "enableMusicPadTts": false},
+				},
+			},
+		},
+		"max_function_calls": 2, "max_messages": 4, "timeout_seconds": 30, "terminal_event": "tts_end",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{}
+	state := newBaiduRTCFunctionCallState(plan)
+	event := `[F]:{"session_id":"1754555833139","content":"{\"function_name\":\"adjust_volume\",\"parameter_list\":[{\"mode\":\"up\"}]}"}`
+	if err := respondBaiduRTCFunctionCall(t.Context(), connection, event, plan, state); err != nil {
+		t.Fatal(err)
+	}
+	if len(connection.writes) != 1 || connection.writes[0].messageType != cloudWebSocketMessageText || !strings.HasPrefix(string(connection.writes[0].data), "[F]:") {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+	var response struct {
+		SessionID    string                       `json:"session_id"`
+		Result       string                       `json:"result"`
+		PostFunction []baiduRTCPostFunctionResult `json:"post_function"`
+	}
+	if json.Unmarshal(bytes.TrimPrefix(connection.writes[0].data, []byte("[F]:")), &response) != nil || response.SessionID != "1754555833139" || response.Result != "ok" || len(response.PostFunction) != 2 {
+		t.Fatalf("response=%s", connection.writes[0].data)
+	}
+	if response.PostFunction[1].EnableMusicPadTTS == nil || *response.PostFunction[1].EnableMusicPadTTS {
+		t.Fatalf("explicit false enableMusicPadTts was not preserved: %s", connection.writes[0].data)
+	}
+	if bytes.Contains(connection.writes[0].data, []byte("function_name")) || bytes.Contains(connection.writes[0].data, []byte("parameter_list")) {
+		t.Fatalf("provider call payload reflected into response: %s", connection.writes[0].data)
+	}
+}
+
+func TestBaiduRTCFunctionCallResponseRejectsUnsafeOrUncorrelatedEvents(t *testing.T) {
+	plan, err := parseBaiduRTCAgentPlan(map[string]any{
+		"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:run"},
+		"function_results":   map[string]any{"safe_function": map[string]any{"result": "error", "message": "not available"}},
+		"max_function_calls": 1, "max_messages": 4, "timeout_seconds": 30, "terminal_event": "tts_end",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := `[F]:{"session_id":"session-1","content":"{\"function_name\":\"safe_function\",\"parameter_list\":[]}"}`
+	for _, test := range []struct {
+		name   string
+		events []string
+		want   string
+	}{
+		{name: "old prefix", events: []string{`[F]:[C]:{"fname":"safe_function"}`}, want: "invalid Function Call"},
+		{name: "caller response", events: []string{`[F]:{"session_id":"session-1","result":"ok"}`}, want: "invalid Function Call"},
+		{name: "unknown function", events: []string{`[F]:{"session_id":"session-1","content":"{\"function_name\":\"unknown\",\"parameter_list\":[]}"}`}, want: "no declared result"},
+		{name: "credential parameter", events: []string{`[F]:{"session_id":"session-1","content":"{\"function_name\":\"safe_function\",\"parameter_list\":[{\"access_token\":\"caller\"}]}"}`}, want: "credential"},
+		{name: "duplicate session", events: []string{valid, valid}, want: "duplicate session_id"},
+		{name: "call limit", events: []string{valid, `[F]:{"session_id":"session-2","content":"{\"function_name\":\"safe_function\",\"parameter_list\":[]}"}`}, want: "max_function_calls"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &fakeTencentWebSocketConnection{}
+			state := newBaiduRTCFunctionCallState(plan)
+			var got error
+			for _, event := range test.events {
+				got = respondBaiduRTCFunctionCall(t.Context(), connection, event, plan, state)
+				if got != nil {
+					break
+				}
+			}
+			if got == nil || !strings.Contains(got.Error(), test.want) {
+				t.Fatalf("err=%v writes=%#v", got, connection.writes)
+			}
+		})
+	}
+}
+
+func TestBaiduRTCFunctionCallRunsInsideSignedLifecycle(t *testing.T) {
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "rtc.ndjson")
+	controlCalls := 0
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		controlCalls++
+		if strings.Contains(request.URL.Path, "generateAIAgentCall") {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Bce-Request-Id": []string{"create-request"}}, Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":555,"context":{"token":"private-function-token"}}`))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})
+	functionEvent := `[F]:{"session_id":"call-1","content":"{\"function_name\":\"adjust_volume\",\"parameter_list\":[{\"mode\":\"up\"}]}"}`
+	connection := &fakeTencentWebSocketConnection{reads: [][]byte{
+		[]byte("[E]:[LIC]:[MUST]:activate"), []byte("[E]:[LIC]:[RES]:[PASS]:ok"),
+		[]byte(functionEvent), []byte("[E]:[TTS_END_SPEAKING]"),
+	}}
+	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+		Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "ak", SecretAccessKey: "secret-key"}},
+		HTTP:        doer, RTCLicenseKey: "license-key",
+		RTCWebSocketDial: func(context.Context, string) (cloudWebSocketConnection, error) { return connection, nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+		Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+		Method: http.MethodGet, URL: baiduRTCWebSocketTarget,
+		Body: map[string]any{
+			"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{},
+			"function_results":   map[string]any{"adjust_volume": map[string]any{"result": "ok", "message": "done"}},
+			"max_function_calls": 1, "max_messages": 2, "timeout_seconds": 2, "terminal_event": "tts_end",
+		},
+		ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+	})
+	if err != nil || controlCalls != 2 || result.RequestID != "create-request" || len(connection.writes) != 2 {
+		t.Fatalf("err=%v controls=%d result=%#v writes=%#v", err, controlCalls, result, connection.writes)
+	}
+	if got := string(connection.writes[1].data); got != `[F]:{"session_id":"call-1","result":"ok","message":"done"}` {
+		t.Fatalf("correlated response=%s", got)
+	}
+	written, err := os.ReadFile(responseFile)
+	if err != nil || !bytes.Contains(written, []byte(`\"session_id\":\"call-1\"`)) || !bytes.Contains(written, []byte("[E]:[TTS_END_SPEAKING]")) {
+		t.Fatalf("err=%v output=%s", err, written)
 	}
 }
 
@@ -302,6 +457,19 @@ func TestBaiduRTCAgentRejectsInvalidPlanBeforeResolvingCredentials(t *testing.T)
 	})
 	if err == nil || credentialCalls != 0 {
 		t.Fatalf("err=%v credential calls=%d", err, credentialCalls)
+	}
+	_, err = adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+		Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+		Method: http.MethodGet, URL: baiduRTCWebSocketTarget, ResponseFile: filepath.Join(t.TempDir(), "rtc.ndjson"),
+		Body: map[string]any{
+			"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:run"},
+			"function_results":   map[string]any{"unsafe": map[string]any{"result": "ok", "message": "Authorization: Bearer caller-secret"}},
+			"max_function_calls": 1, "max_messages": 2, "timeout_seconds": 2, "terminal_event": "tts_end",
+		},
+	})
+	if err == nil || credentialCalls != 0 {
+		t.Fatalf("unsafe Function Call plan reached credentials: err=%v calls=%d", err, credentialCalls)
 	}
 }
 

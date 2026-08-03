@@ -32,6 +32,7 @@ const (
 	baiduRTCMaxPacketMS       = 200
 	baiduRTCMaxPacketCount    = 4096
 	baiduRTCImageChunkBytes   = 16 * 1024
+	baiduRTCMaxFunctionPlans  = 32
 )
 
 var (
@@ -53,9 +54,29 @@ type baiduRTCAgentPlan struct {
 	Messages           []string
 	FinalMessages      []string
 	ImageMode          string
+	FunctionResults    map[string]baiduRTCFunctionResult
+	MaxFunctionCalls   int
 	MaxMessages        int
 	Timeout            time.Duration
 	TerminalEvent      string
+}
+
+type baiduRTCFunctionResult struct {
+	Result       string                       `json:"result"`
+	Message      string                       `json:"message,omitempty"`
+	PostFunction []baiduRTCPostFunctionResult `json:"post_function,omitempty"`
+}
+
+type baiduRTCPostFunctionResult struct {
+	Type              string `json:"type"`
+	Content           string `json:"content,omitempty"`
+	Query             string `json:"query,omitempty"`
+	EnableMusicPadTTS *bool  `json:"enableMusicPadTts,omitempty"`
+}
+
+type baiduRTCFunctionCallState struct {
+	seen  map[string]struct{}
+	calls int
 }
 
 type baiduRTCAudioPlan struct {
@@ -105,8 +126,8 @@ func validateBaiduRTCAgentWebSocketInvocation(invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	if len(plan.Messages) == 0 && len(plan.FinalMessages) == 0 && invocation.BodyFile == "" && invocation.ImageFile == "" {
-		return fmt.Errorf("Baidu RTC AI Agent requires at least one client command, body_file audio stream, or event-correlated image_file")
+	if len(plan.Messages) == 0 && len(plan.FinalMessages) == 0 && invocation.BodyFile == "" && invocation.ImageFile == "" && len(plan.FunctionResults) == 0 {
+		return fmt.Errorf("Baidu RTC AI Agent requires at least one client command, body_file audio stream, event-correlated image_file, or Function Call result plan")
 	}
 	if invocation.ImageFile != "" {
 		if err := validateBaiduRTCImageFile(invocation.ImageFile); err != nil {
@@ -205,21 +226,23 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent plan must be bounded JSON")
 	}
 	var raw struct {
-		AppID              string         `json:"app_id"`
-		InstanceType       string         `json:"instance_type"`
-		Config             map[string]any `json:"config"`
-		AudioCodec         string         `json:"audio_codec"`
-		OpusPacketTimeMS   int            `json:"opus_packet_time_ms"`
-		OpusPacketLengths  []int          `json:"opus_packet_lengths"`
-		OpusPacketMaxBytes int            `json:"opus_packet_max_bytes"`
-		DeviceID           string         `json:"device_id"`
-		UserID             string         `json:"user_id"`
-		Messages           []string       `json:"messages"`
-		FinalMessages      []string       `json:"final_messages"`
-		ImageMode          string         `json:"image_mode"`
-		MaxMessages        int            `json:"max_messages"`
-		Timeout            int            `json:"timeout_seconds"`
-		TerminalEvent      string         `json:"terminal_event"`
+		AppID              string                            `json:"app_id"`
+		InstanceType       string                            `json:"instance_type"`
+		Config             map[string]any                    `json:"config"`
+		AudioCodec         string                            `json:"audio_codec"`
+		OpusPacketTimeMS   int                               `json:"opus_packet_time_ms"`
+		OpusPacketLengths  []int                             `json:"opus_packet_lengths"`
+		OpusPacketMaxBytes int                               `json:"opus_packet_max_bytes"`
+		DeviceID           string                            `json:"device_id"`
+		UserID             string                            `json:"user_id"`
+		Messages           []string                          `json:"messages"`
+		FinalMessages      []string                          `json:"final_messages"`
+		ImageMode          string                            `json:"image_mode"`
+		FunctionResults    map[string]baiduRTCFunctionResult `json:"function_results"`
+		MaxFunctionCalls   int                               `json:"max_function_calls"`
+		MaxMessages        int                               `json:"max_messages"`
+		Timeout            int                               `json:"timeout_seconds"`
+		TerminalEvent      string                            `json:"terminal_event"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -284,6 +307,29 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 	if raw.ImageMode != "" && raw.ImageMode != "image_generate" {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent image_mode must be image_generate or omitted")
 	}
+	if len(raw.FunctionResults) > baiduRTCMaxFunctionPlans {
+		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent accepts at most %d Function Call result plans", baiduRTCMaxFunctionPlans)
+	}
+	if len(raw.FunctionResults) == 0 {
+		if raw.MaxFunctionCalls != 0 {
+			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent max_function_calls requires function_results")
+		}
+	} else {
+		if raw.MaxFunctionCalls == 0 {
+			raw.MaxFunctionCalls = baiduRTCMaxFunctionPlans
+		}
+		if raw.MaxFunctionCalls < 1 || raw.MaxFunctionCalls > baiduRTCMaxFunctionPlans {
+			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent max_function_calls must be between 1 and %d", baiduRTCMaxFunctionPlans)
+		}
+		for functionName, result := range raw.FunctionResults {
+			if !apiVersionPattern.MatchString(functionName) {
+				return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent Function Call name is invalid")
+			}
+			if err := validateBaiduRTCFunctionResult(result); err != nil {
+				return baiduRTCAgentPlan{}, err
+			}
+		}
+	}
 	for _, message := range append(append([]string(nil), raw.Messages...), raw.FinalMessages...) {
 		if err := validateBaiduRTCClientMessage(message); err != nil {
 			return baiduRTCAgentPlan{}, err
@@ -303,6 +349,7 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		AudioCodec: raw.AudioCodec, OpusPacketTimeMS: raw.OpusPacketTimeMS,
 		OpusPacketLengths: raw.OpusPacketLengths, OpusPacketMaxBytes: raw.OpusPacketMaxBytes,
 		DeviceID: raw.DeviceID, UserID: raw.UserID, Messages: raw.Messages, FinalMessages: raw.FinalMessages, ImageMode: raw.ImageMode,
+		FunctionResults: raw.FunctionResults, MaxFunctionCalls: raw.MaxFunctionCalls,
 		MaxMessages: raw.MaxMessages, Timeout: time.Duration(raw.Timeout) * time.Second,
 		TerminalEvent: raw.TerminalEvent,
 	}, nil
@@ -354,6 +401,68 @@ func baiduRTCConfigContainsCredentialMaterial(value any) bool {
 		}
 	}
 	return false
+}
+
+func validateBaiduRTCFunctionResult(result baiduRTCFunctionResult) error {
+	if result.Result != "ok" && result.Result != "error" {
+		return fmt.Errorf("Baidu RTC AI Agent Function Call result must be ok or error")
+	}
+	if len(result.Message) > 16*1024 || (result.Message != "" && !validBaiduRTCText(result.Message)) || baiduRTCConfigContainsCredentialMaterial(result.Message) {
+		return fmt.Errorf("Baidu RTC AI Agent Function Call message is invalid or contains credential material")
+	}
+	if len(result.PostFunction) > 3 {
+		return fmt.Errorf("Baidu RTC AI Agent Function Call accepts at most three post_function items")
+	}
+	seen := make(map[string]struct{}, len(result.PostFunction))
+	hasText := false
+	hasPrompt := false
+	for _, item := range result.PostFunction {
+		if _, duplicate := seen[item.Type]; duplicate {
+			return fmt.Errorf("Baidu RTC AI Agent post_function types must be unique")
+		}
+		seen[item.Type] = struct{}{}
+		if baiduRTCConfigContainsCredentialMaterial(item.Content) || baiduRTCConfigContainsCredentialMaterial(item.Query) {
+			return fmt.Errorf("Baidu RTC AI Agent post_function contains credential material")
+		}
+		switch item.Type {
+		case "text":
+			hasText = true
+			if !validBaiduRTCFunctionText(item.Content) || item.Query != "" || item.EnableMusicPadTTS != nil {
+				return fmt.Errorf("Baidu RTC AI Agent text post_function is invalid")
+			}
+		case "prompt":
+			hasPrompt = true
+			if !validBaiduRTCFunctionText(item.Query) || item.Content != "" || item.EnableMusicPadTTS != nil {
+				return fmt.Errorf("Baidu RTC AI Agent prompt post_function is invalid")
+			}
+		case "play_music":
+			if !validBaiduRTCFunctionText(item.Query) || item.Content != "" {
+				return fmt.Errorf("Baidu RTC AI Agent play_music post_function is invalid")
+			}
+		default:
+			return fmt.Errorf("Baidu RTC AI Agent post_function type must be text, prompt, or play_music")
+		}
+	}
+	if hasText && hasPrompt {
+		return fmt.Errorf("Baidu RTC AI Agent text and prompt post_function items cannot be combined")
+	}
+	if _, hasMusic := seen["play_music"]; hasMusic && (hasText || hasPrompt) {
+		music := result.PostFunction[0]
+		for _, item := range result.PostFunction {
+			if item.Type == "play_music" {
+				music = item
+				break
+			}
+		}
+		if music.EnableMusicPadTTS == nil || *music.EnableMusicPadTTS {
+			return fmt.Errorf("Baidu RTC AI Agent combined play_music post_function requires enableMusicPadTts=false")
+		}
+	}
+	return nil
+}
+
+func validBaiduRTCFunctionText(value string) bool {
+	return len(value) >= 1 && len(value) <= 16*1024 && validBaiduRTCText(value)
 }
 
 func validBaiduRTCText(value string) bool {
@@ -842,6 +951,77 @@ func sendBaiduRTCInputs(ctx context.Context, adapter *BaiduRESTAdapter, connecti
 	return nil
 }
 
+func newBaiduRTCFunctionCallState(plan baiduRTCAgentPlan) *baiduRTCFunctionCallState {
+	return &baiduRTCFunctionCallState{seen: make(map[string]struct{}, plan.MaxFunctionCalls)}
+}
+
+func respondBaiduRTCFunctionCall(ctx context.Context, connection cloudWebSocketConnection, event string, plan baiduRTCAgentPlan, state *baiduRTCFunctionCallState) error {
+	if state == nil || !strings.HasPrefix(event, "[F]:") || len(event) <= len("[F]:") || len(event) > maxRequestPayloadBytes || !validBaiduRTCText(event) {
+		return fmt.Errorf("Baidu RTC AI Agent returned an invalid Function Call event")
+	}
+	outerJSON := strings.TrimPrefix(event, "[F]:")
+	var outer struct {
+		SessionID string `json:"session_id"`
+		Content   string `json:"content"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(outerJSON))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&outer); err != nil || !jsonDecoderAtEOF(decoder) || !identifierPattern.MatchString(outer.SessionID) || len(outer.Content) == 0 || len(outer.Content) > maxRequestPayloadBytes {
+		return fmt.Errorf("Baidu RTC AI Agent returned an invalid Function Call event")
+	}
+	var rawContent any
+	if json.Unmarshal([]byte(outer.Content), &rawContent) != nil || baiduRTCAgentContainsCredentialField(rawContent) || baiduRTCConfigContainsCredentialMaterial(rawContent) {
+		return fmt.Errorf("Baidu RTC AI Agent Function Call contains credential material or invalid content")
+	}
+	var call struct {
+		FunctionName  string           `json:"function_name"`
+		ParameterList []map[string]any `json:"parameter_list"`
+	}
+	decoder = json.NewDecoder(strings.NewReader(outer.Content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&call); err != nil || !jsonDecoderAtEOF(decoder) || !apiVersionPattern.MatchString(call.FunctionName) || call.ParameterList == nil || len(call.ParameterList) > 32 {
+		return fmt.Errorf("Baidu RTC AI Agent returned invalid Function Call content")
+	}
+	for _, parameters := range call.ParameterList {
+		if parameters == nil {
+			return fmt.Errorf("Baidu RTC AI Agent Function Call parameter_list must contain objects")
+		}
+	}
+	result, declared := plan.FunctionResults[call.FunctionName]
+	if !declared {
+		return fmt.Errorf("Baidu RTC AI Agent Function Call %q has no declared result", call.FunctionName)
+	}
+	if _, duplicate := state.seen[outer.SessionID]; duplicate {
+		return fmt.Errorf("Baidu RTC AI Agent returned duplicate session_id for Function Call")
+	}
+	if state.calls >= plan.MaxFunctionCalls {
+		return fmt.Errorf("Baidu RTC AI Agent exceeded max_function_calls")
+	}
+	response := struct {
+		SessionID    string                       `json:"session_id"`
+		Result       string                       `json:"result"`
+		Message      string                       `json:"message,omitempty"`
+		PostFunction []baiduRTCPostFunctionResult `json:"post_function,omitempty"`
+	}{
+		SessionID: outer.SessionID, Result: result.Result, Message: result.Message, PostFunction: result.PostFunction,
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || len(encoded) > maxRequestPayloadBytes {
+		return fmt.Errorf("encode Baidu RTC AI Agent Function Call response")
+	}
+	if err := connection.Write(ctx, cloudWebSocketMessageText, append([]byte("[F]:"), encoded...)); err != nil {
+		return fmt.Errorf("write Baidu RTC AI Agent Function Call response")
+	}
+	state.seen[outer.SessionID] = struct{}{}
+	state.calls++
+	return nil
+}
+
+func jsonDecoderAtEOF(decoder *json.Decoder) bool {
+	var trailing any
+	return decoder.Decode(&trailing) == io.EOF
+}
+
 func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnection, sink *cloudWebSocketOutputSink, plan baiduRTCAgentPlan, imageFile string, secrets []string) error {
 	type outputFrame struct {
 		Type       string `json:"type"`
@@ -849,6 +1029,7 @@ func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnect
 		DataBase64 string `json:"data_base64,omitempty"`
 	}
 	imageUploaded := false
+	functionState := newBaiduRTCFunctionCallState(plan)
 	for count := 0; count < plan.MaxMessages; count++ {
 		messageType, data, err := connection.Read(ctx)
 		if err != nil {
@@ -878,6 +1059,11 @@ func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnect
 					return err
 				}
 				imageUploaded = true
+			}
+			if strings.HasPrefix(event, "[F]:") {
+				if err := respondBaiduRTCFunctionCall(ctx, connection, event, plan, functionState); err != nil {
+					return err
+				}
 			}
 			output, _ = json.Marshal(outputFrame{Type: "text", Data: event})
 			terminal = baiduRTCTerminal(plan.TerminalEvent, event, count+1, plan.MaxMessages)

@@ -189,9 +189,13 @@ remain available through the guarded resource gateway.
   constructs Opus `ptime`/`plen` only from a validated bounded packet plan. Its
   pre/post-audio command arrays parse only documented static client commands
   and reject arbitrary/server-only/license/raw-image prefixes, embedded credential
-  material, and uncorrelated Function Call results. A separate `image_file`
+  material, and caller-authored Function Call frames. A separate `image_file`
   input is consumed exactly once only after the provider's upload event, using
-  the official bounded chunk protocol under a serialized writer. The direct AK/SK query
+  the official bounded chunk protocol under a serialized writer. Function Call
+  results are declared by function name without session IDs; only a strictly
+  parsed current provider event can bind its session ID to one bounded result,
+  with unknown functions, duplicate sessions, credential parameters, and call
+  overflow rejected. The direct AK/SK query
   connection is forbidden. Every path after create attempts stop, and output
   is published only after a successful terminal event and stop.
 - New official endpoint exceptions for any provider are operator policy,
