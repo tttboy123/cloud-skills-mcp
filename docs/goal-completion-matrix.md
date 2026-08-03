@@ -58,6 +58,25 @@ Fresh local module verification, formatting, vet, race coverage (80.1% total,
 Actionlint, govulncheck, four-platform archives, and a ten-second MQTT
 packet/property fuzz run (341,933 executions) also passed.
 
+Azure Service Bus and Event Hubs now use AMQP 1.0 directly over the exact
+public `$servicebus/websocket` WSS endpoint. The server obtains only the
+documented Service Bus or Event Hubs Entra scope from the non-CLI operator
+identity, while the official Azure Go SDK keeps SASL anonymous, CBS claims,
+token refresh, AMQP sessions and links internal. Service Bus covers bounded
+send, schedule/cancel, peek, receive/deferred receive with explicit in-call
+settlement, dead-letter subqueues, session state, session-lock renewal and
+near-expiry message-lock renewal without exporting lock capabilities. Event
+Hubs covers hub/partition properties, finite per-partition receive from all
+five official start-position forms, and bounded partition-ID/key sends.
+Implementation commit `f14e130438a8571775964d9ab34742e814c43fc4` plus the
+ShellCheck-safe smoke-vector follow-up `d32200acdc4d706f0adf3c4784e24bf1d322c0d3`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck and
+four-platform release verification in [CI run 30809196252](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30809196252).
+Fresh local module verification, formatting, vet, race coverage (80.1% total),
+build, protocol/install smoke, shell syntax and ShellCheck, all six Skill
+validators, Actionlint, govulncheck, four-platform archives, and a five-second
+AMQP plan fuzz run (158,828 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
