@@ -110,17 +110,19 @@ func (provider *awsDefaultCredentialProvider) Credentials(ctx context.Context) (
 }
 
 type AWSRESTConfig struct {
-	Credentials               AWSCredentialProvider
-	HTTP                      HTTPDoer
-	MaxBodyBytes              int64
-	Timeout                   time.Duration
-	Now                       func() time.Time
-	WebSocketDial             func(context.Context, string) (cloudWebSocketConnection, error)
-	IoTWebSocketDial          func(context.Context, string) (cloudWebSocketConnection, error)
-	AppSyncEventWebSocketDial func(context.Context, string, []string) (cloudWebSocketConnection, error)
-	AppSyncEventID            func() (string, error)
-	StreamPause               func(context.Context, time.Duration) error
-	AllowedHosts              []string
+	Credentials                 AWSCredentialProvider
+	HTTP                        HTTPDoer
+	MaxBodyBytes                int64
+	Timeout                     time.Duration
+	Now                         func() time.Time
+	WebSocketDial               func(context.Context, string) (cloudWebSocketConnection, error)
+	IoTWebSocketDial            func(context.Context, string) (cloudWebSocketConnection, error)
+	AppSyncEventWebSocketDial   func(context.Context, string, []string) (cloudWebSocketConnection, error)
+	AppSyncEventID              func() (string, error)
+	AppSyncGraphQLWebSocketDial func(context.Context, string, []string) (cloudWebSocketConnection, error)
+	AppSyncGraphQLID            func() (string, error)
+	StreamPause                 func(context.Context, time.Duration) error
+	AllowedHosts                []string
 }
 
 type AWSRESTAdapter struct {
@@ -144,6 +146,12 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 	if config.AppSyncEventID == nil {
 		config.AppSyncEventID = newAWSAppSyncEventID
 	}
+	if config.AppSyncGraphQLWebSocketDial == nil {
+		config.AppSyncGraphQLWebSocketDial = defaultAWSAppSyncGraphQLWebSocketDial
+	}
+	if config.AppSyncGraphQLID == nil {
+		config.AppSyncGraphQLID = newAWSAppSyncEventID
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -152,7 +160,7 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 
 func (adapter *AWSRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and guarded WSS", Version: "sigv4+sigv4a+transcribe-ws+iot-mqtt-ws+appsync-event-ws",
+		Provider: ProviderAWS, Available: true, Adapter: "AWS SigV4/SigV4a HTTPS and guarded WSS", Version: "sigv4+sigv4a+transcribe-ws+iot-mqtt-ws+appsync-event-ws+appsync-graphql-ws",
 		CredentialSource: credentialSource(ProviderAWS), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the AWS SDK credential chain; no cloud CLI is executed",
 	}, nil
@@ -166,15 +174,16 @@ func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]by
 		"transcribe_websocket": "https://docs.aws.amazon.com/transcribe/latest/dg/streaming-setting-up.html",
 		"iot_mqtt_websocket":   "https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html",
 		"appsync_event_ws":     "https://docs.aws.amazon.com/appsync/latest/eventapi/event-api-websocket-protocol.html",
+		"appsync_graphql_ws":   "https://docs.aws.amazon.com/appsync/latest/devguide/real-time-websocket-client.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
-	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, transcribe-ws, iot-mqtt-ws, or appsync-event-ws")
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
 	}
-	if scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS {
+	if scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS {
 		var validationErr error
 		switch scheme {
 		case authSchemeAWSTranscribeWS:
@@ -183,6 +192,8 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			validationErr = validateAWSIoTMQTTWebSocketInvocation(invocation, adapter.config.AllowedHosts)
 		case authSchemeAWSAppSyncEventWS:
 			validationErr = validateAWSAppSyncEventWebSocketInvocation(invocation, adapter.config.AllowedHosts)
+		case authSchemeAWSAppSyncGraphQLWS:
+			validationErr = validateAWSAppSyncGraphQLWebSocketInvocation(invocation, adapter.config.AllowedHosts)
 		}
 		if validationErr != nil {
 			return InvocationResult{}, validationErr
@@ -200,7 +211,10 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 		if scheme == authSchemeAWSIoTMQTTWS {
 			return invokeAWSIoTMQTTWebSocket(ctx, adapter, credentials, invocation)
 		}
-		return invokeAWSAppSyncEventWebSocket(ctx, adapter, credentials, invocation)
+		if scheme == authSchemeAWSAppSyncEventWS {
+			return invokeAWSAppSyncEventWebSocket(ctx, adapter, credentials, invocation)
+		}
+		return invokeAWSAppSyncGraphQLWebSocket(ctx, adapter, credentials, invocation)
 	}
 	if !identifierPattern.MatchString(invocation.Service) {
 		return InvocationResult{}, fmt.Errorf("AWS signing requires a valid service")

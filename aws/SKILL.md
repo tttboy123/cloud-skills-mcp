@@ -1,6 +1,6 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, Amazon Transcribe WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, Transcribe, IoT, AppSync, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, Amazon Transcribe WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, Transcribe, IoT, AppSync, or any documented AWS API.
 ---
 
 # AWS Cloud
@@ -18,7 +18,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1 subscription, or `appsync-event-ws` for a finite IAM AppSync Events channel subscription.
+- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1 subscription, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
@@ -52,6 +52,10 @@ The adapter generates the five-minute SigV4 WSS query internally, applies AWS Io
 AWS AppSync Events subscriptions use `auth_scheme="appsync-event-ws"`, `service="appsync"`, operation `EventSubscribe`, method `GET`, and `wss://<api-id>.appsync-realtime-api.<region>.amazonaws.com/event/realtime` (or an operator-approved custom domain). `body` contains only `channel`, `max_messages` from 1 to 256, and `timeout_seconds` from 1 to 300; `response_file` receives atomic sanitized NDJSON. Example: `aws_api_read(auth_scheme="appsync-event-ws", service="appsync", operation="EventSubscribe", region="us-east-1", method="GET", url="wss://<api-id>.appsync-realtime-api.us-east-1.amazonaws.com/event/realtime", body={"channel":"/news/latest","max_messages":10,"timeout_seconds":30}, response_file="<approved-root>/appsync-events.ndjson")`.
 
 The adapter separately SigV4-signs the documented connection `{}` and channel bodies against the AppSync HTTP `/event` endpoint, keeps the resulting Authorization and STS token inside the dynamic WebSocket subprotocol and subscribe message, generates the subscription ID, validates acknowledgements/data/keep-alives, and explicitly unsubscribes. API keys, JWTs, caller Authorization, arbitrary handshake fields, WebSocket publishing, and unbounded sessions are rejected. AppSync Events publishing remains available through the ordinary SigV4 HTTPS `/event` write path.
+
+Legacy AppSync GraphQL subscriptions use `auth_scheme="appsync-graphql-ws"`, `service="appsync"`, operation `GraphQLSubscribe`, method `GET`, and `wss://<api-id>.appsync-realtime-api.<region>.amazonaws.com/graphql`. An operator-approved custom domain instead uses `/graphql/realtime`. `body.query` must contain exactly one `subscription` operation; optional `variables` must contain no credential-like fields. `max_messages` is 1 to 256, `timeout_seconds` is 1 to 300, and `response_file` is mandatory. Example: `aws_api_read(auth_scheme="appsync-graphql-ws", service="appsync", operation="GraphQLSubscribe", region="us-east-1", method="GET", url="wss://<api-id>.appsync-realtime-api.us-east-1.amazonaws.com/graphql", body={"query":"subscription OnMessage($room: ID!) { onMessage(room: $room) { id text } }","variables":{"room":"room-1"},"max_messages":10,"timeout_seconds":30}, response_file="<approved-root>/appsync-graphql.ndjson")`.
+
+The adapter signs the documented HTTPS `/graphql/connect` body `{}` and the exact HTTPS `/graphql` GraphQL request separately, keeps IAM Authorization and the STS token only in the dynamic `header-<Base64URL>` subprotocol and `start.extensions.authorization`, validates `connection_ack`, `start_ack`, keep-alives, data IDs, payload objects, and completion, then sends `stop`. Query/mutation documents, multiple operations, caller headers/query parameters, API keys, JWTs, arbitrary IDs, and unbounded sessions are rejected.
 
 ## Credentials
 

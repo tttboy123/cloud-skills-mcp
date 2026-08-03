@@ -120,19 +120,23 @@ func parseAWSAppSyncEventSubscribeConfig(body any) (awsAppSyncEventSubscribeConf
 }
 
 func signAWSAppSyncEventAuthorization(ctx context.Context, rawURL string, body []byte, credentials AWSCredentials, region string, signingTime time.Time) (map[string]string, error) {
+	return signAWSAppSyncAuthorization(ctx, rawURL, "/event", body, credentials, region, signingTime)
+}
+
+func signAWSAppSyncAuthorization(ctx context.Context, rawURL, expectedPath string, body []byte, credentials AWSCredentials, region string, signingTime time.Time) (map[string]string, error) {
 	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
-		return nil, fmt.Errorf("AWS AppSync Events WebSocket requires complete AKSK credentials")
+		return nil, fmt.Errorf("AWS AppSync WebSocket requires complete AKSK credentials")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
-	if err != nil || request.URL.Scheme != "https" || request.URL.EscapedPath() != "/event" || request.URL.RawQuery != "" || request.URL.User != nil || request.URL.Fragment != "" {
-		return nil, fmt.Errorf("construct AWS AppSync Events signing request")
+	if err != nil || request.URL.Scheme != "https" || request.URL.Hostname() == "" || request.URL.Port() != "" || request.URL.EscapedPath() != expectedPath || request.URL.RawQuery != "" || request.URL.User != nil || request.URL.Fragment != "" {
+		return nil, fmt.Errorf("construct AWS AppSync signing request")
 	}
 	request.Header.Set("Accept", "application/json, text/javascript")
 	request.Header.Set("Content-Encoding", "amz-1.0")
 	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	awsCredentials := aws.Credentials{AccessKeyID: credentials.AccessKeyID, SecretAccessKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken}
 	if err := awsv4.NewSigner().SignHTTP(ctx, awsCredentials, request, sha256Hex(body), awsAppSyncEventService, strings.ToLower(strings.TrimSpace(region)), signingTime.UTC()); err != nil {
-		return nil, fmt.Errorf("sign AWS AppSync Events request")
+		return nil, fmt.Errorf("sign AWS AppSync request")
 	}
 	authorization := map[string]string{
 		"accept":           request.Header.Get("Accept"),
@@ -148,10 +152,10 @@ func signAWSAppSyncEventAuthorization(ctx context.Context, rawURL string, body [
 	return authorization, nil
 }
 
-func encodeAWSAppSyncEventAuthProtocol(authorization map[string]string) (string, error) {
+func encodeAWSAppSyncAuthProtocol(authorization map[string]string) (string, error) {
 	encoded, err := json.Marshal(authorization)
 	if err != nil {
-		return "", fmt.Errorf("encode AWS AppSync Events authorization")
+		return "", fmt.Errorf("encode AWS AppSync authorization")
 	}
 	return "header-" + base64.RawURLEncoding.EncodeToString(encoded), nil
 }
@@ -179,13 +183,13 @@ func readAWSAppSyncEventEnvelope(ctx context.Context, connection cloudWebSocketC
 	return envelope, data, nil
 }
 
-func writeAWSAppSyncEventJSON(ctx context.Context, connection cloudWebSocketConnection, value any, label string) error {
+func writeAWSAppSyncJSON(ctx context.Context, connection cloudWebSocketConnection, value any, label string) error {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("encode AWS AppSync Events %s", label)
+		return fmt.Errorf("encode AWS AppSync %s", label)
 	}
 	if err := connection.Write(ctx, cloudWebSocketMessageText, encoded); err != nil {
-		return fmt.Errorf("send AWS AppSync Events %s", label)
+		return fmt.Errorf("send AWS AppSync %s", label)
 	}
 	return nil
 }
@@ -229,7 +233,7 @@ func invokeAWSAppSyncEventWebSocket(ctx context.Context, adapter *AWSRESTAdapter
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	authProtocol, err := encodeAWSAppSyncEventAuthProtocol(connectAuthorization)
+	authProtocol, err := encodeAWSAppSyncAuthProtocol(connectAuthorization)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -249,7 +253,7 @@ func invokeAWSAppSyncEventWebSocket(ctx context.Context, adapter *AWSRESTAdapter
 		return InvocationResult{}, err
 	}
 	defer sink.abort()
-	if err := writeAWSAppSyncEventJSON(handshakeCtx, connection, map[string]string{"type": "connection_init"}, "connection_init"); err != nil {
+	if err := writeAWSAppSyncJSON(handshakeCtx, connection, map[string]string{"type": "connection_init"}, "Events connection_init"); err != nil {
 		return InvocationResult{}, err
 	}
 	for {
@@ -272,7 +276,7 @@ func invokeAWSAppSyncEventWebSocket(ctx context.Context, adapter *AWSRESTAdapter
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	if err := writeAWSAppSyncEventJSON(handshakeCtx, connection, map[string]any{"type": "subscribe", "id": subscriptionID, "channel": config.Channel, "authorization": subscribeAuthorization}, "subscribe"); err != nil {
+	if err := writeAWSAppSyncJSON(handshakeCtx, connection, map[string]any{"type": "subscribe", "id": subscriptionID, "channel": config.Channel, "authorization": subscribeAuthorization}, "Events subscribe"); err != nil {
 		return InvocationResult{}, err
 	}
 	if err := waitAWSAppSyncEventType(handshakeCtx, connection, "subscribe_success", subscriptionID); err != nil {
@@ -311,7 +315,7 @@ func invokeAWSAppSyncEventWebSocket(ctx context.Context, adapter *AWSRESTAdapter
 	cancelCollection()
 	cleanupCtx, cancelCleanup := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelCleanup()
-	if err := writeAWSAppSyncEventJSON(cleanupCtx, connection, map[string]string{"type": "unsubscribe", "id": subscriptionID}, "unsubscribe"); err != nil {
+	if err := writeAWSAppSyncJSON(cleanupCtx, connection, map[string]string{"type": "unsubscribe", "id": subscriptionID}, "Events unsubscribe"); err != nil {
 		return InvocationResult{}, err
 	}
 	if err := waitAWSAppSyncEventType(cleanupCtx, connection, "unsubscribe_success", subscriptionID); err != nil {

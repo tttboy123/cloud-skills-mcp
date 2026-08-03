@@ -85,7 +85,7 @@ func TestAWSAppSyncEventIAMAuthorizationSignsConnectionAndChannelBodies(t *testi
 	if !strings.Contains(connect["Authorization"], "/us-east-1/appsync/aws4_request") || connect["Authorization"] == subscribe["Authorization"] {
 		t.Fatalf("body-specific AppSync signatures connect=%q subscribe=%q", connect["Authorization"], subscribe["Authorization"])
 	}
-	encoded, err := encodeAWSAppSyncEventAuthProtocol(connect)
+	encoded, err := encodeAWSAppSyncAuthProtocol(connect)
 	if err != nil || !strings.HasPrefix(encoded, "header-") {
 		t.Fatalf("auth subprotocol=%q err=%v", encoded, err)
 	}
