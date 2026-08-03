@@ -105,6 +105,12 @@ remain available through the guarded resource gateway.
   `/graphql` requests, keeps dynamic subprotocol/start authorization internal,
   validates the realtime message lifecycle, and atomically publishes sanitized
   data payloads before sending `stop`.
+- Amazon IVS Chat WSS internally signs the fixed `CreateChatToken` HTTPS call,
+  derives only view, send, or moderation capabilities from the selected MCP
+  operation, and keeps the single-use token inside the negotiated subprotocol.
+  Read-only subscriptions, mutation-gated sends, sensitive-gated moderation,
+  official endpoint/message quotas, sanitized frames, and atomic output are
+  enforced without exposing token or SigV4 material.
 - AWS IoT WSS accepts finite read-only `SubscribeMQTT` and mutation-only
   `ClientMQTT` plans over the exact `/mqtt` endpoint for MQTT 3.1.1 and MQTT 5.
   It keeps SigV4/STS query authorization internal; supports AWS QoS 0/1

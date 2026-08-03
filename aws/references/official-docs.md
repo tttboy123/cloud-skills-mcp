@@ -50,6 +50,13 @@
 - Amazon Connect Health ambient documentation HTTP/2/WSS endpoints, 60-second SigV4 presigning, chained EventStream signing, raw audio, normal-close, consent, and S3 output requirements: https://docs.aws.amazon.com/connecthealth/latest/userguide/ambient-documentation.html
 - Amazon Connect Health `StartMedicalScribeListeningSession` request headers, event shapes, values, limits, and errors: https://docs.aws.amazon.com/connecthealth/latest/APIReference/API_StartMedicalScribeListeningSession.html
 - Amazon Connect Health IAM access level for `StartMedicalScribeListeningSession`: https://docs.aws.amazon.com/service-authorization/latest/reference/list_connecthealth.html
+- Amazon IVS Chat control-plane `CreateChatToken` request, limits, capabilities, and response: https://docs.aws.amazon.com/ivs/latest/ChatAPIReference/API_CreateChatToken.html
+- Amazon IVS Chat Messaging WebSocket connection and internal token subprotocol: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/welcome.html
+- Amazon IVS Chat Messaging actions: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions.html
+- Amazon IVS Chat `SendMessage` fields and 500-code-point bound: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-sendmessage-publish.html
+- Amazon IVS Chat `DeleteMessage` and `DisconnectUser` moderation messages: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-deletemessage-publish.html and https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-disconnectuser-publish.html
+- Amazon IVS Chat subscribed Message/Event shapes and asynchronous errors: https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-message-subscribe.html, https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/actions-event-subscribe.html, and https://docs.aws.amazon.com/ivs/latest/chatmsgapireference/error-messages.html
+- Amazon IVS Chat current regional HTTPS/WSS endpoints and messaging quotas: https://docs.aws.amazon.com/general/latest/gr/ivs.html
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
 

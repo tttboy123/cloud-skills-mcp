@@ -25,6 +25,7 @@ and every provider has successful live acceptance with sanitized audit evidence.
 | Tencent Enterprise TCR resource protocol | Direct Docker/OCI Registry HTTP with internal TC3 `CreateInstanceToken(TokenType=temp)`, exact public/VPC/operator-pinned custom hosts, pre-credential path/method validation, temporary Basic containment, response-file support, and fail-closed redirects; Personal Edition is credential-bound | Hermetic signer/credential/path/upload/redirect tests, protocol smoke, Skill/docs mapping, and dedicated read-only ListTags live gate | Implemented; live pending |
 | Baidu CCR Enterprise/Personal resource protocol | Direct Docker/OCI Registry HTTP with fixed internal BCE v1 user/one-hour credential exchange, exact public/VPC/operator-pinned custom or Personal host validation, same-origin challenge/scope binding, response-file support, and fail-closed redirects | Hermetic signer/credential/path/upload/challenge/redirect tests, protocol smoke, Skill/docs mapping, and dedicated read-only ListTags live gate | Implemented; live pending |
 | AWS IoT Core MQTT resource protocol | Direct SigV4-presigned MQTT 3.1.1/5.0 WSS with read-only subscribe and mutation-only bidirectional client entrypoints; QoS 0/1 subscribe/unsubscribe/publish/PUBACK, clean/persistent session state, bounded offline queue drain, retained/Last Will, supported MQTT 5 application/session properties, broker capability validation, quota pacing, graceful error disconnect, atomic output, and no exposed IAM/presign material | Official SDK signature vector plus CONNECT/SUBSCRIBE/UNSUBSCRIBE/PUBLISH and version-aware CONNACK/SUBACK/UNSUBACK/PUBACK/DISCONNECT transport tests, lookalike pre-credential protocol smoke, Skill/docs mapping, fuzzing, and dedicated self-publish mutation gate | Implemented; live pending |
+| Amazon IVS Chat messaging resource protocol | Direct WSS after an internal IAM-signed `CreateChatToken` HTTPS call; least-capability view/send/moderation tokens, exact current regional endpoints, bounded Message/Event collection, SendMessage pacing, sensitive-gated DeleteMessage/DisconnectUser, atomic output, and no exposed token or SigV4 material | Token-signing, capability, endpoint, action, frame, policy and atomic-failure tests; lookalike pre-credential protocol smoke; Skill/docs mapping; dedicated self-message mutation gate | Implemented; live pending |
 | Baidu IoT Core HTTP/MQTT resource protocols | Direct HTTP Publish and MQTT 3.1.1/5.0 over exact HTTPS/WSS with internal IAM application-permission HMAC, bounded wildcard/shared QoS 0/1/2 subscribe/unsubscribe/publish/Will plans, MQTT 5 properties, duplicate-safe bidirectional QoS 2, read/mutate separation, atomic output, and no exposed derived credential/token | Official signature and HTTP contract vectors, CONNECT/SUBSCRIBE/UNSUBSCRIBE/PUBLISH plus SUBACK/UNSUBACK/PUBACK/PUBREC/PUBREL/PUBCOMP transport tests, lookalike pre-credential protocol smoke, Skill/docs mapping, and dedicated MQTT read/HTTP mutation broker gates | Implemented; live pending |
 | Observable six-cloud acceptance | `TestLiveSixCloudReadOnly` selects providers and logs provider/outcome/bytes/request ID only; dedicated gates cover AWS IoT Core MQTT mutation, Baidu CCR, Baidu IoT Core MQTT, Baidu RTC, Alibaba MQ, Alibaba Enterprise ACR, Tencent CLS, Tencent Enterprise TCR, Azure ACR, private/public Amazon ECR, and Google Artifact Registry without printing response bodies or secrets | Requires operator-injected credentials and opt-in live flags; product gates additionally require their exact endpoint and existing resource identifiers | **Pending** |
 
@@ -440,6 +441,23 @@ and cloud package), build, protocol/install smoke, shell syntax, all six Skill
 validators, Actionlint, govulncheck, four-platform archives, and a ten-second
 MQTT 5 packet/property fuzz run (88,706 executions) also passed.
 
+Amazon IVS Chat messaging now uses `auth_scheme=ivs-chat-ws`: the server signs
+the fixed HTTPS `CreateChatToken` call through the AWS SDK credential chain,
+derives only view, send, or moderation capabilities from the selected MCP
+operation, and passes the single-use token only as the internal WebSocket
+subprotocol. Read-only `SubscribeChat`, mutation-gated `ClientChat` sends with
+10 requests/second pacing, and sensitive-gated `ModerateChat` are separated by
+policy; the seven current regional endpoints, room ARN, user/session bounds,
+1 KiB attributes, 500-code-point messages, MESSAGE/EVENT/ERROR frames, and
+atomic failure output are enforced without exposing the token, SigV4
+authorization, or STS material. Hermetic token-signing, capability, endpoint,
+action, frame, policy, pacing, dial, and atomic-failure tests plus the
+lookalike pre-credential protocol smoke pass; fresh local formatting, vet,
+race coverage (80.3% total, 80.3% cloud package), build, protocol smoke, and
+four-platform build remain green. The dedicated self-message live gate is
+implemented and pending an operator IAM identity, exact current regional
+endpoint, and a disposable room ARN.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
@@ -595,6 +613,24 @@ go test ./internal/mcp/cloud -run TestLiveAWSIoTMQTTMutation -v
 
 The test enables mutation approval only inside its runtime and does not print
 the payload, presigned URL, credentials, or session token.
+
+For Amazon IVS Chat, bind an IAM identity allowed to call `CreateChatToken` on
+a disposable room. The gate creates a one-minute least-capability chat token
+internally, sends a unique non-secret message, receives its room echo, and
+verifies that no token or AWS credential entered the atomic output:
+
+```bash
+CLOUD_SKILLS_ALLOW_MUTATIONS=1 \
+CLOUD_SKILLS_LIVE_AWS_IVS_CHAT=1 \
+CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_ENDPOINT=wss://edge.ivschat.<region>.amazonaws.com \
+CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_REGION=<region> \
+CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_ROOM_ARN=arn:aws:ivschat:<region>:<account>:room/<room-id> \
+CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_USER_ID=cloud-skills-live \
+go test ./internal/mcp/cloud -run TestLiveAWSIVSChatMutation -v
+```
+
+The gate does not print the generated content, token, signed request, or
+credentials. It intentionally leaves one disposable chat message in the room.
 
 For private ECR Registry HTTP, provide the exact registry origin and an
 existing pullable repository. The test resolves the region from the endpoint,

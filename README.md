@@ -206,6 +206,14 @@ AWS AppSync Events 的 IAM 频道订阅使用 `auth_scheme=appsync-event-ws`。s
 
 IAM Authorization 和 STS token 只进入内部动态 `header-<Base64URL>` 子协议及 `start.extensions.authorization`。调用方不能提交 query/header、API key、JWT、operation ID、mutation/query operation 或无边界会话；成功后才原子发布经过验证的 `data` payload NDJSON。
 
+Amazon IVS Chat 消息数据面使用 `auth_scheme=ivs-chat-ws`，不是普通 SigV4 Upgrade。server 先用标准 AWS IAM/AKSK 链对固定 `POST /CreateChatToken` 执行 `ivschat` SigV4，再把一次性 token 仅作为内部 WebSocket subprotocol。只读 `SubscribeChat` 获得零显式 capability 的观察 token；`ClientChat` 只获得 `SEND_MESSAGE`；`ModerateChat` 只获得实际需要的 `DELETE_MESSAGE`/`DISCONNECT_USER`，且后者还要求 sensitive gate：
+
+```json
+{"name":"aws_api_mutate","arguments":{"auth_scheme":"ivs-chat-ws","service":"ivschat","operation":"ClientChat","region":"us-west-2","method":"GET","url":"wss://edge.ivschat.us-west-2.amazonaws.com","body":{"room_identifier":"arn:aws:ivschat:us-west-2:123456789012:room/demo","user_id":"agent","session_duration_minutes":1,"messages":[{"action":"SEND_MESSAGE","content":"hello","request_id":"message-1"}],"max_messages":1,"timeout_seconds":30},"response_file":"/approved/results/ivs-chat.ndjson","force":true}}
+```
+
+入口只接受官网当前列出的 7 个区域 endpoint，执行每连接 10 请求/秒节流，并验证 room ARN、用户、会话时长、1 KiB attributes、500 code points 消息、MESSAGE/EVENT/ERROR 帧及原子输出。调用方不能提交 token、capabilities、header/query 或任意 action；一次性 token、SigV4 Authorization 与 STS token 都不会进入 MCP 返回、错误或审计。
+
 其他使用标准 SigV4 Upgrade、而消息帧本身不需要额外 AWS 链式签名的官方双向 WebSocket 使用 `auth_scheme=sigv4-ws`。通用入口最多收发 256 帧或运行 300 秒；Bedrock AgentCore 目标还执行其官方 32 KiB 单帧上限。例如 `InvokeAgentRuntimeWithWebSocketStream`：
 
 ```json
