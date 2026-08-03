@@ -37,6 +37,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 	}
 	switch provider {
 	case ProviderAzure:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureWebPubSubMQTTWS {
+			return strings.EqualFold(strings.TrimSpace(request.Operation), "SubscribeMQTT")
+		}
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureWebPubSubWS {
 			return false
 		}
@@ -176,6 +179,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	gcpVertexLiveWebSocketScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPVertexLiveWS
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	azureWebPubSubScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubWS
+	azureWebPubSubMQTTScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubMQTTWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
 	if awsConnectHealthWebSocketScheme {
@@ -269,6 +273,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateAzureWebPubSubInvocation(request); err != nil {
 			return err
 		}
+	} else if azureWebPubSubMQTTScheme {
+		if err := validateAzureWebPubSubMQTTInvocation(request); err != nil {
+			return err
+		}
 	} else {
 		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
@@ -276,8 +284,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	switch request.Provider {
 	case ProviderAzure:
-		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureWebPubSubWS {
-			return fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, or omitted for REST")
+		if azureScheme != "" && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureWebPubSubMQTTWS {
+			return fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
 		}
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {

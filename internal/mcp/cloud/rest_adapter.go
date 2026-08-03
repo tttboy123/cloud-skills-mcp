@@ -32,6 +32,7 @@ type AzureRESTConfig struct {
 	WebSocketDial                  azureRealtimeWebSocketDial
 	WebPubSubWebSocketDial         azureWebPubSubWebSocketDial
 	ReliableWebPubSubWebSocketDial azureWebPubSubWebSocketDial
+	WebPubSubMQTTWebSocketDial     azureWebPubSubWebSocketDial
 	StreamPause                    func(context.Context, time.Duration) error
 	MaxBodyBytes                   int64
 	AllowedHosts                   []string
@@ -63,6 +64,9 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	if config.ReliableWebPubSubWebSocketDial == nil {
 		config.ReliableWebPubSubWebSocketDial = defaultAzureReliableWebPubSubWebSocketDial
 	}
+	if config.WebPubSubMQTTWebSocketDial == nil {
+		config.WebPubSubMQTTWebSocketDial = defaultAzureWebPubSubMQTTWebSocketDial
+	}
 	if config.StreamPause == nil {
 		config.StreamPause = pauseTencentStream
 	}
@@ -75,7 +79,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-ws-reliable",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+realtime-ws+webpubsub-ws-reliable+mqtt",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -89,6 +93,7 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"openai_realtime":    "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
 		"webpubsub_protocol": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
 		"webpubsub_reliable": "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
+		"webpubsub_mqtt":     "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-connect-mqtt-websocket-client",
 	})
 }
 
@@ -100,8 +105,11 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureWebPubSubWS {
 		return invokeAzureWebPubSub(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureWebPubSubMQTTWS {
+		return invokeAzureWebPubSubMQTT(ctx, adapter, request)
+	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be realtime-ws, webpubsub-ws, webpubsub-mqtt-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {

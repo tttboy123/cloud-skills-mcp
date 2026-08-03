@@ -204,6 +204,12 @@ Azure Web PubSub 使用 `auth_scheme=webpubsub-ws`。server 先用 Entra scope `
 
 要启用可靠模式，在同一 body 加入 `"protocol":"json-reliable"`，并为除 ping 外的 publisher 消息提供唯一正整数 `ackId`。Entra token、临时 client token、reconnection token 和 token API 响应都不会进入 MCP 结果或审计；caller 不能提供 access token、Authorization、recovery query、非官方 host/path 或无界会话。
 
+Azure Web PubSub MQTT 3.1.1 有单独的只读订阅入口 `auth_scheme=webpubsub-mqtt-ws`。server 自动从精确 topic 推导最小 `joinLeaveGroup` 权限，用 Entra 调 `clientType=MQTT` 的五分钟 token API，在内部 WSS Authorization header 中使用临时 token，并处理有限的 QoS 0/1 订阅、PUBACK、PINGREQ/PINGRESP 和 DISCONNECT；不接受 wildcard、retained、shared subscription、caller token 或 MQTT username/password：
+
+```json
+{"name":"azure_api_read","arguments":{"auth_scheme":"webpubsub-mqtt-ws","service":"webpubsub","operation":"SubscribeMQTT","method":"GET","url":"wss://<resource>.webpubsub.azure.com/clients/mqtt/hubs/<hub>","body":{"client_id":"Observer123","subscriptions":[{"topic_filter":"room/temperature","qos":1}],"keep_alive_seconds":30,"max_messages":32,"timeout_seconds":30},"response_file":"/approved/results/webpubsub-mqtt.ndjson"}}
+```
+
 GCP 查询：
 
 ```json

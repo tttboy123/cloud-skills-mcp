@@ -123,6 +123,13 @@ remain available through the guarded resource gateway.
   exact uint64 sequence acknowledgements, suppresses duplicates, and resends
   pending publisher messages for at most the documented one-minute recovery
   window. Sessions are mutation-only.
+- Azure Web PubSub MQTT uses a separate read-only, finite MQTT 3.1.1
+  subscription entrypoint. It accepts only exact topics and alphanumeric client
+  IDs, derives least-privilege join roles, mints a five-minute token with
+  `clientType=MQTT`, keeps it in the internal WSS Authorization header, and
+  implements CONNACK, SUBACK, QoS 0/1 PUBLISH/PUBACK, keepalive, DISCONNECT,
+  and atomic Base64 NDJSON output. MQTT 5 and the remaining MQTT feature
+  profiles stay explicit coverage gaps.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a
