@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLiveAWSIoTMQTTMutation(t *testing.T) {
@@ -839,6 +841,77 @@ func TestLiveAWSECRPublicReadOnly(t *testing.T) {
 		t.Skip("set CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC=1 for a real ECR Public Registry token and manifest probe")
 	}
 	runLiveAWSECRRegistryRead(t, true)
+}
+
+func TestLiveAWSIVSChatMutation(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_IVS_CHAT") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AWS_IVS_CHAT=1 for an explicitly approved IVS Chat self-message")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Amazon IVS Chat live validation", name)
+		}
+		return value
+	}
+	region := required("CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_REGION")
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_ENDPOINT"), "/")
+	roomARN := required("CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_ROOM_ARN")
+	userID := required("CLOUD_SKILLS_LIVE_AWS_IVS_CHAT_USER_ID")
+	if err := validateAWSIVSChatEndpoint(endpoint, region); err != nil {
+		t.Fatalf("invalid Amazon IVS Chat live endpoint: %v", err)
+	}
+	runtime := DefaultRuntime()
+	if !runtime.AllowMutations {
+		t.Fatal("CLOUD_SKILLS_ALLOW_MUTATIONS=1 is required after explicit approval")
+	}
+	root := t.TempDir()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	responseFile := filepath.Join(root, "aws-ivs-chat.ndjson")
+	content := fmt.Sprintf("cloud-skills-live-%d", time.Now().UTC().UnixNano())
+	result := callCloudTool(t, c, "aws_api_mutate", map[string]any{
+		"force": true, "auth_scheme": "ivs-chat-ws", "service": "ivschat", "operation": "ClientChat",
+		"region": region, "method": "GET", "url": endpoint, "response_file": responseFile,
+		"body": map[string]any{
+			"room_identifier": roomARN, "user_id": userID, "session_duration_minutes": 1,
+			"messages":     []any{map[string]any{"action": "SEND_MESSAGE", "content": content, "request_id": "cloud-skills-live"}},
+			"max_messages": 1, "timeout_seconds": 30,
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Amazon IVS Chat live mutation failed: %s", cloudToolText(t, result))
+	}
+	output, err := os.ReadFile(responseFile)
+	if err != nil || !bytes.Contains(output, []byte(content)) || bytes.Contains(output, []byte("tokenExpirationTime")) {
+		t.Fatalf("Amazon IVS Chat live output was missing the self-message or unsafe: bytes=%d err=%v", len(output), err)
+	}
+	for _, secret := range []string{os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"), os.Getenv("AWS_SESSION_TOKEN")} {
+		if secret != "" && bytes.Contains(output, []byte(secret)) {
+			t.Fatal("Amazon IVS Chat live output leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAWS && events[index].Mode == ModeMutate && events[index].Operation == "ClientChat" && events[index].AuthScheme == authSchemeAWSIVSChatWS && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Amazon IVS Chat mutation audit event: %#v", events)
+	}
+	t.Logf("provider=aws service=ivschat operation=ClientChat outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
 }
 
 func runLiveAWSECRRegistryRead(t *testing.T, public bool) {
