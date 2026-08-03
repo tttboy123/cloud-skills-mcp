@@ -39,6 +39,14 @@ caller credentials and unsupported chunked PATCH uploads fail before ADC.
 Atomic response-file, request-ID, token-containment, protocol-smoke, Skill
 documentation and a dedicated live ListTags gate are included. Live acceptance
 remains pending operator ADC and an existing readable repository.
+Implementation commit `61af7ea2d5dfa0d8147db3ed7a53141af4acb15c`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck and
+four-platform release verification in
+[CI run 30834332364](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30834332364).
+Fresh local module verification, formatting, vet, race coverage (80.2% total),
+build, protocol/install smoke, shell syntax, all six Skill validators,
+Actionlint, govulncheck, four-platform archives, and a ten-second Registry
+invocation fuzz run (186,275 executions) also passed.
 
 Amazon ECR private and public Docker/OCI Registry HTTP now uses
 `auth_scheme=ecr` and only the AWS SDK credential chain. The gateway derives
