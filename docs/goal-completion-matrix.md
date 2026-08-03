@@ -417,6 +417,29 @@ protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
 govulncheck, four-platform archives, and a ten-second MQTT 5 packet/property
 fuzz run (17,808 executions) also passed.
 
+AWS IoT Core now has direct SigV4-presigned WSS clients for both MQTT 3.1.1
+and MQTT 5.0. The existing read-only subscriber remains available, while the
+new mutation-gated client adds bounded QoS 0/1 publish, subscribe and
+unsubscribe, PUBACK handling, retained messages, Last Will, clean and
+persistent sessions, offline-queue draining, and the broker-supported MQTT 5
+application/session properties. It validates negotiated broker capabilities
+and every version-specific reason code, applies documented publish and retained
+message pacing, requires atomic mode-0600 output whenever messages may arrive,
+and keeps IAM credentials and the SigV4 query signature internal. AWS IoT Core
+does not support MQTT QoS 2, so QoS 2 and other broker-unsupported MQTT 5
+features fail closed rather than being advertised. The dedicated live gate
+performs a QoS 1 self-publish through a new MQTT 5 persistent session and then
+expires that session cleanly; real broker acceptance remains pending an
+operator IAM identity, data endpoint, disposable topic, and unique client ID.
+Implementation commit `b462f43efd4ae922b9a9a13e1ef7c0c2b2d55d70`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck, and
+four-platform release verification in
+[CI run 30853251779](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30853251779).
+Fresh local module verification, formatting, vet, race coverage (80.1% total
+and cloud package), build, protocol/install smoke, shell syntax, all six Skill
+validators, Actionlint, govulncheck, four-platform archives, and a ten-second
+MQTT 5 packet/property fuzz run (88,706 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
@@ -554,6 +577,24 @@ go test ./internal/mcp/cloud -run TestLiveBaiduIoTCoreHTTPPubMutation -v
 The test enables mutation approval only inside its runtime, validates the
 documented `{"message":"ok"}` response and succeeded audit event, and does not
 print payload or credentials.
+
+For AWS IoT Core MQTT, bind an IAM identity authorized for the disposable test
+topic, provide the account-specific data endpoint and region, and use a unique
+client ID. The mutation gate creates a persistent MQTT 5 session, subscribes,
+self-publishes one QoS 1 message, validates the received payload, and expires
+the session without leaving a retained message:
+
+```bash
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT=1 \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_ENDPOINT=wss://<account-endpoint>-ats.iot.<region>.amazonaws.com/mqtt \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_REGION=<region> \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_TOPIC='cloud-skills/live-test' \
+CLOUD_SKILLS_LIVE_AWS_IOT_MQTT_CLIENT_ID='cloud-skills-live-unique' \
+go test ./internal/mcp/cloud -run TestLiveAWSIoTMQTTMutation -v
+```
+
+The test enables mutation approval only inside its runtime and does not print
+the payload, presigned URL, credentials, or session token.
 
 For private ECR Registry HTTP, provide the exact registry origin and an
 existing pullable repository. The test resolves the region from the endpoint,
