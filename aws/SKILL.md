@@ -1,11 +1,11 @@
 ---
 name: aws-cloud
-description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, Amazon Transcribe WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, Transcribe, IoT, AppSync, or any documented AWS API.
+description: Operate or inspect any AWS resource through direct SigV4 or SigV4a HTTPS, finite raw-frame SigV4 WSS, Amazon Transcribe WSS, finite AWS IoT MQTT-over-WSS subscriptions, or IAM-authenticated AppSync Events and GraphQL subscriptions in cloud-skills-mcp. Use for AWS, EC2, S3, IAM, Lambda, RDS, EKS, CloudFormation, Cloud Control, AgentCore, Managed Blockchain, Transcribe, IoT, AppSync, or any documented AWS API.
 ---
 
 # AWS Cloud
 
-Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, connects supported Transcribe, IoT, and AppSync WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
+Use the unified MCP server for documented AWS HTTP APIs. The gateway validates the exact official endpoint, signs requests in-process with AWS SigV4 or SigV4a, connects bounded raw SigV4, Transcribe, IoT, and AppSync WebSocket streams internally, and never executes AWS CLI or returns a presigned URL.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use the unified MCP server for documented AWS HTTP APIs. The gateway validates t
 
 ## MCP arguments
 
-- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1 subscription, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
+- `auth_scheme`: `sigv4` (default), `sigv4a` for multi-region signing, `sigv4-ws` for a finite raw-frame IAM WebSocket, `transcribe-ws` for Transcribe streaming, `iot-mqtt-ws` for a finite IoT MQTT 3.1.1 subscription, `appsync-event-ws` for a finite IAM AppSync Events channel subscription, or `appsync-graphql-ws` for a finite IAM AppSync GraphQL subscription.
 - `service`: SigV4 signing service, such as `ec2`, `s3`, `iam`, or `cloudcontrolapi`.
 - `operation`: documented action name used for read/write classification.
 - `region`: required SigV4 signing region; use the documented pseudo-region for global services.
@@ -40,6 +40,10 @@ Example signed checksum upload: `aws_api_mutate(auth_scheme="sigv4", payload_mod
 For an official multi-region S3 endpoint, use either streaming example with `auth_scheme="sigv4a"`, its exact multi-region URL, and the documented `region_set` instead of `region`.
 
 Example finite event stream: `aws_api_mutate(auth_scheme="sigv4", payload_mode="aws-eventstream", service="transcribe", operation="StartStreamTranscription", region="us-east-1", method="POST", url="https://transcribestreaming.us-east-1.amazonaws.com/stream-transcription", body_file="/approved/streams/audio.events", response_file="/approved/streams/transcript.events", force=true)`.
+
+Finite raw-frame IAM WebSockets use `auth_scheme="sigv4-ws"`. The gateway signs the exact WSS host/path/query and all allowed caller headers in-process, sends at most 256 client frames of type `json`, `text`, or `binary` (`data_base64`), and atomically records at most 256 server frames or 300 seconds as NDJSON. AgentCore targets additionally enforce the official 32 KiB per-frame limit. Every generic signed WebSocket is forced through `aws_api_mutate` because arbitrary bidirectional frames can have side effects even when an operation label looks read-only. Example AgentCore invocation: `aws_api_mutate(auth_scheme="sigv4-ws", service="bedrock-agentcore", operation="InvokeAgentRuntimeWithWebSocketStream", region="us-west-2", method="GET", url="wss://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/<percent-encoded-runtime-arn>/ws?qualifier=prod", headers={"X-Amzn-Bedrock-AgentCore-Runtime-Session-Id":"session-123456789012345678901234567890"}, body={"messages":[{"type":"json","data":{"inputText":"hello"}}],"max_messages":10,"timeout_seconds":30}, response_file="<approved-root>/agentcore.ndjson", force=true)`.
+
+Use this generic mode only when the provider protocol uses ordinary WebSocket text/binary frames after the SigV4 Upgrade, such as an AgentCore runtime or Managed Blockchain JSON-RPC node. It does not replace `transcribe-ws`, `iot-mqtt-ws`, either AppSync mode, or a protocol that requires per-frame AWS EventStream signatures. Authorization, STS token, and the signed handshake never enter MCP output; caller-controlled credential/query, WebSocket control headers, redirects, and unbounded sessions are rejected.
 
 Example realtime transcription: `aws_api_read(auth_scheme="transcribe-ws", service="transcribe", operation="StartStreamTranscriptionWebSocket", region="us-west-2", method="GET", url="wss://transcribestreaming.us-west-2.amazonaws.com:8443/stream-transcription-websocket", parameters={"language-code":"en-US","media-encoding":"pcm","sample-rate":16000,"session-id":"session-1"}, body_file="/approved/audio/input.pcm", response_file="/approved/results/transcript.ndjson")`. The adapter creates the five-minute SigV4 handshake internally, signs every audio event in a chained outer EventStream frame, sends an empty signed terminal event, validates both CRC layers in provider responses, and atomically publishes only bounded JSON event payloads. PCM defaults to 100 ms chunks; use `stream_chunk_bytes` and `stream_interval_ms` only when the documented media format requires another cadence.
 

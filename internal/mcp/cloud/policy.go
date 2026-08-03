@@ -78,6 +78,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 		}
 	case ProviderAWS, ProviderAlicloud, ProviderTencent:
 		action := strings.ToLower(strings.TrimSpace(request.Operation))
+		if provider == ProviderAWS && normalizedAuthScheme(request.AuthScheme, authSchemeAWSSigV4) == authSchemeAWSSigV4WS {
+			return false
+		}
 		if provider == ProviderAlicloud && normalizedAuthScheme(request.AuthScheme, authSchemeAlibabaACS3) == authSchemeAlibabaNLSWS {
 			switch action {
 			case "speechtranscriber", "speechrecognizer", "flowingspeechsynthesizer", "speechsynthesizer", "speechlongsynthesizer":
@@ -152,6 +155,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	gcpScheme := normalizedAuthScheme(request.AuthScheme, "")
 	azureScheme := normalizedAuthScheme(request.AuthScheme, "")
 	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
+	awsSigV4WebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4WS
 	awsIoTMQTTWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSIoTMQTTWS
 	awsAppSyncEventWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSAppSyncEventWS
 	awsAppSyncGraphQLWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSAppSyncGraphQLWS
@@ -160,7 +164,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
-	if awsWebSocketScheme {
+	if awsSigV4WebSocketScheme {
+		if err := validateAWSSigV4WebSocketInvocation(request, allowedEndpointHosts); err != nil {
+			return err
+		}
+	} else if awsWebSocketScheme {
 		if err := validateAWSTranscribeWebSocketInvocation(request); err != nil {
 			return err
 		}
@@ -257,10 +265,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("invalid operation %q", request.Operation)
 		}
 		scheme := awsScheme
-		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
-			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
+		if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS {
+			return fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, sigv4-ws, transcribe-ws, iot-mqtt-ws, appsync-event-ws, or appsync-graphql-ws")
 		}
-		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS) && !identifierPattern.MatchString(request.Region) {
+		if (scheme == authSchemeAWSSigV4 || scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS) && !identifierPattern.MatchString(request.Region) {
 			return fmt.Errorf("AWS SigV4 requires a valid region")
 		}
 		if scheme == authSchemeAWSSigV4a {
