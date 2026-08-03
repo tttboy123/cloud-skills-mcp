@@ -542,8 +542,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Tencent Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS {
-			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, or cos")
+		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS && scheme != authSchemeTencentCLS {
+			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, cos, or cls")
 		}
 		if (scheme == authSchemeTencentTC3 || scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256) && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Tencent Cloud API signing requires a valid api_version")
@@ -577,6 +577,15 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				if isTencentV1ControlledParameter(name) {
 					return fmt.Errorf("caller-supplied Tencent Cloud API v1 signing parameter %q is forbidden", name)
 				}
+			}
+		}
+		if scheme == authSchemeTencentCLS {
+			parsed, err := url.Parse(request.URL)
+			if err != nil {
+				return fmt.Errorf("Tencent Cloud CLS requires a valid URL")
+			}
+			if err := validateTencentCLSTarget(request.Service, parsed); err != nil {
+				return err
 			}
 		}
 		if scheme == authSchemeTencentASRWS {
@@ -809,11 +818,32 @@ func isProtectedHeader(name string) bool {
 		"x-ots-date", "x-ots-apiversion", "x-ots-accesskeyid", "x-ots-contentmd5", "x-ots-instancename",
 		"x-ots-ststoken", "x-ots-signature", "x-ots-signaturev4", "x-ots-signregion", "x-ots-signdate",
 		"x-tc-action", "x-tc-version", "x-tc-timestamp", "x-tc-region", "x-tc-token",
-		"x-cos-security-token", "x-bce-date", "x-bce-security-token", "x-goog-user-project":
+		"x-cos-security-token", "x-cls-token", "x-bce-date", "x-bce-security-token", "x-goog-user-project":
 		return true
 	default:
 		return false
 	}
+}
+
+func validateTencentCLSTarget(service string, target *url.URL) error {
+	if !strings.EqualFold(strings.TrimSpace(service), "cls") {
+		return fmt.Errorf("Tencent Cloud CLS requires service cls")
+	}
+	if target == nil || !strings.EqualFold(target.Scheme, "https") {
+		return fmt.Errorf("Tencent Cloud CLS requires an HTTPS endpoint")
+	}
+	host := strings.ToLower(strings.TrimSuffix(target.Hostname(), "."))
+	region := ""
+	for _, suffix := range []string{".cls.tencentcs.com", ".cls.tencentyun.com"} {
+		if strings.HasSuffix(host, suffix) {
+			region = strings.TrimSuffix(host, suffix)
+			break
+		}
+	}
+	if region == "" || strings.Contains(region, ".") || !endpointLabelPattern.MatchString(region) {
+		return fmt.Errorf("Tencent Cloud CLS requires an exact regional cls.tencentcs.com or cls.tencentyun.com endpoint")
+	}
+	return nil
 }
 
 func parseAWSRegionSet(value string) ([]string, error) {
@@ -1036,7 +1066,9 @@ func validateRESTTargetWithEndpointHosts(provider Provider, method, rawURL strin
 		allowed = host == "tencentcloudapi.com" || strings.HasSuffix(host, ".tencentcloudapi.com") ||
 			host == "myqcloud.com" || strings.HasSuffix(host, ".myqcloud.com") ||
 			host == "tencentcloud.com" || strings.HasSuffix(host, ".tencentcloud.com") ||
-			host == "qcloud.com" || strings.HasSuffix(host, ".qcloud.com")
+			host == "qcloud.com" || strings.HasSuffix(host, ".qcloud.com") ||
+			host == "tencentcs.com" || strings.HasSuffix(host, ".tencentcs.com") ||
+			host == "tencentyun.com" || strings.HasSuffix(host, ".tencentyun.com")
 	case ProviderBaidu:
 		allowed = host == "baidubce.com" || strings.HasSuffix(host, ".baidubce.com") ||
 			host == "bcebos.com" || strings.HasSuffix(host, ".bcebos.com")

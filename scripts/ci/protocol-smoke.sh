@@ -37,6 +37,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"voice-live-ws","service":"voice-live","operation":"VoiceLiveResponse","method":"GET","url":"wss://privatelink.services.ai.azure.com/voice-live/realtime","parameters":{"api-version":"2026-04-10","model":"gpt-realtime"},"body":{"type":"response.create"},"response_file":"/tmp/voice-live-private-link.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"webpubsub-mqtt-ws","service":"webpubsub","operation":"SubscribeMQTT","method":"GET","url":"wss://privatelink.webpubsub.azure.com/clients/mqtt/hubs/chat","body":{"client_id":"Observer123","subscriptions":[{"topic_filter":"room/temperature","qos":1}],"keep_alive_seconds":30,"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/webpubsub-private-link.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"alicloud_api_read","arguments":{"auth_scheme":"mq","service":"rocketmq","operation":"ConsumeMessages","method":"GET","url":"https://123456.mqrest.cn-hangzhou.aliyuncs.com/topics/orders/messages","parameters":{"consumer":"group-a","numOfMessages":1},"body":{"settlement":"release"},"response_file":"/tmp/rocketmq.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"tencent_api_read","arguments":{"auth_scheme":"cls","service":"cls","operation":"GetLogset","method":"GET","url":"https://nested.ap-beijing.cls.tencentcs.com/logset","parameters":{"logset_id":"example"}}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -83,7 +84,9 @@ jq -e -s '
     ($responses | map(select(.id == 22))[0].result.isError == true) and
     ($responses | map(select(.id == 22))[0].result.content[0].text | contains("resource.webpubsub.azure.com host")) and
     ($responses | map(select(.id == 23))[0].result.isError == true) and
-    ($responses | map(select(.id == 23))[0].result.content[0].text | contains("mutation approval path"))
+    ($responses | map(select(.id == 23))[0].result.content[0].text | contains("mutation approval path")) and
+    ($responses | map(select(.id == 24))[0].result.isError == true) and
+    ($responses | map(select(.id == 24))[0].result.content[0].text | contains("exact regional"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

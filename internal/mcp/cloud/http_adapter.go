@@ -67,6 +67,7 @@ const (
 	authSchemeTencentTTSStreamWS = "tts-stream-ws"
 	authSchemeTencentPodcastWS   = "podcast-ws"
 	authSchemeTencentCOS         = "cos"
+	authSchemeTencentCLS         = "cls"
 	defaultHTTPClientTimeout     = 60 * time.Second
 )
 
@@ -664,7 +665,7 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+virtual-number-ws+soe-ws+speech-translate-ws+voice-convert-ws+mps-ws+mps-tts-ws+tts-ws+tts-stream-ws+podcast-ws+cos",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+virtual-number-ws+soe-ws+speech-translate-ws+voice-convert-ws+mps-ws+mps-tts-ws+tts-ws+tts-stream-ws+podcast-ws+cos+cls",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -687,13 +688,14 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"streaming_tts_websocket":    "https://cloud.tencent.com/document/product/1073/108595",
 		"podcast_websocket":          "https://cloud.tencent.com/document/api/1073/124700",
 		"cos_signature":              "https://intl.cloud.tencent.com/document/product/436/7778",
+		"cls_signature":              "https://cloud.tencent.com/document/product/614/12445",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, or cos")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS && scheme != authSchemeTencentCLS {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, cos, or cls")
 	}
 	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentVirtualWS || scheme == authSchemeTencentSOEWS || scheme == authSchemeTencentTranslateWS || scheme == authSchemeTencentVoiceWS || scheme == authSchemeTencentMPSWS || scheme == authSchemeTencentMPSTTSWS || scheme == authSchemeTencentTTSWS || scheme == authSchemeTencentTTSStreamWS || scheme == authSchemeTencentPodcastWS {
 		if scheme == authSchemeTencentASRWS {
@@ -781,6 +783,11 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 	if err := validateRESTTargetWithEndpointHosts(ProviderTencent, request.Method, request.URL.String(), adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
 	}
+	if scheme == authSchemeTencentCLS {
+		if err := validateTencentCLSTarget(invocation.Service, request.URL); err != nil {
+			return InvocationResult{}, err
+		}
+	}
 	credentials, err := adapter.config.Credentials.Credentials(ctx)
 	if err != nil {
 		return InvocationResult{}, err
@@ -803,6 +810,10 @@ func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invoca
 		}
 	case authSchemeTencentCOS:
 		if err := signTencentCOS(request, credentials, adapter.config.Now().UTC()); err != nil {
+			return InvocationResult{}, err
+		}
+	case authSchemeTencentCLS:
+		if err := signTencentCLS(request, credentials, adapter.config.Now().UTC()); err != nil {
 			return InvocationResult{}, err
 		}
 	}
@@ -2270,12 +2281,20 @@ func cloneStringMap(values map[string]string) map[string]string {
 }
 
 func signTencentCOS(request *http.Request, credentials TencentCredentials, now time.Time) error {
+	request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
+	return signTencentQSign(request, credentials, now, "X-Cos-Security-Token")
+}
+
+func signTencentCLS(request *http.Request, credentials TencentCredentials, now time.Time) error {
+	return signTencentQSign(request, credentials, now, "X-Cls-Token")
+}
+
+func signTencentQSign(request *http.Request, credentials TencentCredentials, now time.Time, tokenHeader string) error {
 	start := now.UTC().Unix()
 	end := start + 900
 	keyTime := fmt.Sprintf("%d;%d", start, end)
-	request.Header.Set("Date", now.UTC().Format(http.TimeFormat))
 	if credentials.Token != "" {
-		request.Header.Set("X-Cos-Security-Token", credentials.Token)
+		request.Header.Set(tokenHeader, credentials.Token)
 	}
 	canonicalHeaderValue, headerList := canonicalCOSHeaders(request)
 	queryValue, queryList := canonicalCOSQuery(request.URL.Query())
