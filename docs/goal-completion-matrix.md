@@ -305,6 +305,28 @@ govulncheck, four-platform archives, and a five-second endpoint fuzz run
 (64,633 executions) also passed. Real CLS authorization remains pending the
 operator live gate and is not inferred from hermetic signing tests.
 
+Tencent Cloud TCR Enterprise Registry now has a distinct
+`auth_scheme=tcr-registry` direct-HTTP path. It validates exact default public,
+VPC, or operator-pinned custom endpoints plus Registry methods and repository
+paths before resolving CAM credentials; internally sends only the fixed TC3
+`CreateInstanceToken(TokenType=temp)` request; rejects long-term, expired, or
+malformed results; and contains the temporary username/JWT inside Registry
+Basic authorization. Version/catalog, manifests, blobs, tags, referrers,
+monolithic and chunked uploads, cross-repository mounts, fail-closed redirects,
+response-file handling, policy/schema exposure, Skills, official references,
+and a sanitized read-only ListTags live gate are included. Personal Edition is
+an explicit credential-bound mapping because its documented login requires a
+separately configured Registry username/password rather than CAM AKSK/IAM.
+Implementation commit `96de20136ef30d64b374b4df4a3edddfd58b98dc`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck, and
+four-platform release verification in
+[CI run 30839370163](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30839370163).
+Fresh local module verification, formatting, vet, race coverage (80.1%), build,
+protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
+govulncheck, four-platform archives, and a ten-second endpoint/path fuzz run
+(32,980 executions) also passed. Real TCR authorization remains pending the
+operator live gate and is not inferred from hermetic TC3/Registry tests.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
