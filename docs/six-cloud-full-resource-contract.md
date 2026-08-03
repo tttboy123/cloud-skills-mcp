@@ -45,7 +45,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Provider | Universal access mechanism | Credential boundary |
 |---|---|---|
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env |
-| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime WSS and Entra-backed Web PubSub JSON WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
+| Azure | Direct HTTPS with Entra Bearer Token and validated audience plus Azure OpenAI Realtime WSS and Entra-backed Web PubSub standard/reliable JSON and MQTT 3.1.1/5.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf gRPC over HTTP/2, and bounded Vertex/Gemini Live WSS against validated `googleapis.com` endpoints | ADC, service account, workload identity federation, impersonation, or metadata identity |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; NLS token is derived and cached internally |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
@@ -123,13 +123,18 @@ remain available through the guarded resource gateway.
   exact uint64 sequence acknowledgements, suppresses duplicates, and resends
   pending publisher messages for at most the documented one-minute recovery
   window. Sessions are mutation-only.
-- Azure Web PubSub MQTT uses a separate read-only, finite MQTT 3.1.1
-  subscription entrypoint. It accepts only exact topics and alphanumeric client
-  IDs, derives least-privilege join roles, mints a five-minute token with
-  `clientType=MQTT`, keeps it in the internal WSS Authorization header, and
-  implements CONNACK, SUBACK, QoS 0/1 PUBLISH/PUBACK, keepalive, DISCONNECT,
-  and atomic Base64 NDJSON output. MQTT 5 and the remaining MQTT feature
-  profiles stay explicit coverage gaps.
+- Azure Web PubSub MQTT has finite read-only `SubscribeMQTT` and mutation-only
+  `ClientMQTT` entrypoints for MQTT 3.1.1 and 5.0. It accepts exact topics and
+  alphanumeric client IDs, derives least-privilege join/send roles, mints a
+  five-minute token with `clientType=MQTT`, and keeps it in the internal WSS
+  Authorization header. The state machine covers publish/subscribe QoS 0/1/2,
+  duplicate-safe inbound QoS 2, persistent sessions up to Azure's documented
+  30-second recovery guarantee, Last Will, MQTT 5 message/session properties,
+  subscription identifiers, broker flow-control limits, keepalive, server and
+  client DISCONNECT, and atomic Base64 NDJSON. Azure-unsupported wildcard,
+  retained, topic-alias and shared-subscription features are rejected;
+  client-certificate and CONNECT username/password authentication are excluded
+  by the operator-IAM-only credential boundary.
 - Endpoint overrides from MCP input, authorization headers and credential
   management operations are rejected.
 - Alibaba NLS accepts only official public `nls-gateway` WSS endpoints and a

@@ -18,7 +18,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | 云 | 通用访问层 | 官方身份链 |
 |---|---|---|
 | AWS | 任意官方 endpoint 的 SigV4 HTTPS；多区域 API 的纯 Go SigV4a；有限原始帧 SigV4 WSS；Connect Health Medical Scribe、Transcribe 双层 EventStream、IoT MQTT、AppSync Events 与 AppSync GraphQL subscriptions 的受控 IAM WSS | AWS SDK credential chain：IAM Role、Web Identity、profile/SSO、AKSK/STS |
-| Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS + Web PubSub JSON WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
+| Azure | Azure Identity Bearer Token + ARM/Graph/数据面 HTTPS + OpenAI Realtime WSS + Web PubSub 标准/可靠 JSON 与 MQTT 3.1.1/5.0 WSS | 非 CLI 的 Service Principal、Workload Identity、Managed Identity |
 | Google Cloud | Google Auth ADC + `googleapis.com` REST / gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
@@ -204,11 +204,19 @@ Azure Web PubSub 使用 `auth_scheme=webpubsub-ws`。server 先用 Entra scope `
 
 要启用可靠模式，在同一 body 加入 `"protocol":"json-reliable"`，并为除 ping 外的 publisher 消息提供唯一正整数 `ackId`。Entra token、临时 client token、reconnection token 和 token API 响应都不会进入 MCP 结果或审计；caller 不能提供 access token、Authorization、recovery query、非官方 host/path 或无界会话。
 
-Azure Web PubSub MQTT 3.1.1 有单独的只读订阅入口 `auth_scheme=webpubsub-mqtt-ws`。server 自动从精确 topic 推导最小 `joinLeaveGroup` 权限，用 Entra 调 `clientType=MQTT` 的五分钟 token API，在内部 WSS Authorization header 中使用临时 token，并处理有限的 QoS 0/1 订阅、PUBACK、PINGREQ/PINGRESP 和 DISCONNECT；不接受 wildcard、retained、shared subscription、caller token 或 MQTT username/password：
+Azure Web PubSub MQTT 使用 `auth_scheme=webpubsub-mqtt-ws`，支持 MQTT 3.1.1（`protocol_version=4`，默认）和 MQTT 5.0（`protocol_version=5`）。只读入口 `SubscribeMQTT` 自动从 1–8 个精确 topic 推导最小 `joinLeaveGroup` 权限，支持 QoS 0/1/2、有限消息数、broker keepalive 和原子 Base64 NDJSON：
 
 ```json
-{"name":"azure_api_read","arguments":{"auth_scheme":"webpubsub-mqtt-ws","service":"webpubsub","operation":"SubscribeMQTT","method":"GET","url":"wss://<resource>.webpubsub.azure.com/clients/mqtt/hubs/<hub>","body":{"client_id":"Observer123","subscriptions":[{"topic_filter":"room/temperature","qos":1}],"keep_alive_seconds":30,"max_messages":32,"timeout_seconds":30},"response_file":"/approved/results/webpubsub-mqtt.ndjson"}}
+{"name":"azure_api_read","arguments":{"auth_scheme":"webpubsub-mqtt-ws","service":"webpubsub","operation":"SubscribeMQTT","method":"GET","url":"wss://<resource>.webpubsub.azure.com/clients/mqtt/hubs/<hub>","body":{"protocol_version":5,"client_id":"Observer123","subscriptions":[{"topic_filter":"room/temperature","qos":2}],"subscription_identifier":7,"keep_alive_seconds":30,"max_messages":32,"timeout_seconds":30},"response_file":"/approved/results/webpubsub-mqtt.ndjson"}}
 ```
+
+需要发布、持久会话或 Last Will 时，使用 mutation 入口 `ClientMQTT`。它可组合订阅与最多 8 条初始 Base64 publish，完成 QoS 1 PUBACK 和 QoS 2 PUBREC/PUBREL/PUBCOMP 双向状态机；MQTT 5 还支持 `session_expiry_seconds`（本服务恢复保证窗口内最多 30 秒）、subscription identifier、payload format/content type/message expiry、Will delay，以及 broker 的 Receive Maximum、Maximum Packet Size、Maximum QoS、Server Keep Alive 协商：
+
+```json
+{"name":"azure_api_mutate","arguments":{"auth_scheme":"webpubsub-mqtt-ws","service":"webpubsub","operation":"ClientMQTT","method":"GET","url":"wss://<resource>.webpubsub.azure.com/clients/mqtt/hubs/<hub>","body":{"protocol_version":5,"client_id":"Publisher123","clean_start":false,"session_expiry_seconds":30,"subscriptions":[{"topic_filter":"room/in","qos":2}],"publishes":[{"topic":"room/out","qos":2,"payload_base64":"aGVsbG8=","payload_format":1,"content_type":"text/plain","message_expiry_seconds":30}],"will":{"topic":"room/status","qos":1,"payload_base64":"b2ZmbGluZQ==","payload_format":1,"content_type":"text/plain","delay_seconds":1},"keep_alive_seconds":30,"max_messages":1,"timeout_seconds":30},"response_file":"/approved/results/webpubsub-mqtt-client.ndjson","force":true}}
+```
+
+Wildcard、retained、shared subscription 和 topic alias 是 Azure Web PubSub 本身未支持的 MQTT 特性。调用方 token、username/password 与客户端证书不作为 MCP 参数；server 只用 operator 配置的 Entra 身份生成五分钟 `clientType=MQTT` token，并将临时 token 保留在内部 WSS Authorization header。
 
 GCP 查询：
 
@@ -247,6 +255,8 @@ Alibaba Intelligent Speech Interaction 使用 `auth_scheme=nls-ws`。调用方�
 任务 ID、消息 ID、Start/Stop 命令和 Token 都由 server 生成；caller-supplied `token`、`X-NLS-Token`、AKSK 或 `CreateToken` 调用仍会被公共边界拒绝。
 
 同一内部 Token 也用于 `auth_scheme=nls-rest`：`ShortSentenceRecognition` 把有限音频作为 `body_file` POST 到官方 `/stream/v1/asr`；`SpeechSynthesisREST` 用 GET/query 或 POST/JSON 调用 `/stream/v1/tts` 并把音频原子写入 `response_file`。Token 只注入 `X-NLS-Token` header，不进入 URL 或 MCP 输出。
+
+Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；只读订阅和双向 mutation 共用内部 Entra client-token 流程。
 
 Azure OpenAI Realtime 与 Web PubSub JSON WSS 分别使用 `auth_scheme=realtime-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
 

@@ -47,8 +47,8 @@ func TestAzureWebPubSubMQTTBoundaryAllowsOnlyFiniteReadSubscriptions(t *testing.
 		"wildcard": func(value *Invocation) {
 			value.Body.(map[string]any)["subscriptions"] = []any{map[string]any{"topic_filter": "room/#", "qos": 1}}
 		},
-		"qos2": func(value *Invocation) {
-			value.Body.(map[string]any)["subscriptions"] = []any{map[string]any{"topic_filter": "room/temperature", "qos": 2}}
+		"qos3": func(value *Invocation) {
+			value.Body.(map[string]any)["subscriptions"] = []any{map[string]any{"topic_filter": "room/temperature", "qos": 3}}
 		},
 		"credential": func(value *Invocation) { value.Body.(map[string]any)["password"] = "caller" },
 		"body file":  func(value *Invocation) { value.BodyFile = filepath.Join(t.TempDir(), "input") },
@@ -217,6 +217,12 @@ func TestAzureWebPubSubMQTTPacketValidationRejectsMalformedInput(t *testing.T) {
 	}
 	if _, err := encodeAzureWebPubSubMQTTPacket(0x30, make([]byte, azureWebPubSubMQTTMaxPacketBytes+1)); err == nil {
 		t.Fatal("oversized packet encoded")
+	}
+	if _, err := encodeAzureWebPubSubMQTTPacket(0x30, make([]byte, azureWebPubSubMQTTMaxPacketBytes)); err == nil {
+		t.Fatal("packet overhead escaped whole-packet limit")
+	}
+	if _, _, _, err := decodeAzureWebPubSubMQTTPacket([]byte{0x30, 0x80, 0x00}); err == nil {
+		t.Fatal("non-minimal remaining length accepted")
 	}
 	for _, packet := range []azureWebPubSubMQTTPacket{
 		{Header: 0x20, Body: []byte{0x00, 0x05}},
