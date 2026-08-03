@@ -49,6 +49,7 @@ trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"iot-mqtt-ws","service":"iotdevicegateway","operation":"SubscribeMQTT","region":"us-west-2","method":"GET","url":"wss://account-ats.iot.us-west-2.amazonaws.com.attacker.example/mqtt","body":{"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/#","qos":1}],"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/aws-iot.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"ivs-chat-ws","service":"ivschat","operation":"SubscribeChat","region":"us-west-2","method":"GET","url":"wss://edge.ivschat.us-west-2.amazonaws.com.attacker.example","body":{"room_identifier":"arn:aws:ivschat:us-west-2:123456789012:room/test-room","user_id":"observer","max_messages":1,"timeout_seconds":5},"response_file":"/tmp/aws-ivs-chat.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"aws_api_mutate","arguments":{"auth_scheme":"lex-v2-conversation","service":"lex","operation":"StartConversation","region":"us-west-2","method":"POST","url":"https://runtime-v2-lex.us-west-2.amazonaws.com.attacker.example","body":{"bot_id":"ABCDEFGHIJ","bot_alias_id":"alias-1","locale_id":"en_US","session_id":"session-1","texts":[{"text":"hello","event_id":"lex-evt-1"}],"max_events":1,"timeout_seconds":5},"response_file":"/tmp/aws-lex.ndjson","force":true}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"signalr-ws","service":"signalr","operation":"Subscribe","method":"GET","url":"wss://demo.service.signalr.net.attacker.example/client/?hub=chat","body":{"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/signalr.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -117,7 +118,9 @@ jq -e -s '
     ($responses | map(select(.id == 33))[0].result.isError == true) and
     ($responses | map(select(.id == 33))[0].result.content[0].text | contains("official region endpoint")) and
     ($responses | map(select(.id == 34))[0].result.isError == true) and
-    ($responses | map(select(.id == 34))[0].result.content[0].text | contains("official"))
+    ($responses | map(select(.id == 34))[0].result.content[0].text | contains("official")) and
+    ($responses | map(select(.id == 35))[0].result.isError == true) and
+    ($responses | map(select(.id == 35))[0].result.content[0].text | contains("resource.service.signalr.net host"))
 ' "${RESPONSES}" >/dev/null
 
 printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"baiducloud_api_mutate","arguments":{"auth_scheme":"iotcore-http-pub","service":"iotcore","operation":"PublishHTTP","method":"POST","url":"https://aop098js.iot.gz.baidubce.com.attacker.example/pub","body":{"topic":"commands/device-1","qos":1,"payload_base64":"dHVybi1vbg=="},"force":true}}}' |

@@ -2393,6 +2393,7 @@ func TestTencentMPSAudioFrameUsesDocumentedNetworkByteOrder(t *testing.T) {
 type fakeTencentWebSocketConnection struct {
 	reads     [][]byte
 	readTypes []tencentWebSocketMessageType
+	readErr   error
 	writes    []struct {
 		messageType tencentWebSocketMessageType
 		data        []byte
@@ -2401,6 +2402,9 @@ type fakeTencentWebSocketConnection struct {
 
 func (connection *fakeTencentWebSocketConnection) Read(context.Context) (tencentWebSocketMessageType, []byte, error) {
 	if len(connection.reads) == 0 {
+		if connection.readErr != nil {
+			return 0, nil, connection.readErr
+		}
 		return 0, nil, io.EOF
 	}
 	data := connection.reads[0]

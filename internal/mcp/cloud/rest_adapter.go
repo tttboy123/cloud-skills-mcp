@@ -31,6 +31,7 @@ type AzureRESTConfig struct {
 	HTTP                                   HTTPDoer
 	WebSocketDial                          azureRealtimeWebSocketDial
 	WebPubSubWebSocketDial                 azureWebPubSubWebSocketDial
+	SignalRWebSocketDial                   azureWebPubSubWebSocketDial
 	ReliableWebPubSubWebSocketDial         azureWebPubSubWebSocketDial
 	ProtobufWebPubSubWebSocketDial         azureWebPubSubWebSocketDial
 	ReliableProtobufWebPubSubWebSocketDial azureWebPubSubWebSocketDial
@@ -66,6 +67,9 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 	}
 	if config.WebPubSubWebSocketDial == nil {
 		config.WebPubSubWebSocketDial = defaultAzureWebPubSubWebSocketDial
+	}
+	if config.SignalRWebSocketDial == nil {
+		config.SignalRWebSocketDial = defaultAzureSignalRWebSocketDial
 	}
 	if config.ReliableWebPubSubWebSocketDial == nil {
 		config.ReliableWebPubSubWebSocketDial = defaultAzureReliableWebPubSubWebSocketDial
@@ -104,7 +108,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+acr-oauth2+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+acr-oauth2+realtime-ws+voice-live-ws+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1+signalr-ws",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -123,6 +127,9 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"webpubsub_protocol":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
 		"webpubsub_reliable":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
 		"webpubsub_mqtt":      "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-connect-mqtt-websocket-client",
+		"signalr_auth":        "https://learn.microsoft.com/en-us/azure/azure-signalr/signalr-howto-authorize-managed-identity",
+		"signalr_negotiation": "https://learn.microsoft.com/en-us/azure/azure-signalr/signalr-concept-client-negotiation",
+		"signalr_protocol":    "https://github.com/dotnet/aspnetcore/blob/main/src/SignalR/docs/specs/HubProtocol.md",
 		"eventgrid_mqtt":      "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-support",
 		"eventgrid_mqtt_auth": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-client-microsoft-entra-token-and-rbac",
 		"messaging_amqp":      "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-amqp-protocol-guide",
@@ -145,6 +152,9 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureWebPubSubWS {
 		return invokeAzureWebPubSub(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureSignalRWS {
+		return invokeAzureSignalR(ctx, adapter, request)
+	}
 	if scheme == authSchemeAzureWebPubSubMQTTWS {
 		return invokeAzureWebPubSubMQTT(ctx, adapter, request)
 	}
@@ -158,7 +168,7 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 		return invokeAzureEventHubsAMQP(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, webpubsub-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, webpubsub-ws, signalr-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {

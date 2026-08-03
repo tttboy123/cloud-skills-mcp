@@ -829,6 +829,66 @@ func TestLiveAzureACRReadOnly(t *testing.T) {
 	t.Logf("provider=azure operation=ListTags scope=%s outcome=succeeded response_bytes=%d request_id=%q", succeeded.ACRScope, len(text), succeeded.RequestID)
 }
 
+func TestLiveAzureSignalRSubscribeReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AZURE_SIGNALR") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AZURE_SIGNALR=1 for a real Entra-backed SignalR Service WSS subscribe probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Azure SignalR live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_AZURE_SIGNALR_ENDPOINT"), "/")
+	if _, _, err := parseAzureSignalRTarget(endpoint); err != nil {
+		t.Fatalf("invalid Azure SignalR live endpoint: %v", err)
+	}
+	runtime := DefaultRuntime()
+	root := t.TempDir()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	responseFile := filepath.Join(root, "signalr-subscribe.ndjson")
+	result := callCloudTool(t, c, "azure_api_read", map[string]any{
+		"auth_scheme": "signalr-ws", "service": "signalr", "operation": "Subscribe",
+		"method": "GET", "url": endpoint, "response_file": responseFile,
+		"body": map[string]any{"max_messages": 1, "timeout_seconds": 10},
+	})
+	if result.IsError {
+		t.Fatalf("Azure SignalR live subscribe failed: %s", cloudToolText(t, result))
+	}
+	output, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{os.Getenv("AZURE_CLIENT_SECRET"), os.Getenv("AZURE_ACCESS_TOKEN")} {
+		if secret != "" && bytes.Contains(output, []byte(secret)) {
+			t.Fatal("Azure SignalR live output leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAzure && events[index].Mode == ModeRead && events[index].Operation == "Subscribe" && events[index].AuthScheme == authSchemeAzureSignalRWS && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Azure SignalR read audit event: %#v", events)
+	}
+	t.Logf("provider=azure service=signalr operation=Subscribe outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
+}
+
 func TestLiveAWSECRReadOnly(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_ECR") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_AWS_ECR=1 for a real private ECR Registry token and ListTags probe")
