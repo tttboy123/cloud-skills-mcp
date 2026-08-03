@@ -76,6 +76,7 @@ type Invocation struct {
 	Headers                map[string]string
 	Body                   any
 	BodyFile               string
+	ImageFile              string
 	ProtobufDescriptorFile string
 	ResponseFile           string
 	StreamChunkBytes       int

@@ -188,8 +188,10 @@ remain available through the guarded resource gateway.
   forces control-plane `config.audiocodec` to match internal WSS `ac`, and
   constructs Opus `ptime`/`plen` only from a validated bounded packet plan. Its
   pre/post-audio command arrays parse only documented static client commands
-  and reject arbitrary/server-only/license/image prefixes, embedded credential
-  material, and uncorrelated Function Call results. The direct AK/SK query
+  and reject arbitrary/server-only/license/raw-image prefixes, embedded credential
+  material, and uncorrelated Function Call results. A separate `image_file`
+  input is consumed exactly once only after the provider's upload event, using
+  the official bounded chunk protocol under a serialized writer. The direct AK/SK query
   connection is forbidden. Every path after create attempts stop, and output
   is published only after a successful terminal event and stop.
 - New official endpoint exceptions for any provider are operator policy,

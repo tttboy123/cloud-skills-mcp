@@ -633,6 +633,24 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("body_file exceeds %d bytes", maxRequestFileBytes)
 		}
 	}
+	if request.ImageFile != "" {
+		if !baiduRTCAgentWebSocketScheme {
+			return fmt.Errorf("image_file is supported only by Baidu RTC AI Agent")
+		}
+		if !pathAllowed(request.ImageFile, allowedFileRoots) {
+			return fmt.Errorf("image_file is outside CLOUD_SKILLS_ALLOWED_FILE_ROOTS")
+		}
+		info, err := os.Stat(request.ImageFile)
+		if err != nil {
+			return fmt.Errorf("inspect image_file: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 {
+			return fmt.Errorf("image_file must be a non-empty regular file")
+		}
+		if info.Size() > maxRequestFileBytes {
+			return fmt.Errorf("image_file exceeds %d bytes", maxRequestFileBytes)
+		}
+	}
 	if request.ProtobufDescriptorFile != "" {
 		if !gcpGRPCScheme || payloadMode != gcpGRPCPayloadModeProtoJSON {
 			return fmt.Errorf("protobuf_descriptor_file is supported only by Google Cloud grpc protobuf-json")

@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -29,11 +31,13 @@ const (
 	baiduRTCDefaultPacketMS   = 20
 	baiduRTCMaxPacketMS       = 200
 	baiduRTCMaxPacketCount    = 4096
+	baiduRTCImageChunkBytes   = 16 * 1024
 )
 
 var (
 	baiduRTCInstanceIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 	baiduRTCTrackIDPattern    = regexp.MustCompile(`^[0-9]{1,64}$`)
+	baiduRTCImageNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`)
 )
 
 type baiduRTCAgentPlan struct {
@@ -48,6 +52,7 @@ type baiduRTCAgentPlan struct {
 	UserID             string
 	Messages           []string
 	FinalMessages      []string
+	ImageMode          string
 	MaxMessages        int
 	Timeout            time.Duration
 	TerminalEvent      string
@@ -100,8 +105,15 @@ func validateBaiduRTCAgentWebSocketInvocation(invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	if len(plan.Messages) == 0 && len(plan.FinalMessages) == 0 && invocation.BodyFile == "" {
-		return fmt.Errorf("Baidu RTC AI Agent requires at least one client command or body_file audio stream")
+	if len(plan.Messages) == 0 && len(plan.FinalMessages) == 0 && invocation.BodyFile == "" && invocation.ImageFile == "" {
+		return fmt.Errorf("Baidu RTC AI Agent requires at least one client command, body_file audio stream, or event-correlated image_file")
+	}
+	if invocation.ImageFile != "" {
+		if err := validateBaiduRTCImageFile(invocation.ImageFile); err != nil {
+			return err
+		}
+	} else if plan.ImageMode != "" {
+		return fmt.Errorf("Baidu RTC AI Agent image_mode requires image_file")
 	}
 	if _, err := buildBaiduRTCAudioPlan(plan, invocation); err != nil {
 		return err
@@ -204,6 +216,7 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		UserID             string         `json:"user_id"`
 		Messages           []string       `json:"messages"`
 		FinalMessages      []string       `json:"final_messages"`
+		ImageMode          string         `json:"image_mode"`
 		MaxMessages        int            `json:"max_messages"`
 		Timeout            int            `json:"timeout_seconds"`
 		TerminalEvent      string         `json:"terminal_event"`
@@ -268,6 +281,9 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 	if len(raw.Messages)+len(raw.FinalMessages) > 64 {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent accepts at most 64 client commands")
 	}
+	if raw.ImageMode != "" && raw.ImageMode != "image_generate" {
+		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent image_mode must be image_generate or omitted")
+	}
 	for _, message := range append(append([]string(nil), raw.Messages...), raw.FinalMessages...) {
 		if err := validateBaiduRTCClientMessage(message); err != nil {
 			return baiduRTCAgentPlan{}, err
@@ -286,7 +302,7 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		AppID: raw.AppID, InstanceType: raw.InstanceType, Config: raw.Config,
 		AudioCodec: raw.AudioCodec, OpusPacketTimeMS: raw.OpusPacketTimeMS,
 		OpusPacketLengths: raw.OpusPacketLengths, OpusPacketMaxBytes: raw.OpusPacketMaxBytes,
-		DeviceID: raw.DeviceID, UserID: raw.UserID, Messages: raw.Messages, FinalMessages: raw.FinalMessages,
+		DeviceID: raw.DeviceID, UserID: raw.UserID, Messages: raw.Messages, FinalMessages: raw.FinalMessages, ImageMode: raw.ImageMode,
 		MaxMessages: raw.MaxMessages, Timeout: time.Duration(raw.Timeout) * time.Second,
 		TerminalEvent: raw.TerminalEvent,
 	}, nil
@@ -625,6 +641,42 @@ func validBaiduRTCIdentity(value string) bool {
 	return len(value) >= 1 && len(value) <= 256 && validBaiduRTCText(value)
 }
 
+func validateBaiduRTCImageFile(path string) error {
+	name := filepath.Base(path)
+	if name == "." || name == ".." || !baiduRTCImageNamePattern.MatchString(name) {
+		return fmt.Errorf("Baidu RTC image_file basename must contain only letters, digits, dot, underscore, or hyphen")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("inspect Baidu RTC image_file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxRequestFileBytes {
+		return fmt.Errorf("Baidu RTC image_file must be a non-empty regular file below %d bytes", maxRequestFileBytes)
+	}
+	return nil
+}
+
+type baiduRTCSerializedConnection struct {
+	cloudWebSocketConnection
+	writeMu sync.Mutex
+}
+
+func (connection *baiduRTCSerializedConnection) Write(ctx context.Context, messageType cloudWebSocketMessageType, data []byte) error {
+	connection.writeMu.Lock()
+	defer connection.writeMu.Unlock()
+	return connection.cloudWebSocketConnection.Write(ctx, messageType, data)
+}
+
+func (connection *baiduRTCSerializedConnection) exclusiveWrite(run func(cloudWebSocketConnection) error) error {
+	connection.writeMu.Lock()
+	defer connection.writeMu.Unlock()
+	return run(connection.cloudWebSocketConnection)
+}
+
+type baiduRTCExclusiveWriter interface {
+	exclusiveWrite(func(cloudWebSocketConnection) error) error
+}
+
 func defaultBaiduRTCWebSocketDial(ctx context.Context, target string) (cloudWebSocketConnection, error) {
 	client := &http.Client{
 		Transport:     http.DefaultTransport,
@@ -709,11 +761,12 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 		return InvocationResult{}, buildErr
 	}
 	dialCtx, cancelDial := context.WithTimeout(ctx, adapter.config.Timeout)
-	connection, dialErr := adapter.config.RTCWebSocketDial(dialCtx, webSocketURL)
+	rawConnection, dialErr := adapter.config.RTCWebSocketDial(dialCtx, webSocketURL)
 	cancelDial()
 	if dialErr != nil {
 		return InvocationResult{}, dialErr
 	}
+	connection := &baiduRTCSerializedConnection{cloudWebSocketConnection: rawConnection}
 	defer connection.Close()
 	sessionCtx, cancelSession := context.WithTimeout(ctx, plan.Timeout)
 	defer cancelSession()
@@ -727,7 +780,7 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 		sendResult <- sendBaiduRTCInputs(sessionCtx, adapter, connection, plan.Messages, plan.FinalMessages, invocation.BodyFile, audioPlan)
 	}()
 	go func() {
-		readResult <- readBaiduRTCResponses(sessionCtx, connection, sink, plan, secretValues)
+		readResult <- readBaiduRTCResponses(sessionCtx, connection, sink, plan, invocation.ImageFile, secretValues)
 	}()
 	var sendErr, readErr error
 	var primaryErr error
@@ -789,12 +842,13 @@ func sendBaiduRTCInputs(ctx context.Context, adapter *BaiduRESTAdapter, connecti
 	return nil
 }
 
-func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnection, sink *cloudWebSocketOutputSink, plan baiduRTCAgentPlan, secrets []string) error {
+func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnection, sink *cloudWebSocketOutputSink, plan baiduRTCAgentPlan, imageFile string, secrets []string) error {
 	type outputFrame struct {
 		Type       string `json:"type"`
 		Data       string `json:"data,omitempty"`
 		DataBase64 string `json:"data_base64,omitempty"`
 	}
+	imageUploaded := false
 	for count := 0; count < plan.MaxMessages; count++ {
 		messageType, data, err := connection.Read(ctx)
 		if err != nil {
@@ -809,11 +863,24 @@ func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnect
 		var output []byte
 		terminal := false
 		if messageType == cloudWebSocketMessageText {
-			if !validBaiduRTCText(string(data)) || strings.HasPrefix(string(data), "[E]:[LIC]:") {
+			event := string(data)
+			if !validBaiduRTCText(event) || strings.HasPrefix(event, "[E]:[LIC]:") {
 				return fmt.Errorf("Baidu RTC AI Agent returned an invalid protocol event")
 			}
-			output, _ = json.Marshal(outputFrame{Type: "text", Data: string(data)})
-			terminal = baiduRTCTerminal(plan.TerminalEvent, string(data), count+1, plan.MaxMessages)
+			if event == "[E]:[UPLOAD_IMAGE]" {
+				if imageFile == "" {
+					return fmt.Errorf("Baidu RTC AI Agent requested an image without image_file")
+				}
+				if imageUploaded {
+					return fmt.Errorf("Baidu RTC AI Agent requested image upload more than once")
+				}
+				if err := uploadBaiduRTCImage(ctx, connection, imageFile, plan.ImageMode); err != nil {
+					return err
+				}
+				imageUploaded = true
+			}
+			output, _ = json.Marshal(outputFrame{Type: "text", Data: event})
+			terminal = baiduRTCTerminal(plan.TerminalEvent, event, count+1, plan.MaxMessages)
 		} else if messageType == cloudWebSocketMessageBinary {
 			output, _ = json.Marshal(outputFrame{Type: "binary", DataBase64: base64.StdEncoding.EncodeToString(data)})
 			terminal = plan.TerminalEvent == "message_limit" && count+1 == plan.MaxMessages
@@ -824,6 +891,9 @@ func readBaiduRTCResponses(ctx context.Context, connection cloudWebSocketConnect
 			return err
 		}
 		if terminal {
+			if imageFile != "" && !imageUploaded {
+				return fmt.Errorf("Baidu RTC AI Agent reached terminal event before image upload")
+			}
 			return nil
 		}
 	}
@@ -915,6 +985,71 @@ func activateBaiduRTCLicense(ctx context.Context, connection cloudWebSocketConne
 		return fmt.Errorf("Baidu RTC AI Agent license activation failed")
 	}
 	return nil
+}
+
+func uploadBaiduRTCImage(ctx context.Context, connection cloudWebSocketConnection, path, mode string) error {
+	if mode != "" && mode != "image_generate" {
+		return fmt.Errorf("Baidu RTC AI Agent image mode is invalid")
+	}
+	if err := validateBaiduRTCImageFile(path); err != nil {
+		return err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open Baidu RTC image_file: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxRequestFileBytes {
+		return fmt.Errorf("Baidu RTC image_file changed after validation")
+	}
+	writeFrames := func(writer cloudWebSocketConnection) error {
+		buffer := make([]byte, baiduRTCImageChunkBytes)
+		remaining := info.Size()
+		first := true
+		for remaining > 0 {
+			chunkSize := baiduRTCImageChunkBytes
+			if int64(chunkSize) > remaining {
+				chunkSize = int(remaining)
+			}
+			read, readErr := io.ReadFull(file, buffer[:chunkSize])
+			if readErr != nil || read != chunkSize {
+				return fmt.Errorf("read Baidu RTC image_file chunk")
+			}
+			var header []byte
+			if first {
+				suffix := ""
+				if mode != "" {
+					suffix = ";[FT]=" + mode
+				}
+				header = []byte("\x18[T]=binary;[N]=" + filepath.Base(path) + suffix + "\n")
+				first = false
+			} else {
+				header = []byte{0x10}
+			}
+			payload := make([]byte, len(header)+read)
+			copy(payload, header)
+			copy(payload[len(header):], buffer[:read])
+			message := "[E]:[IMG]:" + base64.StdEncoding.EncodeToString(payload)
+			if err := writer.Write(ctx, cloudWebSocketMessageText, []byte(message)); err != nil {
+				return fmt.Errorf("write Baidu RTC image_file chunk")
+			}
+			remaining -= int64(read)
+		}
+		var trailing [1]byte
+		if read, readErr := file.Read(trailing[:]); read != 0 || readErr != io.EOF {
+			return fmt.Errorf("Baidu RTC image_file changed during upload")
+		}
+		end := "[E]:[IMG]:" + base64.StdEncoding.EncodeToString([]byte{0x14})
+		if err := writer.Write(ctx, cloudWebSocketMessageText, []byte(end)); err != nil {
+			return fmt.Errorf("write Baidu RTC image_file end marker")
+		}
+		return nil
+	}
+	if serialized, ok := connection.(baiduRTCExclusiveWriter); ok {
+		return serialized.exclusiveWrite(writeFrames)
+	}
+	return writeFrames(connection)
 }
 
 func streamBaiduRTCAudio(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, path string, audioPlan baiduRTCAudioPlan) error {

@@ -115,7 +115,7 @@ func TestUnifiedToolContractCoversSixProviders(t *testing.T) {
 		delete(want, tool.Name)
 		mutating := strings.HasSuffix(tool.Name, "_api_mutate")
 		if strings.Contains(tool.Name, "_api_") && !strings.HasSuffix(tool.Name, "_api_discover") {
-			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "protobuf_descriptor_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_user_id", "stream_format", "audience", "auth_version"} {
+			for _, field := range []string{"method", "url", "auth_scheme", "region_set", "api_version", "payload_mode", "checksum_algorithm", "body_file", "image_file", "protobuf_descriptor_file", "response_file", "stream_chunk_bytes", "stream_interval_ms", "stream_user_id", "stream_format", "audience", "auth_version"} {
 				if _, ok := tool.InputSchema.Properties[field]; !ok {
 					t.Errorf("%s must expose HTTP field %s", tool.Name, field)
 				}
@@ -213,6 +213,33 @@ func TestUnifiedMCPContractRoutesGCPProtoJSONDescriptorFile(t *testing.T) {
 	invocation := fake.invocations[0]
 	if invocation.ProtobufDescriptorFile != descriptorFile || invocation.PayloadMode != "protobuf-json" || invocation.Body == nil || filepath.Base(invocation.ResponseFile) != filepath.Base(responseFile) {
 		t.Fatalf("invocation=%#v", invocation)
+	}
+}
+
+func TestUnifiedMCPContractRoutesBaiduRTCEventImageFile(t *testing.T) {
+	root := t.TempDir()
+	imageFile := filepath.Join(root, "camera.jpg")
+	if err := os.WriteFile(imageFile, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	responseFile := filepath.Join(root, "rtc.ndjson")
+	fake := &fakeAdapter{invokeOut: []byte(`{"ok":true}`)}
+	adapters := allFakeAdapters()
+	adapters[ProviderBaidu] = fake
+	c := newTestClient(t, Runtime{Adapters: adapters, AllowedFileRoots: []string{root}, AllowMutations: true, Audit: func(context.Context, AuditEvent) error { return nil }})
+	result := callCloudTool(t, c, "baiducloud_api_mutate", map[string]any{
+		"auth_scheme": "rtc-aiagent-ws", "service": "rtc-aiagent", "operation": "RealtimeInteraction", "api_version": "1",
+		"method": "GET", "url": baiduRTCWebSocketTarget, "image_file": imageFile, "response_file": responseFile, "force": true,
+		"body": map[string]any{
+			"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{},
+			"image_mode": "image_generate", "max_messages": 4, "timeout_seconds": 30, "terminal_event": "tts_end",
+		},
+	})
+	if result.IsError || len(fake.invocations) != 1 {
+		t.Fatalf("result=%#v invocations=%#v", result, fake.invocations)
+	}
+	if fake.invocations[0].ImageFile != imageFile || filepath.Base(fake.invocations[0].ResponseFile) != filepath.Base(responseFile) {
+		t.Fatalf("invocation=%#v", fake.invocations[0])
 	}
 }
 
@@ -861,6 +888,18 @@ func TestBodyFilePolicyAllowsOnlyBoundedRegularFilesUnderOperatorRoots(t *testin
 	request.BodyFile = large
 	if err := validateInvocation(request, []string{root}); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("large body_file error=%v", err)
+	}
+}
+
+func TestImageFilePolicyIsBaiduRTCOnly(t *testing.T) {
+	root := t.TempDir()
+	imageFile := filepath.Join(root, "camera.jpg")
+	if err := os.WriteFile(imageFile, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := Invocation{Provider: ProviderGCP, Method: http.MethodPost, URL: "https://storage.googleapis.com/upload/storage/v1/b/b/o", ImageFile: imageFile}
+	if err := validateInvocation(request, []string{root}); err == nil || !strings.Contains(err.Error(), "only by Baidu RTC") {
+		t.Fatalf("non-RTC image_file error=%v", err)
 	}
 }
 

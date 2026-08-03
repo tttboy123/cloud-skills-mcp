@@ -28,6 +28,10 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{1}, 1280), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	imageFile := filepath.Join(root, "camera.jpg")
+	if err := os.WriteFile(imageFile, []byte("safe-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	valid := func() Invocation {
 		return Invocation{
 			Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
@@ -40,7 +44,7 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 				"messages": []any{"[T]:hello"}, "max_messages": 8,
 				"timeout_seconds": 30, "terminal_event": "tts_end",
 			},
-			BodyFile: audioFile, ResponseFile: filepath.Join(root, "rtc.ndjson"),
+			BodyFile: audioFile, ImageFile: imageFile, ResponseFile: filepath.Join(root, "rtc.ndjson"),
 			StreamChunkBytes: 640, StreamIntervalMS: 20,
 		}
 	}
@@ -149,12 +153,135 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 		},
 		"unbounded timeout": func(value *Invocation) { value.Body.(map[string]any)["timeout_seconds"] = 301 },
 		"bad terminal":      func(value *Invocation) { value.Body.(map[string]any)["terminal_event"] = "forever" },
+		"image outside root": func(value *Invocation) {
+			outside := t.TempDir()
+			value.ImageFile = filepath.Join(outside, "camera.jpg")
+			if err := os.WriteFile(value.ImageFile, []byte("image"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"empty image": func(value *Invocation) {
+			value.ImageFile = filepath.Join(root, "empty.jpg")
+			if err := os.WriteFile(value.ImageFile, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"invalid image mode": func(value *Invocation) { value.Body.(map[string]any)["image_mode"] = "caller-defined" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid()
 			mutate(&candidate)
 			if err := validateInvocation(candidate, []string{root}); err == nil {
 				t.Fatal("unsafe Baidu RTC AI Agent invocation accepted")
+			}
+		})
+	}
+}
+
+func TestBaiduRTCImageUploadUsesOfficialEventCorrelatedFrames(t *testing.T) {
+	root := t.TempDir()
+	imageFile := filepath.Join(root, "camera.jpg")
+	image := bytes.Repeat([]byte{0x5a}, baiduRTCImageChunkBytes+7)
+	if err := os.WriteFile(imageFile, image, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := &fakeTencentWebSocketConnection{}
+	if err := uploadBaiduRTCImage(t.Context(), connection, imageFile, "image_generate"); err != nil {
+		t.Fatal(err)
+	}
+	if len(connection.writes) != 3 {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+	decode := func(index int) []byte {
+		t.Helper()
+		message := string(connection.writes[index].data)
+		if connection.writes[index].messageType != cloudWebSocketMessageText || !strings.HasPrefix(message, "[E]:[IMG]:") {
+			t.Fatalf("frame %d=%#v", index, connection.writes[index])
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(message, "[E]:[IMG]:"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+	first := decode(0)
+	header := []byte("\x18[T]=binary;[N]=camera.jpg;[FT]=image_generate\n")
+	if !bytes.Equal(first[:len(header)], header) || !bytes.Equal(first[len(header):], image[:baiduRTCImageChunkBytes]) {
+		t.Fatalf("first frame does not match official protocol")
+	}
+	second := decode(1)
+	if len(second) != 8 || second[0] != 0x10 || !bytes.Equal(second[1:], image[baiduRTCImageChunkBytes:]) {
+		t.Fatalf("second frame=%x", second)
+	}
+	if end := decode(2); !bytes.Equal(end, []byte{0x14}) {
+		t.Fatalf("end frame=%x", end)
+	}
+}
+
+func TestBaiduRTCImageUploadRequiresAndConsumesOneProviderEvent(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		imageFile bool
+		reads     [][]byte
+		wantError string
+	}{
+		{name: "uploads once", imageFile: true, reads: [][]byte{[]byte("[E]:[UPLOAD_IMAGE]"), []byte("[E]:[TTS_END_SPEAKING]")}},
+		{name: "provider asks without file", reads: [][]byte{[]byte("[E]:[UPLOAD_IMAGE]")}, wantError: "without image_file"},
+		{name: "configured file never requested", imageFile: true, reads: [][]byte{[]byte("[E]:[TTS_END_SPEAKING]")}, wantError: "before image upload"},
+		{name: "provider asks twice", imageFile: true, reads: [][]byte{[]byte("[E]:[UPLOAD_IMAGE]"), []byte("[E]:[UPLOAD_IMAGE]")}, wantError: "more than once"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			responseFile := filepath.Join(root, "rtc.ndjson")
+			imageFile := ""
+			if test.imageFile {
+				imageFile = filepath.Join(root, "camera.jpg")
+				if err := os.WriteFile(imageFile, []byte("image"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			controlCalls := 0
+			doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+				controlCalls++
+				if strings.Contains(request.URL.Path, "generateAIAgentCall") {
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":444,"context":{"token":"private-image-token"}}`))}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			})
+			connection := &fakeTencentWebSocketConnection{reads: append([][]byte{[]byte("[E]:[LIC]:[MUST]:activate"), []byte("[E]:[LIC]:[RES]:[PASS]:ok")}, test.reads...)}
+			messages := []any{}
+			imageMode := "image_generate"
+			if !test.imageFile {
+				messages = []any{"[B]"}
+				imageMode = ""
+			}
+			adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+				Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "ak", SecretAccessKey: "secret-key"}},
+				HTTP:        doer, RTCLicenseKey: "license-key",
+				RTCWebSocketDial: func(context.Context, string) (cloudWebSocketConnection, error) { return connection, nil },
+			})
+			_, err := adapter.Invoke(t.Context(), Invocation{
+				Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+				Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+				Method: http.MethodGet, URL: baiduRTCWebSocketTarget,
+				Body: map[string]any{
+					"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1",
+					"messages": messages, "image_mode": imageMode, "max_messages": 4,
+					"timeout_seconds": 2, "terminal_event": "tts_end",
+				},
+				ImageFile: imageFile, ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+			})
+			if test.wantError == "" {
+				if err != nil || controlCalls != 2 || len(connection.writes) != 3 {
+					t.Fatalf("err=%v controls=%d writes=%#v", err, controlCalls, connection.writes)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) || controlCalls != 2 {
+				t.Fatalf("err=%v controls=%d", err, controlCalls)
+			}
+			if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
+				t.Fatalf("partial output published: %v", statErr)
 			}
 		})
 	}
