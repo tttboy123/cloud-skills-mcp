@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,76 @@ func TestLiveSixCloudReadOnly(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLiveBaiduRTCAgentMutation(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_BAIDU_RTC") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_BAIDU_RTC=1 for an explicitly approved billed RTC AI Agent session")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Baidu RTC live validation", name)
+		}
+		return value
+	}
+	appID := required("CLOUD_SKILLS_LIVE_BAIDU_RTC_APP_ID")
+	deviceID := required("CLOUD_SKILLS_LIVE_BAIDU_RTC_DEVICE_ID")
+	userID := required("CLOUD_SKILLS_LIVE_BAIDU_RTC_USER_ID")
+	textQuery := required("CLOUD_SKILLS_LIVE_BAIDU_RTC_TEXT")
+	licenseKey := required("BCE_RTC_LICENSE_KEY")
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "baidu-rtc.ndjson")
+	runtime := DefaultRuntime()
+	if !runtime.AllowMutations {
+		t.Fatal("CLOUD_SKILLS_ALLOW_MUTATIONS=1 is required after explicit approval")
+	}
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "baiducloud_api_mutate", map[string]any{
+		"force": true, "auth_scheme": "rtc-aiagent-ws", "service": "rtc-aiagent",
+		"operation": "RealtimeInteraction", "api_version": "1", "method": "GET",
+		"url": "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+		"body": map[string]any{
+			"app_id": appID, "instance_type": "VoiceChat", "config": map[string]any{},
+			"device_id": deviceID, "user_id": userID, "messages": []any{"[T]:" + textQuery},
+			"max_messages": 64, "timeout_seconds": 60, "terminal_event": "tts_end",
+		},
+		"response_file": responseFile,
+	})
+	if result.IsError {
+		t.Fatalf("Baidu RTC live mutation failed: %s", cloudToolText(t, result))
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("read Baidu RTC live response: bytes=%d err=%v", len(data), err)
+	}
+	for _, secret := range []string{os.Getenv("BCE_ACCESS_KEY_ID"), os.Getenv("BCE_SECRET_ACCESS_KEY"), os.Getenv("BCE_SESSION_TOKEN"), os.Getenv("BCE_SECURITY_TOKEN"), licenseKey} {
+		if secret != "" && (strings.Contains(string(data), secret) || strings.Contains(cloudToolText(t, result), secret)) {
+			t.Fatal("Baidu RTC live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderBaidu && events[index].Mode == ModeMutate && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Baidu RTC mutation audit event: %#v", events)
+	}
+	t.Logf("provider=baiducloud operation=RealtimeInteraction outcome=succeeded response_bytes=%d request_id=%q", len(data), succeeded.RequestID)
 }
 
 func parseLiveProviderStatus(text string) (ProviderStatus, error) {

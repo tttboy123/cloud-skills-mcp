@@ -13,7 +13,10 @@
 - RTC large-model interaction WebSocket, AK/SK/token connection modes, and license activation: https://cloud.baidu.com/doc/RTC/s/Jmakuvimy
 - RTC large-model interaction server APIs and BCE-authenticated instance lifecycle: https://cloud.baidu.com/doc/RTC/s/hm8zjic1q
 - RTC WebSocket production best practice and required license/resource binding: https://cloud.baidu.com/doc/RTC/s/Umjcm4buh
+- Realtime ASR WebSocket (`appid` + application `appkey`): https://cloud.baidu.com/doc/SPEECH/s/jlbxejt2i
+- End-to-end realtime speech (API Key or OAuth access token only): https://cloud.baidu.com/doc/SPEECH/s/nmcytnwei
+- Voice-clone streaming TTS (API Key or OAuth access token only): https://cloud.baidu.com/doc/SPEECH/s/qmjiax60m
 
 The adapter follows `bce-auth-v1/{accessKeyId}/{timestamp}/{expiration}/{signedHeaders}/{signature}`, signs `host` plus applicable standard and `x-bce-*` headers, and carries the IAM/STS session token only inside the signed request.
 
-RTC large-model interaction control-plane resources at `rtc-aiagent.baidubce.com` remain addressable through BCE v1 HTTPS. Its interactive WebSocket is not exposed: the official flow requires a separately purchased/activated `licKey` in addition to AK/SK or the privately minted instance token. That product credential is outside the AKSK/IAM-only MCP entrypoint contract; the gateway also does not export the 24-hour instance token.
+RTC large-model interaction uses the official BCE v1 server API at `rtc-aiagent.baidubce.com` to create and stop an instance. The adapter takes the recommended private `context.token` from create and connects internally to `wss://rtc-aiotgw.exp.bcelive.com/v1/realtime`; it never exposes the alternative `ak`/`sk` query mode. The separately purchased/activated `licKey` is read only from `BCE_RTC_LICENSE_KEY` in the MCP server environment and is sent only after the provider's `[E]:[LIC]:[MUST]` event. Neither license nor the 24-hour instance token enters the MCP schema, result, or audit.

@@ -79,6 +79,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 			return false
 		}
 	case ProviderBaidu:
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeBaiduRTCAgentWS {
+			return false
+		}
 		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
 		case "GET", "HEAD", "OPTIONS":
 			return true
@@ -166,6 +169,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	tencentScheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
 	gcpScheme := normalizedAuthScheme(request.AuthScheme, "")
 	azureScheme := normalizedAuthScheme(request.AuthScheme, "")
+	baiduScheme := normalizedAuthScheme(request.AuthScheme, "")
 	awsWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSTranscribeWS
 	awsSigV4WebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4WS
 	awsConnectHealthWebSocketScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSConnectHealthWS
@@ -180,6 +184,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	azureWebPubSubScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubWS
 	azureWebPubSubMQTTScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubMQTTWS
+	baiduRTCAgentWebSocketScheme := request.Provider == ProviderBaidu && baiduScheme == authSchemeBaiduRTCAgentWS
 	payloadMode := strings.ToLower(strings.TrimSpace(request.PayloadMode))
 	awsEventStreamScheme := request.Provider == ProviderAWS && awsScheme == authSchemeAWSSigV4 && payloadMode == awsPayloadModeEventStream
 	if awsConnectHealthWebSocketScheme {
@@ -277,6 +282,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateAzureWebPubSubMQTTInvocation(request); err != nil {
 			return err
 		}
+	} else if baiduRTCAgentWebSocketScheme {
+		if err := validateBaiduRTCAgentWebSocketInvocation(request); err != nil {
+			return err
+		}
 	} else {
 		if err := validateRESTTargetWithEndpointHosts(request.Provider, request.Method, request.URL, allowedEndpointHosts); err != nil {
 			return err
@@ -290,6 +299,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {
 			return fmt.Errorf("Google Cloud auth_scheme must be grpc, vertex-live-ws, or omitted for REST")
+		}
+	case ProviderBaidu:
+		if baiduScheme != "" && baiduScheme != authSchemeBaiduRTCAgentWS {
+			return fmt.Errorf("Baidu auth_scheme must be rtc-aiagent-ws or omitted for BCE signed REST")
 		}
 	case ProviderAWS:
 		if !identifierPattern.MatchString(request.Service) {
@@ -521,7 +534,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if request.StreamIntervalMS < 0 || request.StreamIntervalMS > 5000 {
 		return fmt.Errorf("stream_interval_ms must be between 1 and 5000 when provided")
 	}
-	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || awsEventStreamScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || gcpVertexLiveWebSocketScheme || azureRealtimeScheme || azureWebPubSubScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
+	streamControlScheme := awsSigV4WebSocketScheme || awsConnectHealthWebSocketScheme || awsWebSocketScheme || awsEventStreamScheme || alibabaNLSWebSocketScheme || gcpGRPCScheme || gcpVertexLiveWebSocketScheme || azureRealtimeScheme || azureWebPubSubScheme || baiduRTCAgentWebSocketScheme || request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS)
 	if (request.StreamChunkBytes != 0 || request.StreamIntervalMS != 0) && !streamControlScheme {
 		return fmt.Errorf("stream transport controls require a supported streaming auth_scheme")
 	}
@@ -602,7 +615,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("caller-supplied credential query parameter %q is forbidden", name)
 		}
 	}
-	if request.Body != nil && request.BodyFile != "" && !awsConnectHealthWebSocketScheme && !awsWebSocketScheme && !alibabaNLSWebSocketScheme {
+	if request.Body != nil && request.BodyFile != "" && !awsConnectHealthWebSocketScheme && !awsWebSocketScheme && !alibabaNLSWebSocketScheme && !baiduRTCAgentWebSocketScheme {
 		return fmt.Errorf("body and body_file are mutually exclusive")
 	}
 	if request.BodyFile != "" {

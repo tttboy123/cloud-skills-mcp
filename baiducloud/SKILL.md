@@ -1,11 +1,11 @@
 ---
 name: baidu-cloud
-description: Operate or inspect any Baidu AI Cloud BCE resource through cloud-skills-mcp signed HTTPS. Use for Baidu Cloud, BCE, BCC, BOS, VPC, RDS, IAM, CDN, CCE, or documented baidubce.com and bcebos.com APIs.
+description: Operate or inspect any Baidu AI Cloud BCE resource through cloud-skills-mcp signed HTTPS and the guarded RTC AI Agent WebSocket lifecycle. Use for Baidu Cloud, BCE, BCC, BOS, VPC, RDS, IAM, CDN, CCE, RTC AI Agent, or documented baidubce.com and bcebos.com APIs.
 ---
 
 # Baidu AI Cloud
 
-Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMAC-SHA256 signing contract and restricts requests to validated `baidubce.com` service endpoints plus official BOS `bcebos.com` HTTPS endpoints.
+Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMAC-SHA256 signing contract and restricts requests to validated `baidubce.com` service endpoints plus official BOS `bcebos.com` HTTPS endpoints. RTC AI Agent uses a separate guarded `rtc-aiagent-ws` plan: the server signs create/stop through BCE v1, keeps the returned instance token private, activates the operator-held product license internally, and publishes only sanitized bounded WSS events.
 
 ## Workflow
 
@@ -15,6 +15,7 @@ Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMA
 4. For `POST`, `PUT`, `PATCH`, or `DELETE`, obtain explicit human approval for the account, region, URL, method, body, and effect; then use `baiducloud_api_mutate(force=true)`.
 5. Secret-resource operations require the separate sensitive gate. STS session credentials, AccessKey creation, login tokens, and other credential issuance/export operations are never exposed by the gateway.
 6. Never provide `Authorization` or `x-bce-security-token`; the adapter creates them internally.
+7. Treat every RTC AI Agent session as a mutation because create starts a billed instance. Obtain explicit approval, use `baiducloud_api_mutate(force=true)`, and require the server operator to set `BCE_RTC_LICENSE_KEY`; never put AK/SK, the license, or an instance token in MCP arguments.
 
 ## MCP arguments
 
@@ -24,13 +25,14 @@ Use the universal BCE REST gateway. It implements the official `bce-auth-v1` HMA
 - `body`: JSON-compatible request body.
 - `body_file`: binary/media request body under an operator-approved `CLOUD_SKILLS_ALLOWED_FILE_ROOTS` directory. Do not combine it with `body`; use BCE multipart APIs above 64 MiB.
 - `response_file`: new approved-root file for BOS objects, exports, or other large responses. Use the documented `Range` header above the configured per-call limit; existing files are never overwritten.
+- RTC AI Agent: set `auth_scheme="rtc-aiagent-ws"`, `service="rtc-aiagent"`, `operation="RealtimeInteraction"`, `api_version="1"`, method `GET`, and the exact credential-free `wss://rtc-aiotgw.exp.bcelive.com/v1/realtime` URL. Body contains `app_id`, optional credential-free `instance_type`/`config`, required `device_id`/`user_id`, up to 64 `[T]:` messages, `max_messages` (1–256), `timeout_seconds` (1–300), and `terminal_event` (`tts_end`, `answer`, or `message_limit`). Optional `body_file` is raw16k PCM with complete 640-byte/20-ms frames; its calculated duration must be shorter than the session timeout. `response_file` is required.
 
 Example read: `baiducloud_api_read(method="GET", url="https://bcc.bj.baidubce.com/v2/instance")`.
 
 ## Credentials
 
-Set `BCE_ACCESS_KEY_ID` and `BCE_SECRET_ACCESS_KEY` only in the MCP server environment. For IAM/STS temporary credentials, also set `BCE_SESSION_TOKEN` (or `BCE_SECURITY_TOKEN`). Credentials are signed internally and never returned or audited.
+Set `BCE_ACCESS_KEY_ID` and `BCE_SECRET_ACCESS_KEY` only in the MCP server environment. For IAM/STS temporary credentials, also set `BCE_SESSION_TOKEN` (or `BCE_SECURITY_TOKEN`). Credentials are signed internally and never returned or audited. An entitled RTC AI Agent deployment additionally sets `BCE_RTC_LICENSE_KEY` in the server environment; it is product entitlement material, never an MCP credential input.
 
 Read [references/official-docs.md](references/official-docs.md) for v1/v2 signing, IAM/STS, BOS, and API-center references.
 
-The BCE-authenticated RTC large-model interaction server APIs remain ordinary v1 HTTPS calls. Do not route its interactive WebSocket through this Skill: the official direct and instance-token modes also require a purchased/activated product `licKey`, which is not AKSK/IAM and is intentionally absent from the MCP schema. The gateway also never returns the server-created 24-hour instance token.
+For RTC, never use the official direct `ak`/`sk` query mode. The Skill always uses BCE v1 create → private instance-token WSS → signed stop. License `MUST`/`ACTIVE`/`RES-PASS` events, the activation payload, the 24-hour instance token, and control-plane bodies never enter MCP output or audit; failure before stop prevents `response_file` publication.

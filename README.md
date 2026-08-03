@@ -22,7 +22,7 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | Google Cloud | Google Auth ADC + `googleapis.com` REST / raw 或 FileDescriptorSet 驱动的 ProtoJSON gRPC HTTP/2 / Discovery Service + Vertex/Gemini Live WSS | ADC、Workload Identity、Service Account、Impersonation、Metadata Identity |
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；OTS v2/v4 签名 HTTPS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS 数据面 signed HTTPS；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
-| Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2 | BCE AK/SK、IAM/STS temporary AK/SK/session token |
+| Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2；RTC AI Agent 由 BCE v1 控制面创建后用内部实例 token 建立 raw16k 双工 WSS | BCE AK/SK、IAM/STS temporary AK/SK/session token；RTC 产品 license 仅由 server 环境注入 |
 
 ## 安全边界
 
@@ -98,6 +98,7 @@ Alibaba   RAM/OIDC/ECS role / ALIBABA_CLOUD_ACCESS_KEY_ID + ALIBABA_CLOUD_ACCESS
 Tencent   TENCENTCLOUD_SECRET_ID + TENCENTCLOUD_SECRET_KEY
           (+ TENCENTCLOUD_SESSION_TOKEN or TENCENTCLOUD_TOKEN for CAM/STS)
 Baidu     BCE_ACCESS_KEY_ID + BCE_SECRET_ACCESS_KEY (+ BCE_SESSION_TOKEN)
+          (+ BCE_RTC_LICENSE_KEY only for an entitled RTC AI Agent instance)
 ```
 
 优先使用最小权限 IAM/RAM/CAM role 或临时凭证；不要给日常只读 server 长期写权限。
@@ -270,7 +271,13 @@ Alibaba Intelligent Speech Interaction 使用 `auth_scheme=nls-ws`。调用方�
 
 Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；只读订阅和双向 mutation 共用内部 Entra client-token 流程。
 
-Azure OpenAI Realtime 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu 使用 `auth_version=v1|v2`。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+Azure OpenAI Realtime 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
+
+Baidu RTC AI Agent 文本与 raw16k 双工会话必须走 mutation gate。`app_id`、非敏感 `config`、device/user 标识、有限 `[T]:` 文本和终止条件放在 body；可选 raw16k 文件必须由完整的 640-byte/20-ms 帧组成。WSS 结果以 text/Base64-binary NDJSON 原子发布，创建后的任何失败都会尝试签名 stop：
+
+```json
+{"name":"baiducloud_api_mutate","arguments":{"force":true,"auth_scheme":"rtc-aiagent-ws","service":"rtc-aiagent","operation":"RealtimeInteraction","api_version":"1","method":"GET","url":"wss://rtc-aiotgw.exp.bcelive.com/v1/realtime","body":{"app_id":"<rtc-app-id>","instance_type":"VoiceChat","config":{},"device_id":"<device-id>","user_id":"<user-id>","messages":["[T]:你好"],"max_messages":32,"timeout_seconds":60,"terminal_event":"tts_end"},"body_file":"/approved/audio/raw16k.pcm","response_file":"/approved/results/baidu-rtc.ndjson"}}
+```
 
 Tencent ASR WebSocket 有限音频流示例：
 
@@ -377,6 +384,20 @@ CLOUD_SKILLS_LIVE_TEST=1 go test ./internal/mcp/cloud -run TestLiveSixCloudReadO
 ```
 
 GCP live 验收需要 `CLOUD_SKILLS_LIVE_GCP_PROJECT`。各云可用 `CLOUD_SKILLS_LIVE_PROVIDERS` 选择子集。live gate 永不调用 mutate 工具，也不打印响应正文；它逐云输出 adapter availability、credential source/status、审计 outcome、响应字节数和可用的 provider RequestId。
+
+Baidu RTC 是会创建计费实例的独立 opt-in mutation gate。只有 operator 已完成具体会话批准并注入 BCE AKSK/IAM 与 product license 后才运行；测试强制走 MCP mutation/force/audit、内部 create/WSS/stop 和 secret containment：
+
+```bash
+CLOUD_SKILLS_ALLOW_MUTATIONS=1 \
+CLOUD_SKILLS_LIVE_BAIDU_RTC=1 \
+CLOUD_SKILLS_LIVE_BAIDU_RTC_APP_ID='<app-id>' \
+CLOUD_SKILLS_LIVE_BAIDU_RTC_DEVICE_ID='<device-or-mac>' \
+CLOUD_SKILLS_LIVE_BAIDU_RTC_USER_ID='<user-id>' \
+CLOUD_SKILLS_LIVE_BAIDU_RTC_TEXT='你好' \
+go test ./internal/mcp/cloud -run TestLiveBaiduRTCAgentMutation -v
+```
+
+`BCE_RTC_LICENSE_KEY` 与 BCE AKSK/IAM 环境变量不写在命令参数示例中；它们只应预先注入测试进程环境。测试不打印对话正文，只记录 outcome、字节数和 request ID。
 
 ## 目录
 

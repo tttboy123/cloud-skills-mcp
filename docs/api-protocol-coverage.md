@@ -36,7 +36,7 @@ and [Baidu BOS GetObject](https://cloud.baidu.com/doc/BOS/s/xkc5pcmcj).
 | Google Cloud | ADC OAuth bearer REST on `googleapis.com`; public Discovery documents; generic unary/client-streaming/server-streaming/bidirectional gRPC over HTTP/2 in both caller-prepared raw framed-protobuf mode and `FileDescriptorSet`-driven ProtoJSON mode; exact URL method/type resolution, strict request JSON, deterministic protobuf frames, bounded message pacing, recursive unknown-wire rejection including `google.protobuf.Any`, official 64-bit-safe ProtoJSON mapping, validated response frames/trailers, and atomic raw-protobuf or NDJSON output; a Speech-to-Text v2 `StreamingRecognize` raw hermetic vector plus generic schema-driven four-shape vectors; Vertex/Gemini Live ADC-authenticated WSS on exact global/regional/multi-region aiplatform endpoints with setup/setupComplete sequencing, bounded official JSON messages, deterministic bounded tool-call dispatch with exact provider ID matching, internal-only transparent session handles, acknowledged-message pruning, bounded GoAway/transport reconnect, mutation-only policy, sanitized transcripts, and atomic NDJSON | Product-specific WebSocket transports outside Vertex Live; service-by-service live vectors |
 | Alibaba Cloud | ACS3 OpenAPI; legacy RPC/ROA V2; DataHub `DATAHUB` and OpenSearch V3 `OPENSEARCH` HMAC-SHA1; MaxCompute project/data/Tunnel ODPS V2/V4; classic Function Compute `FC`, current `fcapp.run` Trigger ACS3, and custom-domain Trigger POP HMAC-SHA1; OSS V1/V4 Header authentication; SLS v1/v4; MNS/SMQ; Tablestore OTS v2/v4; NLS short ASR and TTS REST with internal header token and atomic audio output; and NLS `SpeechTranscriber`, `SpeechRecognizer`, `FlowingSpeechSynthesizer`, `SpeechSynthesizer`, and `SpeechLongSynthesizer` WSS with an internally minted/cached RPC V2 token, server-generated task/message IDs, protocol start/stop/terminal enforcement, paced audio/text, and atomic event/audio output; credentials-go RAM/OIDC/ECS/AKSK/STS chain | Product-specific signatures or non-HTTP transports outside implemented families; service-by-service live vectors |
 | Tencent Cloud | TC3 API 3.0, API 3.0 v1 HmacSHA1/HmacSHA256 query/form, still-active legacy `*.api.qcloud.com/v2/index.php` HmacSHA1/HmacSHA256 query/form, COS REST signatures, realtime ASR with documented CAM temporary-token signing, virtual-number human detection, SOE evaluation, speech-translation, standard realtime TTS, streaming-text TTS v2, and large-model podcast HMAC-SHA1 WSS, voice-conversion HMAC-SHA1 WSS with framed bidirectional PCM, MPS private-audio TC3 WSS recognition/translation with network-order framing, and MPS TC3 WSS streaming TTS with controlled text segments and atomic binary-audio output; AKSK/CAM credentials within each protocol's documented fields | Product-specific signatures outside implemented families; other remaining long-lived streaming/WebSocket protocols; service-by-service live vectors |
-| Baidu AI Cloud | BCE auth v1 and v2 signed HTTPS; AKSK/IAM-STS session token | Product-specific legacy signatures or non-HTTP transports outside BCE v1/v2; service-by-service live vectors |
+| Baidu AI Cloud | BCE auth v1 and v2 signed HTTPS; AKSK/IAM-STS session token; RTC AI Agent BCE v1 create/private-instance-token WSS/stop lifecycle with exact official endpoints, operator-only license activation, raw16k 640-byte/20-ms audio, bounded concurrent text/binary streaming, internal token containment, mutation-only policy, and atomic sanitized NDJSON | Product-specific legacy signatures or other long-lived transports outside BCE v1/v2 and RTC AI Agent; service-by-service live vectors |
 
 Credential minting/export and caller-supplied signed URLs, SAS, bearer tokens,
 API keys, or Authorization headers remain intentionally outside the public MCP
@@ -73,12 +73,19 @@ including PutObject and multipart upload operations behind the write gate.
   the TRTC application's SDK secret key. It is credential-bound under the
   AKSK/IAM-only entrypoint contract; the CAM-authenticated ASR WebSocket remains
   implemented separately.
-- Baidu RTC large-model interaction control-plane resources are BCE v1 HTTPS
-  and remain addressable through the generic adapter. Its interactive
-  WebSocket is credential-bound: both direct AK/SK and recommended private
-  instance-token modes still require a separately purchased and activated
-  `licKey`. The MCP server neither accepts that product credential nor exports
-  the 24-hour instance token.
+- Baidu realtime ASR at `wss://vop.baidu.com/realtime_asr` requires the AI
+  application's `appid` plus `appkey`, not BCE AKSK/IAM. Baidu's end-to-end
+  realtime speech and voice-clone streaming TTS likewise document only API Key
+  or OAuth `access_token`. These application-key/token transports remain
+  outside the operator-required AKSK/IAM-only credential entrypoint; their BCE
+  resource-management APIs remain addressable through signed HTTPS.
+
+Baidu RTC AI Agent is not part of that exclusion. It has a documented BCE v1
+server control plane, so `rtc-aiagent-ws` signs create/stop from BCE AKSK/IAM,
+uses the returned 24-hour instance token only inside the exact WSS handshake,
+and reads the separately purchased product entitlement only from
+`BCE_RTC_LICENSE_KEY`. The public MCP schema still exposes no credential,
+license, or token field and never supports the direct AK/SK query mode.
 
 ## Completion rule
 

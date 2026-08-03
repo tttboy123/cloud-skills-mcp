@@ -49,12 +49,15 @@ func (EnvBCECredentialProvider) Credentials(context.Context) (BCECredentials, er
 }
 
 type BaiduRESTConfig struct {
-	Credentials  BCECredentialProvider
-	HTTP         HTTPDoer
-	MaxBodyBytes int64
-	Timeout      time.Duration
-	Now          func() time.Time
-	AllowedHosts []string
+	Credentials      BCECredentialProvider
+	HTTP             HTTPDoer
+	MaxBodyBytes     int64
+	Timeout          time.Duration
+	Now              func() time.Time
+	AllowedHosts     []string
+	RTCLicenseKey    string
+	RTCWebSocketDial func(context.Context, string) (cloudWebSocketConnection, error)
+	StreamPause      func(context.Context, time.Duration) error
 }
 
 type BaiduRESTAdapter struct {
@@ -80,11 +83,20 @@ func NewBaiduRESTAdapter(config BaiduRESTConfig) *BaiduRESTAdapter {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	if config.RTCLicenseKey == "" {
+		config.RTCLicenseKey = strings.TrimSpace(os.Getenv("BCE_RTC_LICENSE_KEY"))
+	}
+	if config.RTCWebSocketDial == nil {
+		config.RTCWebSocketDial = defaultBaiduRTCWebSocketDial
+	}
+	if config.StreamPause == nil {
+		config.StreamPause = pauseTencentStream
+	}
 	return &BaiduRESTAdapter{config: config}
 }
 
 func (adapter *BaiduRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
-	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS", CredentialSource: credentialSource(ProviderBaidu)}
+	status := ProviderStatus{Provider: ProviderBaidu, Adapter: "BCE signed HTTPS + controlled RTC WSS", CredentialSource: credentialSource(ProviderBaidu)}
 	if _, err := adapter.config.Credentials.Credentials(ctx); err != nil {
 		status.CredentialStatus = CredentialStatusMissingLocalMaterial
 		status.Message = err.Error()
@@ -107,10 +119,28 @@ func (adapter *BaiduRESTAdapter) Discover(_ context.Context, request DiscoveryRe
 		result["service"] = strings.ToLower(service)
 		result["documentation"] = "https://cloud.baidu.com/doc/" + url.PathEscape(service) + "/index.html"
 	}
+	if service == "RTC-AIAGENT" {
+		result["documentation"] = "https://cloud.baidu.com/doc/RTC/s/hm8zjic1q"
+		result["websocket_documentation"] = "https://cloud.baidu.com/doc/RTC/s/Jmakuvimy"
+	}
 	return json.Marshal(result)
 }
 
 func (adapter *BaiduRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
+	scheme := normalizedAuthScheme(invocation.AuthScheme, "")
+	if scheme == authSchemeBaiduRTCAgentWS {
+		if err := validateBaiduRTCAgentWebSocketInvocation(invocation); err != nil {
+			return InvocationResult{}, err
+		}
+		credentials, err := adapter.config.Credentials.Credentials(ctx)
+		if err != nil {
+			return InvocationResult{}, err
+		}
+		return invokeBaiduRTCAgentWebSocket(ctx, adapter, credentials, invocation)
+	}
+	if scheme != "" {
+		return InvocationResult{}, fmt.Errorf("Baidu auth_scheme must be rtc-aiagent-ws or omitted for BCE signed REST")
+	}
 	if err := validateRESTTargetWithEndpointHosts(ProviderBaidu, invocation.Method, invocation.URL, adapter.config.AllowedHosts); err != nil {
 		return InvocationResult{}, err
 	}

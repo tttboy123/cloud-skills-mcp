@@ -103,3 +103,13 @@ func TestBaiduDiscoveryReturnsOfficialDocumentationMapWithoutCredentials(t *test
 		t.Fatalf("output=%s err=%v", output, err)
 	}
 }
+
+func TestBaiduDiscoveryMapsRTCAgentLifecycleDocuments(t *testing.T) {
+	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+		Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "unused", SecretAccessKey: "unused"}},
+	})
+	output, err := adapter.Discover(t.Context(), DiscoveryRequest{Provider: ProviderBaidu, Service: "rtc-aiagent"})
+	if err != nil || !strings.Contains(string(output), "RTC/s/hm8zjic1q") || !strings.Contains(string(output), "RTC/s/Jmakuvimy") {
+		t.Fatalf("output=%s err=%v", output, err)
+	}
+}

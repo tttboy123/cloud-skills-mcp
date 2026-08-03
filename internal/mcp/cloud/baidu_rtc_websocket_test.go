@@ -1,0 +1,366 @@
+package cloud
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+type bceCredentialProviderFunc func(context.Context) (BCECredentials, error)
+
+func (provider bceCredentialProviderFunc) Credentials(ctx context.Context) (BCECredentials, error) {
+	return provider(ctx)
+}
+
+func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(t *testing.T) {
+	root := t.TempDir()
+	audioFile := filepath.Join(root, "audio.pcm")
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{1}, 1280), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	valid := func() Invocation {
+		return Invocation{
+			Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+			Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+			Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+			Body: map[string]any{
+				"app_id": "rtc-app-1", "instance_type": "VoiceChat",
+				"config":    map[string]any{"welcome": "hello"},
+				"device_id": "device-1", "user_id": "user-1",
+				"messages": []any{"[T]:hello"}, "max_messages": 8,
+				"timeout_seconds": 30, "terminal_event": "tts_end",
+			},
+			BodyFile: audioFile, ResponseFile: filepath.Join(root, "rtc.ndjson"),
+			StreamChunkBytes: 640, StreamIntervalMS: 20,
+		}
+	}
+	base := valid()
+	if err := validateInvocation(base, []string{root}); err != nil {
+		t.Fatal(err)
+	}
+	if classifyRead(ProviderBaidu, base) {
+		t.Fatal("RTC AI Agent creates a billed instance and must never be read-only")
+	}
+	macIdentity := valid()
+	macIdentity.Body.(map[string]any)["device_id"] = "00:11:22:33:44:55"
+	if err := validateInvocation(macIdentity, []string{root}); err != nil {
+		t.Fatalf("official MAC device identity rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Invocation){
+		"wrong method":      func(value *Invocation) { value.Method = http.MethodPost },
+		"wrong service":     func(value *Invocation) { value.Service = "rtc" },
+		"wrong operation":   func(value *Invocation) { value.Operation = "GenerateAIAgentCall" },
+		"wrong api version": func(value *Invocation) { value.APIVersion = "2" },
+		"wrong instance type": func(value *Invocation) {
+			value.Body.(map[string]any)["instance_type"] = "Unknown"
+		},
+		"bce v2":         func(value *Invocation) { value.AuthVersion = "v2" },
+		"wrong host":     func(value *Invocation) { value.URL = "wss://example.com/v1/realtime" },
+		"wrong path":     func(value *Invocation) { value.URL = "wss://rtc-aiotgw.exp.bcelive.com/v2/realtime" },
+		"caller token":   func(value *Invocation) { value.URL += "?t=caller-token" },
+		"parameters":     func(value *Invocation) { value.Parameters = map[string]any{"ak": "caller"} },
+		"headers":        func(value *Invocation) { value.Headers = map[string]string{"X-Test": "caller"} },
+		"missing body":   func(value *Invocation) { value.Body = nil },
+		"missing output": func(value *Invocation) { value.ResponseFile = "" },
+		"missing input":  func(value *Invocation) { value.BodyFile = ""; value.Body.(map[string]any)["messages"] = []any{} },
+		"wrong chunk":    func(value *Invocation) { value.StreamChunkBytes = 320 },
+		"wrong interval": func(value *Invocation) { value.StreamIntervalMS = 10 },
+		"partial raw16k frame": func(value *Invocation) {
+			partial := filepath.Join(root, "partial.pcm")
+			if err := os.WriteFile(partial, bytes.Repeat([]byte{1}, 639), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			value.BodyFile = partial
+		},
+		"audio exceeds timeout": func(value *Invocation) {
+			tooLong := filepath.Join(root, "too-long.pcm")
+			if err := os.WriteFile(tooLong, bytes.Repeat([]byte{1}, 640*50), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			value.BodyFile = tooLong
+			value.Body.(map[string]any)["timeout_seconds"] = 1
+		},
+		"credential config": func(value *Invocation) { value.Body.(map[string]any)["config"] = map[string]any{"llm_token": "caller"} },
+		"embedded credential": func(value *Invocation) {
+			value.Body.(map[string]any)["config"] = map[string]any{"tts_url": `DEFAULT{"apikey":"caller-secret"}`}
+		},
+		"codec mismatch":     func(value *Invocation) { value.Body.(map[string]any)["config"] = map[string]any{"rtc_ac": "opus"} },
+		"caller license":     func(value *Invocation) { value.Body.(map[string]any)["lic_key"] = "caller" },
+		"caller access key":  func(value *Invocation) { value.Body.(map[string]any)["access_key_id"] = "caller" },
+		"invalid message":    func(value *Invocation) { value.Body.(map[string]any)["messages"] = []any{"[E]:[LIC]:[ACTIVE]:caller"} },
+		"unbounded messages": func(value *Invocation) { value.Body.(map[string]any)["max_messages"] = 257 },
+		"unbounded timeout":  func(value *Invocation) { value.Body.(map[string]any)["timeout_seconds"] = 301 },
+		"bad terminal":       func(value *Invocation) { value.Body.(map[string]any)["terminal_event"] = "forever" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid()
+			mutate(&candidate)
+			if err := validateInvocation(candidate, []string{root}); err == nil {
+				t.Fatal("unsafe Baidu RTC AI Agent invocation accepted")
+			}
+		})
+	}
+}
+
+func TestBaiduRTCAgentRejectsInvalidPlanBeforeResolvingCredentials(t *testing.T) {
+	credentialCalls := 0
+	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+		Credentials: bceCredentialProviderFunc(func(context.Context) (BCECredentials, error) {
+			credentialCalls++
+			return BCECredentials{AccessKeyID: "must-not", SecretAccessKey: "be-used"}, nil
+		}),
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+		Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+		Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime?t=caller-token",
+	})
+	if err == nil || credentialCalls != 0 {
+		t.Fatalf("err=%v credential calls=%d", err, credentialCalls)
+	}
+}
+
+func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *testing.T) {
+	root := t.TempDir()
+	audioFile := filepath.Join(root, "audio.pcm")
+	responseFile := filepath.Join(root, "rtc.ndjson")
+	if err := os.WriteFile(audioFile, bytes.Repeat([]byte{7}, 1280), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credentials := BCECredentials{AccessKeyID: "bce-ak", SecretAccessKey: "bce-secret", SessionToken: "bce-session"}
+	instanceToken := "private-instance-token"
+	licenseKey := "private-license-key"
+	controlCalls := 0
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		controlCalls++
+		if request.URL.Scheme != "https" || request.URL.Host != "rtc-aiagent.baidubce.com" || request.Method != http.MethodPost {
+			return nil, fmt.Errorf("unexpected control request %s %s", request.Method, request.URL)
+		}
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "bce-auth-v1/bce-ak/") || request.Header.Get("x-bce-security-token") != credentials.SessionToken {
+			return nil, fmt.Errorf("unsigned control request")
+		}
+		data, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		switch request.URL.Path {
+		case "/api/v1/aiagent/generateAIAgentCall":
+			var body map[string]any
+			if err := json.Unmarshal(data, &body); err != nil || body["app_id"] != "rtc-app-1" || body["instance_type"] != "VoiceChat" {
+				return nil, fmt.Errorf("unexpected create body %s", data)
+			}
+			config, ok := body["config"].(string)
+			if !ok || !strings.Contains(config, `"welcome":"hello"`) || !strings.Contains(config, `"rtc_ac":"raw16k"`) {
+				return nil, fmt.Errorf("config was not serialized as a JSON string: %s", data)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Bce-Request-Id": []string{"create-request"}}, Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":222,"instance_type":"VoiceChat","context":{"cid":1,"token":"` + instanceToken + `"}}`))}, nil
+		case "/api/v1/aiagent/stopAIAgentInstance":
+			if string(data) != `{"ai_agent_instance_id":222,"app_id":"rtc-app-1"}` && string(data) != `{"app_id":"rtc-app-1","ai_agent_instance_id":222}` {
+				return nil, fmt.Errorf("unexpected stop body %s", data)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Bce-Request-Id": []string{"stop-request"}}, Body: io.NopCloser(strings.NewReader(`{"success":true}`))}, nil
+		default:
+			return nil, fmt.Errorf("unexpected control path %s", request.URL.Path)
+		}
+	})
+	connection := &fakeTencentWebSocketConnection{
+		reads: [][]byte{
+			[]byte(`[E]:[LIC]:[MUST]:activate`),
+			[]byte(`[E]:[LIC]:[RES]:[PASS]:ok`),
+			[]byte(`[A]:hello`),
+			[]byte("provider-audio"),
+			[]byte(`[E]:[TTS_END_SPEAKING]`),
+		},
+		readTypes: []tencentWebSocketMessageType{cloudWebSocketMessageText, cloudWebSocketMessageText, cloudWebSocketMessageText, cloudWebSocketMessageBinary, cloudWebSocketMessageText},
+	}
+	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+		Credentials: staticBCECredentials{credentials: credentials}, HTTP: doer,
+		Now:           func() time.Time { return time.Unix(1735689600, 0).UTC() },
+		RTCLicenseKey: licenseKey,
+		RTCWebSocketDial: func(_ context.Context, target string) (cloudWebSocketConnection, error) {
+			parsed, err := url.Parse(target)
+			if err != nil {
+				return nil, err
+			}
+			query := parsed.Query()
+			if parsed.Scheme != "wss" || parsed.Host != "rtc-aiotgw.exp.bcelive.com" || parsed.Path != "/v1/realtime" || query.Get("a") != "rtc-app-1" || query.Get("id") != "222" || query.Get("t") != instanceToken || query.Get("ac") != "raw16k" || query.Get("ak") != "" || query.Get("sk") != "" {
+				return nil, fmt.Errorf("unsafe RTC target %s", target)
+			}
+			return connection, nil
+		},
+		StreamPause: func(context.Context, time.Duration) error { return nil },
+	})
+	result, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+		Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+		Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+		Body: map[string]any{
+			"app_id": "rtc-app-1", "instance_type": "VoiceChat", "config": map[string]any{"welcome": "hello"},
+			"device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:hello"},
+			"max_messages": 8, "timeout_seconds": 30, "terminal_event": "tts_end",
+		},
+		BodyFile: audioFile, ResponseFile: responseFile, StreamChunkBytes: 640, StreamIntervalMS: 20, MaxResponseFileBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controlCalls != 2 || result.RequestID != "create-request" {
+		t.Fatalf("control calls=%d result=%#v", controlCalls, result)
+	}
+	if len(connection.writes) != 4 {
+		t.Fatalf("writes=%#v", connection.writes)
+	}
+	if connection.writes[0].messageType != cloudWebSocketMessageText || !bytes.Contains(connection.writes[0].data, []byte(`"licKey":"`+licenseKey+`"`)) || !bytes.Contains(connection.writes[0].data, []byte(`"devId":"device-1"`)) {
+		t.Fatalf("license activation=%s", connection.writes[0].data)
+	}
+	if connection.writes[1].messageType != cloudWebSocketMessageText || string(connection.writes[1].data) != "[T]:hello" || len(connection.writes[2].data) != 640 || len(connection.writes[3].data) != 640 {
+		t.Fatalf("protocol writes=%#v", connection.writes)
+	}
+	written, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{credentials.AccessKeyID, credentials.SecretAccessKey, credentials.SessionToken, instanceToken, licenseKey} {
+		if bytes.Contains(written, []byte(secret)) || bytes.Contains(result.Output, []byte(secret)) {
+			t.Fatalf("secret %q leaked: file=%s result=%s", secret, written, result.Output)
+		}
+	}
+	if !bytes.Contains(written, []byte(`{"type":"text","data":"[A]:hello"}`)) || !bytes.Contains(written, []byte(`"data_base64":"`+base64.StdEncoding.EncodeToString([]byte("provider-audio"))+`"`)) || !bytes.Contains(written, []byte(`[E]:[TTS_END_SPEAKING]`)) {
+		t.Fatalf("unexpected NDJSON %s", written)
+	}
+}
+
+func TestBaiduRTCAgentWebSocketStopsAndNeverPublishesPartialOutputOnFailure(t *testing.T) {
+	for _, failure := range []string{"license missing", "license failed", "stop failed"} {
+		t.Run(failure, func(t *testing.T) {
+			root := t.TempDir()
+			responseFile := filepath.Join(root, "rtc.ndjson")
+			stops := 0
+			doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+				if strings.Contains(request.URL.Path, "stopAIAgentInstance") {
+					stops++
+					if failure == "stop failed" {
+						return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"stop"}`))}, nil
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Bce-Request-Id": []string{"create-request"}}, Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":222,"context":{"token":"instance-token"}}`))}, nil
+			})
+			reads := [][]byte{[]byte(`[E]:[LIC]:[MUST]:activate`)}
+			if failure == "license failed" || failure == "stop failed" {
+				reads = append(reads, []byte(`[E]:[LIC]:[RES]:[FAILED]:denied`))
+			}
+			if failure == "stop failed" {
+				reads[1] = []byte(`[E]:[LIC]:[RES]:[PASS]:ok`)
+				reads = append(reads, []byte(`[E]:[TTS_END_SPEAKING]`))
+			}
+			license := "license"
+			if failure == "license missing" {
+				license = ""
+			}
+			adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+				Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "ak", SecretAccessKey: "sk"}},
+				HTTP:        doer, RTCLicenseKey: license,
+				RTCWebSocketDial: func(context.Context, string) (cloudWebSocketConnection, error) {
+					return &fakeTencentWebSocketConnection{reads: reads}, nil
+				},
+			})
+			_, err := adapter.Invoke(t.Context(), Invocation{
+				Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+				Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+				Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+				Body:         map[string]any{"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:hello"}, "max_messages": 2, "timeout_seconds": 2, "terminal_event": "tts_end"},
+				ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+			})
+			if err == nil || stops != 1 {
+				t.Fatalf("err=%v stops=%d", err, stops)
+			}
+			if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
+				t.Fatalf("partial response was published: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestBaiduRTCAgentWebSocketMissingInternalTokenStopsBeforeDial(t *testing.T) {
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "rtc.ndjson")
+	stops := 0
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if strings.Contains(request.URL.Path, "stopAIAgentInstance") {
+			stops++
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ai_agent_instance_id":222,"context":{}}`))}, nil
+	})
+	adapter := NewBaiduRESTAdapter(BaiduRESTConfig{
+		Credentials: staticBCECredentials{credentials: BCECredentials{AccessKeyID: "ak", SecretAccessKey: "sk"}}, HTTP: doer,
+		RTCLicenseKey: "license-key",
+		RTCWebSocketDial: func(context.Context, string) (cloudWebSocketConnection, error) {
+			t.Fatal("WSS dial must not occur without the internal instance token")
+			return nil, nil
+		},
+	})
+	_, err := adapter.Invoke(t.Context(), Invocation{
+		Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+		Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+		Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+		Body:         map[string]any{"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1", "messages": []any{"[T]:hello"}, "max_messages": 2, "timeout_seconds": 2, "terminal_event": "answer"},
+		ResponseFile: responseFile, MaxResponseFileBytes: 4096,
+	})
+	if err == nil || stops != 1 {
+		t.Fatalf("err=%v stops=%d", err, stops)
+	}
+	if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
+		t.Fatalf("partial response was published: %v", statErr)
+	}
+}
+
+func TestBaiduRTCAgentTerminalModesRejectIntermediateAnswerEvents(t *testing.T) {
+	for _, test := range []struct {
+		mode, event string
+		count, max  int
+		want        bool
+	}{
+		{"tts_end", "[E]:[TTS_END_SPEAKING]", 1, 8, true},
+		{"tts_end", "[E]:[TTS_END_SPEAKING]:extra", 1, 8, false},
+		{"answer", "[A]:final answer", 1, 8, true},
+		{"answer", "[A]:[M]:partial", 1, 8, false},
+		{"answer", "[A]:[H]:hint", 1, 8, false},
+		{"message_limit", "binary", 8, 8, true},
+		{"message_limit", "binary", 7, 8, false},
+	} {
+		if got := baiduRTCTerminal(test.mode, test.event, test.count, test.max); got != test.want {
+			t.Fatalf("mode=%s event=%q got=%t want=%t", test.mode, test.event, got, test.want)
+		}
+	}
+}
+
+func FuzzBaiduRTCAgentPlanRejectsCredentialFields(f *testing.F) {
+	f.Add(`{"app_id":"rtc-app-1","messages":["[T]:hello"],"max_messages":2,"timeout_seconds":2,"terminal_event":"answer"}`)
+	f.Add(`{"app_id":"rtc-app-1","config":{"api_key":"secret"},"messages":["[T]:hello"],"max_messages":2,"timeout_seconds":2}`)
+	f.Add(`{"app_id":"rtc-app-1","config":{"tts_url":"{\"apikey\":\"secret\"}"},"device_id":"dev","user_id":"user","messages":["[T]:hello"],"max_messages":2,"timeout_seconds":2,"terminal_event":"answer"}`)
+	f.Fuzz(func(t *testing.T, raw string) {
+		var body any
+		if json.Unmarshal([]byte(raw), &body) != nil {
+			return
+		}
+		plan, err := parseBaiduRTCAgentPlan(body)
+		if err == nil {
+			if plan.AppID == "" || plan.MaxMessages < 1 || plan.MaxMessages > 256 || plan.Timeout < time.Second || plan.Timeout > 300*time.Second || baiduRTCAgentContainsCredentialField(body) || baiduRTCConfigContainsCredentialMaterial(plan.Config) {
+				t.Fatal("unsafe plan accepted")
+			}
+		}
+	})
+}
