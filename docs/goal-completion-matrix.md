@@ -342,6 +342,14 @@ response-file handling, redirect rejection, policy/schema exposure, Skills,
 official references and a sanitized ListTags live gate are included. Real CCR
 authorization remains pending the operator live gate and is not inferred from
 hermetic BCE/Registry tests.
+Implementation commit `b310648d69dcf7801ff49d88412e093411a6cc9e`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck and
+four-platform release verification in
+[CI run 30841509268](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30841509268).
+Fresh local module verification, formatting, vet, race coverage (80.1%), build,
+protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
+govulncheck, four-platform archives, and a ten-second CCR endpoint/path fuzz
+run (134,477 executions) also passed.
 
 ## Live acceptance command
 
