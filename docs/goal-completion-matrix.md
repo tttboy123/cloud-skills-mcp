@@ -366,6 +366,14 @@ fail closed. Hermetic unit and MCP protocol-smoke tests pass locally. Real
 broker acceptance remains pending `TestLiveBaiduIoTCoreMQTTReadOnly` with an
 operator-bound IAM application and one message staged after subscription; no
 live success is inferred from the official signature vector.
+Implementation commit `ac60a54f41b25ba334c1ac67fdca5ea27ab7eb85`
+passed remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck, and
+four-platform release verification in
+[CI run 30844840502](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30844840502).
+Fresh local module verification, formatting, vet, race coverage (80.1%), build,
+protocol/install smoke, shell syntax, all six Skill validators, Actionlint,
+govulncheck, four-platform archives, and a ten-second endpoint/plan fuzz run
+(68,953 executions) also passed.
 
 ## Live acceptance command
 
