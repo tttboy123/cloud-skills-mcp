@@ -269,6 +269,74 @@ func TestLiveAlibabaMQMutation(t *testing.T) {
 	t.Logf("provider=alicloud operation=ConsumeMessages settlement=%s outcome=succeeded response_bytes=%d request_id=%q", settlement, len(data), succeeded.RequestID)
 }
 
+func TestLiveAlibabaACRReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_ALIBABA_ACR") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_ALIBABA_ACR=1 for a real RAM-backed Enterprise ACR Registry ListTags probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Alibaba Cloud ACR live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_ALIBABA_ACR_ENDPOINT"), "/")
+	instanceID := required("CLOUD_SKILLS_LIVE_ALIBABA_ACR_INSTANCE_ID")
+	repository := required("CLOUD_SKILLS_LIVE_ALIBABA_ACR_REPOSITORY")
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("parse Alibaba Cloud ACR endpoint: %v", err)
+	}
+	matches := alibabaACRRegistryHostPattern.FindStringSubmatch(strings.ToLower(parsed.Hostname()))
+	if len(matches) != 4 || parsed.Scheme != "https" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "" {
+		t.Fatal("CLOUD_SKILLS_LIVE_ALIBABA_ACR_ENDPOINT must be an exact Enterprise Edition public or VPC Registry origin")
+	}
+	if !alibabaACRInstanceIDPattern.MatchString(instanceID) || !azureACRRepositoryPattern.MatchString(repository) {
+		t.Fatal("Alibaba Cloud ACR live instance ID or repository is invalid")
+	}
+	region := matches[3]
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "alicloud_api_read", map[string]any{
+		"auth_scheme": "acr-registry", "service": "acr", "operation": "ListTags", "region": region,
+		"registry_instance_id": instanceID, "method": "GET", "url": endpoint + "/v2/" + repository + "/tags/list",
+		"parameters": map[string]any{"n": 1},
+	})
+	if result.IsError {
+		t.Fatalf("Alibaba Cloud ACR live read failed: %s", cloudToolText(t, result))
+	}
+	text := strings.TrimSpace(cloudToolText(t, result))
+	if text == "" {
+		t.Fatal("Alibaba Cloud ACR returned an empty response")
+	}
+	for _, secret := range []string{os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_ID"), os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET"), os.Getenv("ALIBABA_CLOUD_SECURITY_TOKEN")} {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Fatal("Alibaba Cloud ACR live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAlicloud && events[index].Mode == ModeRead && events[index].Operation == "ListTags" && events[index].AuthScheme == authSchemeAlibabaACR && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil || succeeded.RegistryInstanceID != instanceID {
+		t.Fatalf("no succeeded Alibaba Cloud ACR read audit event: %#v", events)
+	}
+	t.Logf("provider=alicloud service=acr operation=ListTags region=%s outcome=succeeded response_bytes=%d request_id=%q", region, len(text), succeeded.RequestID)
+}
+
 func TestLiveTencentCLSReadOnly(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_TENCENT_CLS") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_TENCENT_CLS=1 for a real CLS q-sign read probe")

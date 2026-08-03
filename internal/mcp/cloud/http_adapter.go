@@ -47,6 +47,7 @@ const (
 	authSchemeAlibabaSLSV4       = "sls4"
 	authSchemeAlibabaMNS         = "mns"
 	authSchemeAlibabaMQ          = "mq"
+	authSchemeAlibabaACR         = "acr-registry"
 	authSchemeAlibabaOTS         = "ots"
 	authSchemeAlibabaOTSV4       = "ots4"
 	authSchemeAlibabaNLSWS       = "nls-ws"
@@ -458,7 +459,7 @@ func NewAlibabaRESTAdapter(config AlibabaRESTConfig) *AlibabaRESTAdapter {
 
 func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS and NLS HTTPS/WSS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+fc+fc3+fc-custom+oss+oss4+sls+sls4+mns+mq+ots+ots4+nls-rest+nls-ws",
+		Provider: ProviderAlicloud, Available: true, Adapter: "Alibaba Cloud signed HTTPS, ACR Registry HTTPS, and NLS HTTPS/WSS", Version: "acs3+rpc+roa+datahub+opensearch+odps+odps4+fc+fc3+fc-custom+oss+oss4+sls+sls4+mns+mq+acr-registry+ots+ots4+nls-rest+nls-ws",
 		CredentialSource: credentialSource(ProviderAlicloud), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through the Alibaba Cloud credential chain; no cloud CLI is executed",
 	}, nil
@@ -466,37 +467,43 @@ func (adapter *AlibabaRESTAdapter) Status(context.Context) (ProviderStatus, erro
 
 func (adapter *AlibabaRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]byte, error) {
 	return json.Marshal(map[string]string{
-		"api_reference":  "https://api.aliyun.com/",
-		"acs3_signature": "https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature",
-		"rpc_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/rpc-mechanism",
-		"roa_signature":  "https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism",
-		"datahub_api":    "https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz",
-		"opensearch_api": "https://www.alibabacloud.com/help/en/open-search/high-performance-searchedition/signature-method-of-opensearch-api-v3",
-		"odps_signature": "https://github.com/aliyun/aliyun-odps-python-sdk/blob/558462b8d61b43c73016837f32c68b2ddfad2cdf/odps/accounts.py",
-		"odps_endpoints": "https://www.alibabacloud.com/help/en/maxcompute/user-guide/endpoints",
-		"fc_signature":   "https://www.alibabacloud.com/help/en/functioncompute/signature-authentication",
-		"fc_endpoints":   "https://www.alibabacloud.com/help/en/functioncompute/endpoints",
-		"fc3_trigger":    "https://www.alibabacloud.com/help/en/functioncompute/fc/configure-signature-authentication-for-http-triggers",
-		"fc_custom":      "https://www.alibabacloud.com/help/en/functioncompute/configure-signature-authentication-for-custom-domain-names",
-		"oss_signature":  "https://www.alibabacloud.com/help/en/oss/developer-reference/include-signatures-in-the-authorization-header",
-		"oss4_signature": "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
-		"sls_signature":  "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
-		"mns_signature":  "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
-		"mq_signature":   "https://help.aliyun.com/en/apsaramq-for-rocketmq/cloud-message-queue-rocketmq-4-x-series/developer-reference/request-signatures",
-		"mq_http":        "https://www.alibabacloud.com/help/en/apsaramq-for-rocketmq/cloud-message-queue-rocketmq-4-x-series/developer-reference/http/",
-		"ots_signature":  "https://github.com/aliyun/aliyun-tablestore-go-sdk/blob/master/tablestore/ots_header.go",
-		"nls_websocket":  "https://www.alibabacloud.com/help/en/isi/developer-reference/websocket",
-		"nls_token":      "https://www.alibabacloud.com/help/en/isi/getting-started/obtain-an-access-token",
+		"api_reference":     "https://api.aliyun.com/",
+		"acs3_signature":    "https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature",
+		"rpc_signature":     "https://www.alibabacloud.com/help/en/sdk/product-overview/rpc-mechanism",
+		"roa_signature":     "https://www.alibabacloud.com/help/en/sdk/product-overview/roa-mechanism",
+		"datahub_api":       "https://www.alibabacloud.com/help/en/datahub/developer-reference/nerbcz",
+		"opensearch_api":    "https://www.alibabacloud.com/help/en/open-search/high-performance-searchedition/signature-method-of-opensearch-api-v3",
+		"odps_signature":    "https://github.com/aliyun/aliyun-odps-python-sdk/blob/558462b8d61b43c73016837f32c68b2ddfad2cdf/odps/accounts.py",
+		"odps_endpoints":    "https://www.alibabacloud.com/help/en/maxcompute/user-guide/endpoints",
+		"fc_signature":      "https://www.alibabacloud.com/help/en/functioncompute/signature-authentication",
+		"fc_endpoints":      "https://www.alibabacloud.com/help/en/functioncompute/endpoints",
+		"fc3_trigger":       "https://www.alibabacloud.com/help/en/functioncompute/fc/configure-signature-authentication-for-http-triggers",
+		"fc_custom":         "https://www.alibabacloud.com/help/en/functioncompute/configure-signature-authentication-for-custom-domain-names",
+		"oss_signature":     "https://www.alibabacloud.com/help/en/oss/developer-reference/include-signatures-in-the-authorization-header",
+		"oss4_signature":    "https://help.aliyun.com/en/oss/developer-reference/recommend-to-use-signature-version-4",
+		"sls_signature":     "https://www.alibabacloud.com/help/en/sls/developer-reference/request-signatures",
+		"mns_signature":     "https://www.alibabacloud.com/help/en/mns/developer-reference/request-protocol-description",
+		"mq_signature":      "https://help.aliyun.com/en/apsaramq-for-rocketmq/cloud-message-queue-rocketmq-4-x-series/developer-reference/request-signatures",
+		"mq_http":           "https://www.alibabacloud.com/help/en/apsaramq-for-rocketmq/cloud-message-queue-rocketmq-4-x-series/developer-reference/http/",
+		"acr_token":         "https://www.alibabacloud.com/help/en/acr/developer-reference/api-cr-2018-12-01-getauthorizationtoken",
+		"acr_registry":      "https://www.alibabacloud.com/help/en/acr/getting-started/basic-operations-on-docker",
+		"acr_custom_domain": "https://www.alibabacloud.com/help/en/acr/user-guide/use-a-custom-domain-name-to-access-a-container-registry-enterprise-edition-instance",
+		"ots_signature":     "https://github.com/aliyun/aliyun-tablestore-go-sdk/blob/master/tablestore/ots_header.go",
+		"nls_websocket":     "https://www.alibabacloud.com/help/en/isi/developer-reference/websocket",
+		"nls_token":         "https://www.alibabacloud.com/help/en/isi/getting-started/obtain-an-access-token",
 	})
 }
 
 func (adapter *AlibabaRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAlibabaACS3)
-	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaMQ && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 && scheme != authSchemeAlibabaNLSWS && scheme != authSchemeAlibabaNLSREST {
-		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, mq, ots, ots4, nls-rest, or nls-ws")
+	if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaMQ && scheme != authSchemeAlibabaACR && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 && scheme != authSchemeAlibabaNLSWS && scheme != authSchemeAlibabaNLSREST {
+		return InvocationResult{}, fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, mq, acr-registry, ots, ots4, nls-rest, or nls-ws")
 	}
 	if scheme == authSchemeAlibabaMQ {
 		return invokeAlibabaMQ(ctx, adapter, invocation)
+	}
+	if scheme == authSchemeAlibabaACR {
+		return invokeAlibabaACR(ctx, adapter, invocation)
 	}
 	if scheme == authSchemeAlibabaNLSWS {
 		return invokeAlibabaNLSWebSocket(ctx, adapter, invocation)

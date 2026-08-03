@@ -224,6 +224,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	alibabaNLSWebSocketScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSWS
 	alibabaNLSRESTScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSREST
 	alibabaMQScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaMQ
+	alibabaACRScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaACR
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	gcpFirebaseSSEScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPFirebaseSSE
@@ -291,6 +292,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				return err
 			}
 		} else if _, err := parseAlibabaMQConsumePlan(request.Body, operation); err != nil {
+			return err
+		}
+	} else if alibabaACRScheme {
+		if err := validateAlibabaACRInvocationWithEndpointHosts(request, allowedEndpointHosts); err != nil {
 			return err
 		}
 	} else if tencentWebSocketScheme {
@@ -432,8 +437,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Alibaba Cloud requires valid service and operation")
 		}
 		scheme := alibabaScheme
-		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaMQ && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 && scheme != authSchemeAlibabaNLSWS && scheme != authSchemeAlibabaNLSREST {
-			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, mq, ots, ots4, nls-rest, or nls-ws")
+		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaDataHub && scheme != authSchemeAlibabaOpenSearch && scheme != authSchemeAlibabaODPS && scheme != authSchemeAlibabaODPSV4 && scheme != authSchemeAlibabaFC && scheme != authSchemeAlibabaFC3 && scheme != authSchemeAlibabaFCCustom && scheme != authSchemeAlibabaOSS && scheme != authSchemeAlibabaOSSV4 && scheme != authSchemeAlibabaSLS && scheme != authSchemeAlibabaSLSV4 && scheme != authSchemeAlibabaMNS && scheme != authSchemeAlibabaMQ && scheme != authSchemeAlibabaACR && scheme != authSchemeAlibabaOTS && scheme != authSchemeAlibabaOTSV4 && scheme != authSchemeAlibabaNLSWS && scheme != authSchemeAlibabaNLSREST {
+			return fmt.Errorf("Alibaba Cloud auth_scheme must be acs3, rpc, roa, datahub, opensearch, odps, odps4, fc, fc3, fc-custom, oss, oss4, sls, sls4, mns, mq, acr-registry, ots, ots4, nls-rest, or nls-ws")
 		}
 		if (scheme == authSchemeAlibabaACS3 || scheme == authSchemeAlibabaRPCV2 || scheme == authSchemeAlibabaROAV2) && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud %s requires a valid api_version", strings.ToUpper(scheme))
@@ -549,6 +554,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if scheme == authSchemeAlibabaMQ && request.Mode != ModeMutate {
 			return fmt.Errorf("Alibaba Cloud MQ operations require the mutation approval path")
 		}
+		if scheme == authSchemeAlibabaACR {
+			if err := validateAlibabaACRInvocationWithEndpointHosts(request, allowedEndpointHosts); err != nil {
+				return err
+			}
+		}
 		if scheme != authSchemeAlibabaACS3 && scheme != authSchemeAlibabaRPCV2 && scheme != authSchemeAlibabaROAV2 && scheme != authSchemeAlibabaNLSWS && scheme != authSchemeAlibabaNLSREST && request.APIVersion != "" && !apiVersionPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Alibaba Cloud requires a valid api_version when provided")
 		}
@@ -644,6 +654,9 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	if !azureACRScheme && (request.ACRScope != "" || request.ACRSourceScope != "") {
 		return fmt.Errorf("acr_scope and acr_source_scope are supported only by Azure Container Registry auth_scheme=acr")
+	}
+	if !alibabaACRScheme && request.RegistryInstanceID != "" {
+		return fmt.Errorf("registry_instance_id is supported only by Alibaba Cloud ACR auth_scheme=acr-registry")
 	}
 	if request.StreamChunkBytes < 0 || request.StreamChunkBytes > maxRequestFileBytes {
 		return fmt.Errorf("stream_chunk_bytes must be between 1 and %d when provided", maxRequestFileBytes)

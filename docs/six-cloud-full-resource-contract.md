@@ -47,7 +47,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | AWS | Direct HTTPS with AWS SigV4 and pure-Go SigV4a for multi-region endpoints, private/public ECR Docker/OCI Registry HTTP with internal IAM token retrieval, including bidirectional HTTP/2 EventStream, plus guarded raw-frame SigV4, Connect Health Medical Scribe, Transcribe, IoT MQTT, AppSync Events, and AppSync GraphQL subscription WSS | AWS SDK chain: IAM Identity Center, profile/role, web identity, instance role, or AK/SK/STS env; ECR authorization tokens remain internal |
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience, ACR internal OAuth2 scoped-token exchange, Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, Event Grid Namespace MQTT v5, and Service Bus/Event Hubs AMQP 1.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials; ACR refresh/access tokens remain internal |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
-| Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles and the derived NLS token remain internal |
+| Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, ACR Enterprise Docker/OCI Registry HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles, ACR temporary login/Bearer tokens, and the derived NLS token remain internal |
 | Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
 | Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token; RTC product license is server-only entitlement material |
 
@@ -249,6 +249,15 @@ remain available through the guarded resource gateway.
   requires an operator-staged message and explicit mutation enablement, defaults
   to `release`, and fails if credentials or receipt-handle fields appear in the
   atomic output.
+- Alibaba ACR Enterprise Registry uses `auth_scheme=acr-registry`, exact
+  `<instance>-registry[-vpc].<region>.cr.aliyuncs.com` endpoints and a fixed
+  internal RPC V2 `GetAuthorizationToken` request. The server validates the
+  returned exact region-bound `dockerauth`, `dockerauth-ee`, VPC variant, or
+  documented Zhangjiakou Bearer challenge, derives target/source repository
+  scopes, keeps all temporary credentials internal, and contains same-region
+  OSS blob redirects. Personal Edition is credential-bound because its current
+  official contract requires a fixed Registry password and does not support
+  `GetAuthorizationToken`.
 - Tencent CLS current resource management and new features use API 3.0 TC3.
   The still-published legacy CLS data plane has a distinct `cls` HTTPS entrypoint
   implementing its `q-sign-algorithm=sha1` contract. Only exact single-region
@@ -381,6 +390,9 @@ Examples are navigation aids, not a support allowlist.
   dedicated disposable resources and separate explicit approval.
 - The dedicated ACR live gate requires an existing repository with read access
   and exercises the complete Entra-to-ACR scoped-token chain through ListTags.
+- The dedicated Alibaba Enterprise ACR live gate requires an existing
+  repository and exercises RAM `GetAuthorizationToken`, the internal Bearer
+  exchange, ListTags, sanitized audit, and credential containment.
 - Dedicated private and Public ECR live gates require existing repositories and
   exercise their distinct Basic/tags and Bearer/manifest contracts through the
   AWS SDK identity chain without printing response bodies or token material.

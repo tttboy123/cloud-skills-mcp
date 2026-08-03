@@ -41,6 +41,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"acr","service":"acr","operation":"ListTags","method":"GET","url":"https://registry123.azurecr.io.attacker.example/v2/team/app/tags/list","acr_scope":"repository:team/app:pull"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"ecr","service":"ecr","operation":"ListTags","region":"us-west-2","method":"GET","url":"https://123456789012.dkr.ecr.us-west-2.amazonaws.com.attacker.example/v2/team/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"auth_scheme":"artifact-registry","service":"artifact-registry","operation":"ListTags","method":"GET","url":"https://us-docker.pkg.dev.attacker.example/v2/project/repository/app/tags/list"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"alicloud_api_read","arguments":{"auth_scheme":"acr-registry","service":"acr","operation":"ListTags","region":"cn-hangzhou","registry_instance_id":"cri-example123","method":"GET","url":"https://demo-registry.cn-hangzhou.cr.aliyuncs.com.attacker.example/v2/team/app/tags/list"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -52,7 +53,7 @@ jq -e -s '
       (.inputSchema.required | index("force") != null)] | all) and
     ([map(select(.id == 2))[0].result.tools[] |
       select(.name | test("_api_(read|mutate)$")) |
-      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("acr_scope") and has("acr_source_scope") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
+      (.inputSchema.properties | has("method") and has("url") and has("body_file") and has("response_file") and has("audience") and has("registry_instance_id") and has("acr_scope") and has("acr_source_scope") and has("auth_scheme") and has("region_set") and has("auth_version") and has("api_version") and has("payload_mode") and has("checksum_algorithm") and has("stream_chunk_bytes") and has("stream_interval_ms") and has("stream_user_id") and has("stream_format") and (has("arguments") | not))] | all) and
     (["aws","azure","gcp","alicloud","tencent","baiducloud"] -
       [map(select(.id == 2))[0].result.tools[].name | select(endswith("_api_read")) | sub("_api_read$"; "")]) == [] and
     (map(select(.id == 3))[0].result.isError == true) and
@@ -95,7 +96,9 @@ jq -e -s '
     ($responses | map(select(.id == 26))[0].result.isError == true) and
     ($responses | map(select(.id == 26))[0].result.content[0].text | contains("exact private or public Registry endpoint")) and
     ($responses | map(select(.id == 27))[0].result.isError == true) and
-    ($responses | map(select(.id == 27))[0].result.content[0].text | contains("exact docker.pkg.dev or supported gcr.io endpoint"))
+    ($responses | map(select(.id == 27))[0].result.content[0].text | contains("exact docker.pkg.dev or supported gcr.io endpoint")) and
+    ($responses | map(select(.id == 28))[0].result.isError == true) and
+    ($responses | map(select(.id == 28))[0].result.content[0].text | contains("exact Enterprise Edition public or VPC endpoint"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"
