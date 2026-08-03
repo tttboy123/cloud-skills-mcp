@@ -41,6 +41,23 @@ build, protocol/install smoke, shell syntax, all six Skill validators,
 Actionlint, govulncheck, four-platform archives and a ten-second Firebase SSE
 event fuzz run (340,418 executions) also passed.
 
+Azure Event Grid Namespace MQTT v5 now uses direct WSS with the official
+`mqtt` subprotocol and non-CLI Entra identity. The gateway requests
+`https://eventgrid.azure.net/.default`, places the JWT only in
+`OAUTH2-JWT` CONNECT/AUTH packets, and exposes finite read-only subscriptions
+or mutation-gated publish/stateful clients. It covers the broker's documented
+QoS 0/1, persistent session and Will, PUBLISH user/request-response properties,
+message expiry, retained messages, aliases, flow control, assigned client IDs,
+wildcard/shared subscriptions, subscription identifiers, negative
+acknowledgements, server disconnect, and atomic mode-0600 Base64 NDJSON. The
+implementation commit `1bf80fdde5492baef9378a84f3dc97c25402d151` passed
+remote macOS, Ubuntu, ShellCheck, Actionlint, govulncheck and four-platform
+release verification in [CI run 30805779230](https://github.com/tttboy123/cloud-skills-mcp/actions/runs/30805779230).
+Fresh local module verification, formatting, vet, race coverage (80.1% total,
+80.2% cloud package), build, protocol/install smoke, all six Skill validators,
+Actionlint, govulncheck, four-platform archives, and a ten-second MQTT
+packet/property fuzz run (341,933 executions) also passed.
+
 ## Live acceptance command
 
 Run from the repository root after credentials are injected into the test
