@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -29,7 +31,10 @@ const (
 	baiduRTCMaxPacketCount    = 4096
 )
 
-var baiduRTCInstanceIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+var (
+	baiduRTCInstanceIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+	baiduRTCTrackIDPattern    = regexp.MustCompile(`^[0-9]{1,64}$`)
+)
 
 type baiduRTCAgentPlan struct {
 	AppID              string
@@ -42,6 +47,7 @@ type baiduRTCAgentPlan struct {
 	DeviceID           string
 	UserID             string
 	Messages           []string
+	FinalMessages      []string
 	MaxMessages        int
 	Timeout            time.Duration
 	TerminalEvent      string
@@ -94,8 +100,8 @@ func validateBaiduRTCAgentWebSocketInvocation(invocation Invocation) error {
 	if err != nil {
 		return err
 	}
-	if len(plan.Messages) == 0 && invocation.BodyFile == "" {
-		return fmt.Errorf("Baidu RTC AI Agent requires at least one text message or body_file audio stream")
+	if len(plan.Messages) == 0 && len(plan.FinalMessages) == 0 && invocation.BodyFile == "" {
+		return fmt.Errorf("Baidu RTC AI Agent requires at least one client command or body_file audio stream")
 	}
 	if _, err := buildBaiduRTCAudioPlan(plan, invocation); err != nil {
 		return err
@@ -197,6 +203,7 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		DeviceID           string         `json:"device_id"`
 		UserID             string         `json:"user_id"`
 		Messages           []string       `json:"messages"`
+		FinalMessages      []string       `json:"final_messages"`
 		MaxMessages        int            `json:"max_messages"`
 		Timeout            int            `json:"timeout_seconds"`
 		TerminalEvent      string         `json:"terminal_event"`
@@ -258,12 +265,12 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 	} else if raw.OpusPacketTimeMS != 0 || len(raw.OpusPacketLengths) != 0 || raw.OpusPacketMaxBytes != 0 {
 		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent Opus packet controls require audio_codec opus")
 	}
-	if len(raw.Messages) > 64 {
-		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent accepts at most 64 text messages")
+	if len(raw.Messages)+len(raw.FinalMessages) > 64 {
+		return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent accepts at most 64 client commands")
 	}
-	for _, message := range raw.Messages {
-		if !strings.HasPrefix(message, "[T]:") || len(message) <= len("[T]:") || len(message) > 16*1024 || !validBaiduRTCText(message) {
-			return baiduRTCAgentPlan{}, fmt.Errorf("Baidu RTC AI Agent client messages must be bounded UTF-8 [T]: queries")
+	for _, message := range append(append([]string(nil), raw.Messages...), raw.FinalMessages...) {
+		if err := validateBaiduRTCClientMessage(message); err != nil {
+			return baiduRTCAgentPlan{}, err
 		}
 	}
 	if raw.MaxMessages < 1 || raw.MaxMessages > 256 {
@@ -279,7 +286,7 @@ func parseBaiduRTCAgentPlan(body any) (baiduRTCAgentPlan, error) {
 		AppID: raw.AppID, InstanceType: raw.InstanceType, Config: raw.Config,
 		AudioCodec: raw.AudioCodec, OpusPacketTimeMS: raw.OpusPacketTimeMS,
 		OpusPacketLengths: raw.OpusPacketLengths, OpusPacketMaxBytes: raw.OpusPacketMaxBytes,
-		DeviceID: raw.DeviceID, UserID: raw.UserID, Messages: raw.Messages,
+		DeviceID: raw.DeviceID, UserID: raw.UserID, Messages: raw.Messages, FinalMessages: raw.FinalMessages,
 		MaxMessages: raw.MaxMessages, Timeout: time.Duration(raw.Timeout) * time.Second,
 		TerminalEvent: raw.TerminalEvent,
 	}, nil
@@ -343,6 +350,275 @@ func validBaiduRTCText(value string) bool {
 		}
 	}
 	return true
+}
+
+func validateBaiduRTCClientMessage(message string) error {
+	if len(message) < 3 || len(message) > 16*1024 || !validBaiduRTCText(message) {
+		return fmt.Errorf("Baidu RTC AI Agent client messages must be bounded UTF-8 protocol commands")
+	}
+	if message == "[B]" || message == "[B]:[END]" || baiduRTCExactClientCommand(message) {
+		return nil
+	}
+	if strings.HasPrefix(message, "[B]:[BEGIN]:") {
+		delay, err := strconv.Atoi(strings.TrimPrefix(message, "[B]:[BEGIN]:"))
+		if err == nil && delay >= 1 && delay <= 300000 {
+			return nil
+		}
+		return fmt.Errorf("Baidu RTC AI Agent break delay must be 1-300000 milliseconds")
+	}
+	for _, prefix := range []string{"[T]:", "[TTS]:"} {
+		if strings.HasPrefix(message, prefix) {
+			if len(message) > len(prefix) {
+				return nil
+			}
+			return fmt.Errorf("Baidu RTC AI Agent text commands require content")
+		}
+	}
+	if strings.HasPrefix(message, "[SET]:[DEVICE_INFO]:") {
+		object, err := decodeBaiduRTCCommandObject(strings.TrimPrefix(message, "[SET]:[DEVICE_INFO]:"))
+		if err != nil || !baiduRTCObjectHasOnly(object, "os", "soc", "model", "user_id", "asr_text_ext") || len(object) == 0 {
+			return fmt.Errorf("Baidu RTC AI Agent DEVICE_INFO command is invalid")
+		}
+		for _, name := range []string{"os", "soc", "model", "user_id"} {
+			if value, present := object[name]; present && !boundedBaiduRTCJSONString(value, 256, true) {
+				return fmt.Errorf("Baidu RTC AI Agent DEVICE_INFO command is invalid")
+			}
+		}
+		if value, present := object["asr_text_ext"]; present {
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("Baidu RTC AI Agent DEVICE_INFO command is invalid")
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(message, "[SET]:[GIS]") {
+		coordinates := strings.Split(strings.TrimPrefix(message, "[SET]:[GIS]"), ",")
+		if len(coordinates) == 2 {
+			latitude, latitudeErr := strconv.ParseFloat(coordinates[0], 64)
+			longitude, longitudeErr := strconv.ParseFloat(coordinates[1], 64)
+			if latitudeErr == nil && longitudeErr == nil && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 {
+				return nil
+			}
+		}
+		return fmt.Errorf("Baidu RTC AI Agent GIS command requires valid latitude,longitude")
+	}
+	if strings.HasPrefix(message, "[SET]:[UPDATE_SYSTEM_PROMPT]:") {
+		object, err := decodeBaiduRTCCommandObject(strings.TrimPrefix(message, "[SET]:[UPDATE_SYSTEM_PROMPT]:"))
+		if err != nil || !baiduRTCObjectHasOnly(object, "model_type", "prompt") {
+			return fmt.Errorf("Baidu RTC AI Agent system-prompt command is invalid")
+		}
+		modelType, modelOK := object["model_type"].(string)
+		prompt, promptOK := object["prompt"].(string)
+		if !modelOK || (modelType != "2" && modelType != "3") || !promptOK || len(prompt) > 16*1024 || !validBaiduRTCText(prompt) {
+			return fmt.Errorf("Baidu RTC AI Agent system-prompt command is invalid")
+		}
+		return nil
+	}
+	for _, prefix := range []string{"[SET]:[VARIABLES]:", "[SET]:[TP_EXTRA_DATA]:"} {
+		if strings.HasPrefix(message, prefix) {
+			object, err := decodeBaiduRTCCommandObject(strings.TrimPrefix(message, prefix))
+			if err != nil || len(object) == 0 || len(object) > 64 {
+				return fmt.Errorf("Baidu RTC AI Agent dynamic-data command is invalid")
+			}
+			return nil
+		}
+	}
+	if strings.HasPrefix(message, "[OP]:[switchSceneRole]:") {
+		return validateBaiduRTCSwitchRole(strings.TrimPrefix(message, "[OP]:[switchSceneRole]:"))
+	}
+	if strings.HasPrefix(message, "[SET]:[ENHANCE_QUERY]:") {
+		return validateBaiduRTCEnhanceQuery(strings.TrimPrefix(message, "[SET]:[ENHANCE_QUERY]:"))
+	}
+	if strings.HasPrefix(message, "[E]:[DC]:") {
+		return validateBaiduRTCDirectControl(strings.TrimPrefix(message, "[E]:[DC]:"))
+	}
+	if strings.HasPrefix(message, "[E]:[CMD]:[MEETING_SUMMARY_CREATE]:") {
+		return validateBaiduRTCMeetingSummary(strings.TrimPrefix(message, "[E]:[CMD]:[MEETING_SUMMARY_CREATE]:"))
+	}
+	return fmt.Errorf("Baidu RTC AI Agent client message is not a documented client command")
+}
+
+func baiduRTCExactClientCommand(message string) bool {
+	switch message {
+	case "[SET]:[AUTO_INT]:[FALSE]", "[SET]:[AUTO_INT]:[TRUE]",
+		"[E]:[CMD]:[REMOTE_PLAYER]:[STOP]", "[E]:[CMD]:[REMOTE_PLAYER]:[PAUSE]", "[E]:[CMD]:[REMOTE_PLAYER]:[RESUME]",
+		"[E]:[CMD]:[ASR_ENABLE_REALTIME]", "[E]:[CMD]:[ASR_DISABLE_REALTIME]", "[E]:[CMD]:[ASR_START_LONGTEXT_REC]", "[E]:[CMD]:[ASR_STOP_LONGTEXT_REC]",
+		"[E]:[CMD]:[MCP_TOOLS_CHANGED]", "[E]:[CMD]:[MEETING_SUMMARY_FINISH]":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeBaiduRTCCommandObject(raw string) (map[string]any, error) {
+	if raw == "" || len(raw) > 16*1024 || !validBaiduRTCText(raw) {
+		return nil, fmt.Errorf("invalid command JSON")
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var object map[string]any
+	if err := decoder.Decode(&object); err != nil || object == nil {
+		return nil, fmt.Errorf("invalid command JSON")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("invalid command JSON")
+	}
+	if baiduRTCAgentContainsCredentialField(object) || baiduRTCConfigContainsCredentialMaterial(object) {
+		return nil, fmt.Errorf("command JSON contains credential material")
+	}
+	return object, nil
+}
+
+func baiduRTCObjectHasOnly(object map[string]any, allowed ...string) bool {
+	allowedNames := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		allowedNames[name] = struct{}{}
+	}
+	for name := range object {
+		if _, ok := allowedNames[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func boundedBaiduRTCJSONString(value any, maximum int, allowEmpty bool) bool {
+	text, ok := value.(string)
+	return ok && len(text) <= maximum && (allowEmpty || text != "") && validBaiduRTCText(text)
+}
+
+func validateBaiduRTCSwitchRole(raw string) error {
+	object, err := decodeBaiduRTCCommandObject(raw)
+	if err != nil || len(object) == 0 || !baiduRTCObjectHasOnly(object, "tts", "scene_role", "scene_role_cfg") {
+		return fmt.Errorf("Baidu RTC AI Agent switchSceneRole command is invalid")
+	}
+	for _, name := range []string{"tts", "scene_role"} {
+		if value, present := object[name]; present && !boundedBaiduRTCJSONString(value, 16*1024, false) {
+			return fmt.Errorf("Baidu RTC AI Agent switchSceneRole command is invalid")
+		}
+	}
+	if value, present := object["scene_role_cfg"]; present {
+		config, ok := value.(map[string]any)
+		if !ok || !baiduRTCObjectHasOnly(config, "name", "prompt") || !boundedBaiduRTCJSONString(config["name"], 256, false) || !boundedBaiduRTCJSONString(config["prompt"], 16*1024, false) {
+			return fmt.Errorf("Baidu RTC AI Agent switchSceneRole command is invalid")
+		}
+	}
+	return nil
+}
+
+func validateBaiduRTCEnhanceQuery(raw string) error {
+	object, err := decodeBaiduRTCCommandObject(raw)
+	if err != nil || !baiduRTCObjectHasOnly(object, "enhance_type", "pre_query", "post_query") {
+		return fmt.Errorf("Baidu RTC AI Agent ENHANCE_QUERY command is invalid")
+	}
+	enhanceType, ok := object["enhance_type"].(string)
+	if !ok || (enhanceType != "0" && enhanceType != "1" && enhanceType != "2" && enhanceType != "3") {
+		return fmt.Errorf("Baidu RTC AI Agent ENHANCE_QUERY command is invalid")
+	}
+	pre, _ := object["pre_query"].(string)
+	post, _ := object["post_query"].(string)
+	if value, present := object["pre_query"]; present {
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("Baidu RTC AI Agent ENHANCE_QUERY command is invalid")
+		}
+	}
+	if value, present := object["post_query"]; present {
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("Baidu RTC AI Agent ENHANCE_QUERY command is invalid")
+		}
+	}
+	if len(pre)+len(post) > 1024 || !validBaiduRTCText(pre) || !validBaiduRTCText(post) || (enhanceType == "1" && pre == "") || (enhanceType == "2" && post == "") || (enhanceType == "3" && (pre == "" || post == "")) {
+		return fmt.Errorf("Baidu RTC AI Agent ENHANCE_QUERY command is invalid")
+	}
+	return nil
+}
+
+func validateBaiduRTCDirectControl(raw string) error {
+	object, err := decodeBaiduRTCCommandObject(raw)
+	if err != nil || !baiduRTCObjectHasOnly(object, "intent", "parameter_list") || object["intent"] != "music" {
+		return fmt.Errorf("Baidu RTC AI Agent direct-control command is invalid")
+	}
+	parameters, ok := object["parameter_list"].([]any)
+	if !ok || len(parameters) < 1 || len(parameters) > 8 {
+		return fmt.Errorf("Baidu RTC AI Agent direct-control command is invalid")
+	}
+	hasSource := false
+	for _, parameter := range parameters {
+		entry, ok := parameter.(map[string]any)
+		if !ok || len(entry) != 1 || !baiduRTCObjectHasOnly(entry, "url", "track_id", "text") {
+			return fmt.Errorf("Baidu RTC AI Agent direct-control command is invalid")
+		}
+		for name, value := range entry {
+			if !boundedBaiduRTCJSONString(value, 4096, false) {
+				return fmt.Errorf("Baidu RTC AI Agent direct-control command is invalid")
+			}
+			if name == "url" {
+				if !validBaiduRTCMediaURL(value.(string)) {
+					return fmt.Errorf("Baidu RTC AI Agent direct-control media URL is invalid")
+				}
+				hasSource = true
+			}
+			if name == "track_id" {
+				if !baiduRTCTrackIDPattern.MatchString(value.(string)) {
+					return fmt.Errorf("Baidu RTC AI Agent direct-control track_id is invalid")
+				}
+				hasSource = true
+			}
+		}
+	}
+	if !hasSource {
+		return fmt.Errorf("Baidu RTC AI Agent direct-control command requires a URL or track_id")
+	}
+	return nil
+}
+
+func validBaiduRTCMediaURL(value string) bool {
+	target, err := url.Parse(value)
+	if err != nil || target.Scheme != "https" || target.User != nil || target.Fragment != "" || target.Hostname() == "" || (target.Port() != "" && target.Port() != "443") {
+		return false
+	}
+	host := strings.ToLower(target.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	if address := net.ParseIP(host); address != nil && (address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsUnspecified()) {
+		return false
+	}
+	return true
+}
+
+func validateBaiduRTCMeetingSummary(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	fields := strings.Split(raw, "|")
+	if len(fields) != 4 || len(raw) > 1024 {
+		return fmt.Errorf("Baidu RTC AI Agent meeting-summary command is invalid")
+	}
+	if fields[0] != "" && !identifierPattern.MatchString(fields[0]) {
+		return fmt.Errorf("Baidu RTC AI Agent meeting-summary taskKey is invalid")
+	}
+	if fields[1] != "" && !identifierPattern.MatchString(fields[1]) {
+		return fmt.Errorf("Baidu RTC AI Agent meeting-summary promptMode is invalid")
+	}
+	if fields[2] != "" && fields[2] != "true" && fields[2] != "false" {
+		return fmt.Errorf("Baidu RTC AI Agent meeting-summary aiSummaryEnable is invalid")
+	}
+	allowedModules := map[string]struct{}{"basicInfo": {}, "fullSummary": {}, "todoList": {}}
+	if fields[3] != "" {
+		seen := make(map[string]struct{})
+		for _, module := range strings.Split(fields[3], ",") {
+			if _, ok := allowedModules[module]; !ok {
+				return fmt.Errorf("Baidu RTC AI Agent meeting-summary module is invalid")
+			}
+			if _, duplicate := seen[module]; duplicate {
+				return fmt.Errorf("Baidu RTC AI Agent meeting-summary modules must be unique")
+			}
+			seen[module] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func validBaiduRTCIdentity(value string) bool {
@@ -448,7 +724,7 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 	sendResult := make(chan error, 1)
 	readResult := make(chan error, 1)
 	go func() {
-		sendResult <- sendBaiduRTCInputs(sessionCtx, adapter, connection, plan.Messages, invocation.BodyFile, audioPlan)
+		sendResult <- sendBaiduRTCInputs(sessionCtx, adapter, connection, plan.Messages, plan.FinalMessages, invocation.BodyFile, audioPlan)
 	}()
 	go func() {
 		readResult <- readBaiduRTCResponses(sessionCtx, connection, sink, plan, secretValues)
@@ -490,14 +766,25 @@ func invokeBaiduRTCAgentWebSocket(ctx context.Context, adapter *BaiduRESTAdapter
 	return InvocationResult{Output: output, RequestID: createRequestID}, nil
 }
 
-func sendBaiduRTCInputs(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, messages []string, bodyFile string, audioPlan baiduRTCAudioPlan) error {
-	for _, message := range messages {
-		if err := connection.Write(ctx, cloudWebSocketMessageText, []byte(message)); err != nil {
-			return fmt.Errorf("write Baidu RTC AI Agent text query")
+func sendBaiduRTCInputs(ctx context.Context, adapter *BaiduRESTAdapter, connection cloudWebSocketConnection, messages, finalMessages []string, bodyFile string, audioPlan baiduRTCAudioPlan) error {
+	writeMessages := func(values []string) error {
+		for _, message := range values {
+			if err := connection.Write(ctx, cloudWebSocketMessageText, []byte(message)); err != nil {
+				return fmt.Errorf("write Baidu RTC AI Agent client command")
+			}
 		}
+		return nil
+	}
+	if err := writeMessages(messages); err != nil {
+		return err
 	}
 	if bodyFile != "" {
-		return streamBaiduRTCAudio(ctx, adapter, connection, bodyFile, audioPlan)
+		if err := streamBaiduRTCAudio(ctx, adapter, connection, bodyFile, audioPlan); err != nil {
+			return err
+		}
+	}
+	if err := writeMessages(finalMessages); err != nil {
+		return err
 	}
 	return nil
 }

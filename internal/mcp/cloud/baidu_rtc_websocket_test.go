@@ -139,8 +139,16 @@ func TestBaiduRTCAgentWebSocketBoundaryKeepsCredentialsAndInstanceTokenInternal(
 		"caller access key":  func(value *Invocation) { value.Body.(map[string]any)["access_key_id"] = "caller" },
 		"invalid message":    func(value *Invocation) { value.Body.(map[string]any)["messages"] = []any{"[E]:[LIC]:[ACTIVE]:caller"} },
 		"unbounded messages": func(value *Invocation) { value.Body.(map[string]any)["max_messages"] = 257 },
-		"unbounded timeout":  func(value *Invocation) { value.Body.(map[string]any)["timeout_seconds"] = 301 },
-		"bad terminal":       func(value *Invocation) { value.Body.(map[string]any)["terminal_event"] = "forever" },
+		"too many client commands": func(value *Invocation) {
+			commands := make([]any, 64)
+			for index := range commands {
+				commands[index] = "[B]"
+			}
+			value.Body.(map[string]any)["messages"] = commands
+			value.Body.(map[string]any)["final_messages"] = []any{"[B]:[END]"}
+		},
+		"unbounded timeout": func(value *Invocation) { value.Body.(map[string]any)["timeout_seconds"] = 301 },
+		"bad terminal":      func(value *Invocation) { value.Body.(map[string]any)["terminal_event"] = "forever" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid()
@@ -194,6 +202,79 @@ func TestBaiduRTCAgentAcceptsEveryOfficialFixedRateCodec(t *testing.T) {
 			}
 			if err := validateInvocation(invocation, []string{root}); err != nil {
 				t.Fatalf("official %s codec rejected: %v", codec, err)
+			}
+		})
+	}
+}
+
+func TestBaiduRTCAgentAcceptsOfficialStaticClientCommands(t *testing.T) {
+	validMessages := []string{
+		`[B]`, `[B]:[BEGIN]:3000`, `[B]:[END]`, `[T]:你是谁？`, `[TTS]:欢迎光临。`,
+		`[SET]:[AUTO_INT]:[FALSE]`, `[SET]:[AUTO_INT]:[TRUE]`,
+		`[SET]:[DEVICE_INFO]:{"os":"rtos","soc":"arm","model":"A","user_id":"1234567","asr_text_ext":true}`,
+		`[SET]:[GIS]31.051335108535,121.51484487905`,
+		`[E]:[CMD]:[REMOTE_PLAYER]:[STOP]`, `[E]:[CMD]:[REMOTE_PLAYER]:[PAUSE]`, `[E]:[CMD]:[REMOTE_PLAYER]:[RESUME]`,
+		`[E]:[CMD]:[ASR_ENABLE_REALTIME]`, `[E]:[CMD]:[ASR_DISABLE_REALTIME]`, `[E]:[CMD]:[ASR_START_LONGTEXT_REC]`, `[E]:[CMD]:[ASR_STOP_LONGTEXT_REC]`,
+		`[SET]:[UPDATE_SYSTEM_PROMPT]:{"model_type":"3","prompt":"严格使用黑白线条。"}`,
+		`[SET]:[VARIABLES]:{"room":"卧室","device":"空调"}`,
+		`[SET]:[TP_EXTRA_DATA]:{"tp_extra_data":{"functionCall":{"headerMap":{"h1":"v1"},"bodyMap":{"b1":"v3"}}}}`,
+		`[OP]:[switchSceneRole]:{"tts":"DEFAULT{\"vcn\":\"1000000\"}"}`,
+		`[OP]:[switchSceneRole]:{"scene_role":"英语口语老师"}`,
+		`[OP]:[switchSceneRole]:{"scene_role_cfg":{"name":"小度熊","prompt":"你是简洁的聊天助手。"}}`,
+		`[SET]:[ENHANCE_QUERY]:{"enhance_type":"3","pre_query":"我现在在故宫","post_query":"用5个字回答问题"}`,
+		`[E]:[CMD]:[MCP_TOOLS_CHANGED]`,
+		`[E]:[DC]:{"intent":"music","parameter_list":[{"url":"https://media.example.com/test.mp3"},{"text":"播放音乐"}]}`,
+		`[E]:[DC]:{"intent":"music","parameter_list":[{"track_id":"69104227419"},{"text":"播放音乐"}]}`,
+		`[E]:[CMD]:[MEETING_SUMMARY_CREATE]:`,
+		`[E]:[CMD]:[MEETING_SUMMARY_CREATE]:meeting_001|single|true|basicInfo,fullSummary,todoList`,
+		`[E]:[CMD]:[MEETING_SUMMARY_FINISH]`,
+	}
+	for _, message := range validMessages {
+		t.Run(message, func(t *testing.T) {
+			root := t.TempDir()
+			invocation := Invocation{
+				Provider: ProviderBaidu, Mode: ModeMutate, AuthScheme: "rtc-aiagent-ws",
+				Service: "rtc-aiagent", Operation: "RealtimeInteraction", APIVersion: "1",
+				Method: http.MethodGet, URL: "wss://rtc-aiotgw.exp.bcelive.com/v1/realtime",
+				Body: map[string]any{
+					"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1",
+					"messages": []any{message}, "max_messages": 2, "timeout_seconds": 30, "terminal_event": "answer",
+				},
+				ResponseFile: filepath.Join(root, "rtc.ndjson"),
+			}
+			if err := validateInvocation(invocation, []string{root}); err != nil {
+				t.Fatalf("official client command rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestBaiduRTCAgentRejectsUnsafeOrMalformedClientCommands(t *testing.T) {
+	for _, message := range []string{
+		`[E]:[LIC]:[ACTIVE]:{"devId":"caller","licKey":"caller-license"}`,
+		`[E]:[UPLOAD_IMAGE]`, `[E]:[REMOTE_PLAYER_BEGIN]`, `[UNKNOWN]:value`,
+		`[F]:{"session_id":"1","result":"maybe"}`,
+		`[F]:{"session_id":"1","result":"ok","post_function":[{"type":"text","content":"a"},{"type":"text","content":"b"}]}`,
+		`[B]:[BEGIN]:0`, `[B]:[BEGIN]:300001`, `[B]:[END]:extra`,
+		`[SET]:[DEVICE_INFO]:{"os":"rtos","api_key":"secret"}`,
+		`[SET]:[GIS]91,181`,
+		`[SET]:[UPDATE_SYSTEM_PROMPT]:{"model_type":"1","prompt":"bad"}`,
+		`[SET]:[VARIABLES]:{"access_token":"secret"}`,
+		`[OP]:[switchSceneRole]:{"tts":"DEFAULT{\"apikey\":\"secret\"}"}`,
+		`[SET]:[ENHANCE_QUERY]:{"enhance_type":"9","pre_query":"bad"}`,
+		`[E]:[DC]:{"intent":"music","parameter_list":[{"url":"http://127.0.0.1/a.mp3"}]}`,
+		`[E]:[DC]:{"intent":"music","parameter_list":[{"url":"https://127.0.0.1/a.mp3"}]}`,
+		`[E]:[DC]:{"intent":"music","parameter_list":[{"url":"https://user:pass@media.example.com/a.mp3"}]}`,
+		`[E]:[DC]:{"intent":"music","parameter_list":[{"url":"https://media.example.com/a.mp3?access_token=secret"}]}`,
+		`[E]:[CMD]:[MEETING_SUMMARY_CREATE]:bad|too|many|fields|here`,
+	} {
+		t.Run(message, func(t *testing.T) {
+			_, err := parseBaiduRTCAgentPlan(map[string]any{
+				"app_id": "rtc-app-1", "device_id": "device-1", "user_id": "user-1",
+				"messages": []any{message}, "max_messages": 2, "timeout_seconds": 30, "terminal_event": "answer",
+			})
+			if err == nil {
+				t.Fatal("unsafe client command accepted")
 			}
 		})
 	}
@@ -276,8 +357,10 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 		Body: map[string]any{
 			"app_id": "rtc-app-1", "instance_type": "VoiceChat", "config": map[string]any{"welcome": "hello"},
 			"audio_codec": "pcmu",
-			"device_id":   "device-1", "user_id": "user-1", "messages": []any{"[T]:hello"},
-			"max_messages": 8, "timeout_seconds": 30, "terminal_event": "tts_end",
+			"device_id":   "device-1", "user_id": "user-1",
+			"messages":       []any{"[SET]:[AUTO_INT]:[FALSE]", "[T]:hello"},
+			"final_messages": []any{"[E]:[CMD]:[REMOTE_PLAYER]:[STOP]"},
+			"max_messages":   8, "timeout_seconds": 30, "terminal_event": "tts_end",
 		},
 		BodyFile: audioFile, ResponseFile: responseFile, StreamChunkBytes: 160, StreamIntervalMS: 20, MaxResponseFileBytes: 4096,
 	})
@@ -287,13 +370,13 @@ func TestBaiduRTCAgentWebSocketSignsLifecycleAndPublishesSanitizedNDJSON(t *test
 	if controlCalls != 2 || result.RequestID != "create-request" {
 		t.Fatalf("control calls=%d result=%#v", controlCalls, result)
 	}
-	if len(connection.writes) != 4 {
+	if len(connection.writes) != 6 {
 		t.Fatalf("writes=%#v", connection.writes)
 	}
 	if connection.writes[0].messageType != cloudWebSocketMessageText || !bytes.Contains(connection.writes[0].data, []byte(`"licKey":"`+licenseKey+`"`)) || !bytes.Contains(connection.writes[0].data, []byte(`"devId":"device-1"`)) {
 		t.Fatalf("license activation=%s", connection.writes[0].data)
 	}
-	if connection.writes[1].messageType != cloudWebSocketMessageText || string(connection.writes[1].data) != "[T]:hello" || len(connection.writes[2].data) != 160 || len(connection.writes[3].data) != 160 {
+	if connection.writes[1].messageType != cloudWebSocketMessageText || string(connection.writes[1].data) != "[SET]:[AUTO_INT]:[FALSE]" || string(connection.writes[2].data) != "[T]:hello" || len(connection.writes[3].data) != 160 || len(connection.writes[4].data) != 160 || string(connection.writes[5].data) != "[E]:[CMD]:[REMOTE_PLAYER]:[STOP]" {
 		t.Fatalf("protocol writes=%#v", connection.writes)
 	}
 	written, err := os.ReadFile(responseFile)
@@ -520,7 +603,7 @@ func FuzzBaiduRTCAgentPlanRejectsCredentialFields(f *testing.F) {
 			if plan.AudioCodec == "opus" {
 				validOpus = plan.OpusPacketTimeMS == 20 || plan.OpusPacketTimeMS == 40 || plan.OpusPacketTimeMS == 60
 			}
-			if plan.AppID == "" || !validCodec || !validOpus || plan.MaxMessages < 1 || plan.MaxMessages > 256 || plan.Timeout < time.Second || plan.Timeout > 300*time.Second || baiduRTCAgentContainsCredentialField(body) || baiduRTCConfigContainsCredentialMaterial(plan.Config) {
+			if plan.AppID == "" || !validCodec || !validOpus || len(plan.Messages)+len(plan.FinalMessages) > 64 || plan.MaxMessages < 1 || plan.MaxMessages > 256 || plan.Timeout < time.Second || plan.Timeout > 300*time.Second || baiduRTCAgentContainsCredentialField(body) || baiduRTCConfigContainsCredentialMaterial(plan.Config) {
 				t.Fatal("unsafe plan accepted")
 			}
 		}

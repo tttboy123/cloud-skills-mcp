@@ -186,10 +186,12 @@ remain available through the guarded resource gateway.
   processes product license activation from server-only
   `BCE_RTC_LICENSE_KEY`. It supports the six documented WSS audio codecs,
   forces control-plane `config.audiocodec` to match internal WSS `ac`, and
-  constructs Opus `ptime`/`plen` only from a validated bounded packet plan.
-  The direct AK/SK query connection is forbidden. Every path after create
-  attempts stop, and output is published only after a successful terminal
-  event and stop.
+  constructs Opus `ptime`/`plen` only from a validated bounded packet plan. Its
+  pre/post-audio command arrays parse only documented static client commands
+  and reject arbitrary/server-only/license/image prefixes, embedded credential
+  material, and uncorrelated Function Call results. The direct AK/SK query
+  connection is forbidden. Every path after create attempts stop, and output
+  is published only after a successful terminal event and stop.
 - New official endpoint exceptions for any provider are operator policy,
   never model input. `CLOUD_SKILLS_<PROVIDER>_ALLOWED_ENDPOINT_HOSTS` accepts
   comma-separated exact DNS hostnames only; schemes, ports, paths, IPs, and
