@@ -225,6 +225,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	alibabaNLSRESTScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaNLSREST
 	alibabaMQScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaMQ
 	alibabaACRScheme := request.Provider == ProviderAlicloud && alibabaScheme == authSchemeAlibabaACR
+	tencentTCRScheme := request.Provider == ProviderTencent && tencentScheme == authSchemeTencentTCR
 	tencentWebSocketScheme := request.Provider == ProviderTencent && (tencentScheme == authSchemeTencentASRWS || tencentScheme == authSchemeTencentVirtualWS || tencentScheme == authSchemeTencentSOEWS || tencentScheme == authSchemeTencentTranslateWS || tencentScheme == authSchemeTencentVoiceWS || tencentScheme == authSchemeTencentMPSWS || tencentScheme == authSchemeTencentMPSTTSWS || tencentScheme == authSchemeTencentTTSWS || tencentScheme == authSchemeTencentTTSStreamWS || tencentScheme == authSchemeTencentPodcastWS)
 	gcpGRPCScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPGRPC
 	gcpFirebaseSSEScheme := request.Provider == ProviderGCP && gcpScheme == authSchemeGCPFirebaseSSE
@@ -296,6 +297,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		}
 	} else if alibabaACRScheme {
 		if err := validateAlibabaACRInvocationWithEndpointHosts(request, allowedEndpointHosts); err != nil {
+			return err
+		}
+	} else if tencentTCRScheme {
+		if err := validateTencentTCRInvocation(request, allowedEndpointHosts); err != nil {
 			return err
 		}
 	} else if tencentWebSocketScheme {
@@ -567,8 +572,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 			return fmt.Errorf("Tencent Cloud requires valid service and operation")
 		}
 		scheme := normalizedAuthScheme(request.AuthScheme, authSchemeTencentTC3)
-		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS && scheme != authSchemeTencentCLS {
-			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, cos, or cls")
+		if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS && scheme != authSchemeTencentCLS && scheme != authSchemeTencentTCR {
+			return fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, cos, cls, or tcr-registry")
 		}
 		if (scheme == authSchemeTencentTC3 || scheme == authSchemeTencentV1 || scheme == authSchemeTencentV1SHA256) && !identifierPattern.MatchString(request.APIVersion) {
 			return fmt.Errorf("Tencent Cloud API signing requires a valid api_version")
@@ -610,6 +615,11 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 				return fmt.Errorf("Tencent Cloud CLS requires a valid URL")
 			}
 			if err := validateTencentCLSTarget(request.Service, parsed); err != nil {
+				return err
+			}
+		}
+		if scheme == authSchemeTencentTCR {
+			if err := validateTencentTCRInvocation(request, allowedEndpointHosts); err != nil {
 				return err
 			}
 		}
@@ -655,8 +665,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	if !azureACRScheme && (request.ACRScope != "" || request.ACRSourceScope != "") {
 		return fmt.Errorf("acr_scope and acr_source_scope are supported only by Azure Container Registry auth_scheme=acr")
 	}
-	if !alibabaACRScheme && request.RegistryInstanceID != "" {
-		return fmt.Errorf("registry_instance_id is supported only by Alibaba Cloud ACR auth_scheme=acr-registry")
+	if !alibabaACRScheme && !tencentTCRScheme && request.RegistryInstanceID != "" {
+		return fmt.Errorf("registry_instance_id is supported only by Alibaba Cloud ACR or Tencent Cloud TCR Registry schemes")
 	}
 	if request.StreamChunkBytes < 0 || request.StreamChunkBytes > maxRequestFileBytes {
 		return fmt.Errorf("stream_chunk_bytes must be between 1 and %d when provided", maxRequestFileBytes)

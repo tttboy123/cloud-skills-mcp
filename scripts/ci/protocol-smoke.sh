@@ -42,6 +42,7 @@ trap 'rm -f "${RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"ecr","service":"ecr","operation":"ListTags","region":"us-west-2","method":"GET","url":"https://123456789012.dkr.ecr.us-west-2.amazonaws.com.attacker.example/v2/team/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"gcp_api_read","arguments":{"auth_scheme":"artifact-registry","service":"artifact-registry","operation":"ListTags","method":"GET","url":"https://us-docker.pkg.dev.attacker.example/v2/project/repository/app/tags/list"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"alicloud_api_read","arguments":{"auth_scheme":"acr-registry","service":"acr","operation":"ListTags","region":"cn-hangzhou","registry_instance_id":"cri-example123","method":"GET","url":"https://demo-registry.cn-hangzhou.cr.aliyuncs.com.attacker.example/v2/team/app/tags/list"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"tencent_api_read","arguments":{"auth_scheme":"tcr-registry","service":"tcr","operation":"ListTags","region":"ap-guangzhou","registry_instance_id":"tcr-example123","method":"GET","url":"https://demo-tcr.tencentcloudcr.com.attacker.example/v2/team/app/tags/list"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -98,7 +99,9 @@ jq -e -s '
     ($responses | map(select(.id == 27))[0].result.isError == true) and
     ($responses | map(select(.id == 27))[0].result.content[0].text | contains("exact docker.pkg.dev or supported gcr.io endpoint")) and
     ($responses | map(select(.id == 28))[0].result.isError == true) and
-    ($responses | map(select(.id == 28))[0].result.content[0].text | contains("exact Enterprise Edition public or VPC endpoint"))
+    ($responses | map(select(.id == 28))[0].result.content[0].text | contains("exact Enterprise Edition public or VPC endpoint")) and
+    ($responses | map(select(.id == 29))[0].result.isError == true) and
+    ($responses | map(select(.id == 29))[0].result.content[0].text | contains("exact Enterprise Edition public, VPC, or operator-pinned custom endpoint"))
 ' "${RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"

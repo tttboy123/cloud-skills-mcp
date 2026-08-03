@@ -1,6 +1,6 @@
 interface:
   display_name: "Tencent Cloud"
-  short_description: "Operate every Tencent API 3.0 action through MCP"
+  short_description: "Operate Tencent APIs and Enterprise TCR through MCP"
   default_prompt: "Use $tencent-cloud to inspect or operate Tencent Cloud resources safely."
 dependencies:
   tools:

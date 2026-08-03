@@ -391,6 +391,75 @@ func TestLiveTencentCLSReadOnly(t *testing.T) {
 	t.Logf("provider=tencent operation=GetLogset outcome=succeeded response_bytes=%d request_id=%q", len(text), succeeded.RequestID)
 }
 
+func TestLiveTencentTCRReadOnly(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_TENCENT_TCR") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_TENCENT_TCR=1 for a real CAM-backed Enterprise TCR Registry ListTags probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Tencent Cloud TCR live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_TENCENT_TCR_ENDPOINT"), "/")
+	instanceID := required("CLOUD_SKILLS_LIVE_TENCENT_TCR_INSTANCE_ID")
+	region := required("CLOUD_SKILLS_LIVE_TENCENT_TCR_REGION")
+	repository := required("CLOUD_SKILLS_LIVE_TENCENT_TCR_REPOSITORY")
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed == nil {
+		t.Fatal("CLOUD_SKILLS_LIVE_TENCENT_TCR_ENDPOINT must be a valid HTTPS Registry origin")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	allowedHosts := parseAllowedEndpointHosts(os.Getenv("CLOUD_SKILLS_TENCENT_ALLOWED_ENDPOINT_HOSTS"))
+	if parsed.Scheme != "https" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "" || (!validTencentTCRRegistryHost(host) && !isExplicitEndpointHost(host, allowedHosts)) {
+		t.Fatal("CLOUD_SKILLS_LIVE_TENCENT_TCR_ENDPOINT must be an exact Enterprise Edition public, VPC, or operator-pinned custom Registry origin")
+	}
+	if !tencentTCRInstanceIDPattern.MatchString(instanceID) || !identifierPattern.MatchString(region) || !azureACRRepositoryPattern.MatchString(repository) || !strings.Contains(repository, "/") {
+		t.Fatal("Tencent Cloud TCR live instance ID, region, or namespaced repository is invalid")
+	}
+	runtime := DefaultRuntime()
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "tencent_api_read", map[string]any{
+		"auth_scheme": "tcr-registry", "service": "tcr", "operation": "ListTags", "region": region,
+		"registry_instance_id": instanceID, "method": "GET", "url": endpoint + "/v2/" + repository + "/tags/list",
+		"parameters": map[string]any{"n": 1},
+	})
+	if result.IsError {
+		t.Fatalf("Tencent Cloud TCR live read failed: %s", cloudToolText(t, result))
+	}
+	text := strings.TrimSpace(cloudToolText(t, result))
+	if text == "" {
+		t.Fatal("Tencent Cloud TCR returned an empty response")
+	}
+	for _, secret := range []string{os.Getenv("TENCENTCLOUD_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SESSION_TOKEN"), os.Getenv("TENCENTCLOUD_TOKEN")} {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Fatal("Tencent Cloud TCR live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderTencent && events[index].Mode == ModeRead && events[index].Operation == "ListTags" && events[index].AuthScheme == authSchemeTencentTCR && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil || succeeded.RegistryInstanceID != instanceID {
+		t.Fatalf("no succeeded Tencent Cloud TCR read audit event: %#v", events)
+	}
+	t.Logf("provider=tencent service=tcr operation=ListTags region=%s outcome=succeeded response_bytes=%d request_id=%q", region, len(text), succeeded.RequestID)
+}
+
 func TestLiveAzureACRReadOnly(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_AZURE_ACR") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_AZURE_ACR=1 for a real ACR scoped-token read probe")

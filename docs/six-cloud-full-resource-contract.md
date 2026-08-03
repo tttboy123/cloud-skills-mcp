@@ -48,7 +48,7 @@ explicit approval; a caller cannot downgrade an operation by labeling it
 | Azure | Direct HTTPS with Entra Bearer Token and validated audience, ACR internal OAuth2 scoped-token exchange, Azure OpenAI Realtime, Voice Live, Entra-backed Web PubSub, Event Grid Namespace MQTT v5, and Service Bus/Event Hubs AMQP 1.0 WSS | Non-CLI Azure Identity Environment, Workload Identity, or Managed Identity credentials; ACR refresh/access tokens remain internal |
 | Google Cloud | Google Auth ADC authenticated REST, raw framed-protobuf or operator-approved `FileDescriptorSet`-driven ProtoJSON gRPC over HTTP/2, bounded Vertex/Gemini Live WSS, and finite Firebase Realtime Database SSE | ADC, service account, workload identity federation, impersonation, or metadata identity; Firebase tokens use its two official scopes |
 | Alibaba Cloud | Direct ACS3 OpenAPI, legacy RPC/ROA V2, DataHub, OpenSearch V3, MaxCompute ODPS v2/v4 project/data/Tunnel, Function Compute classic FC/current Trigger ACS3/custom-domain POP, OSS v1/v4 Header, SLS v1/v4, MNS, RocketMQ 4.x MQ HTTP, ACR Enterprise Docker/OCI Registry HTTP, and OTS v2/v4 signed HTTPS plus guarded NLS recognition/synthesis HTTPS/WSS | Official credentials-go chain: RAM/OIDC/ECS role, STS, or AK/SK env; MQ receipt/transaction handles, ACR temporary login/Bearer tokens, and the derived NLS token remain internal |
-| Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS data-plane signed HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; realtime ASR signs its documented temporary token, while WSS protocols without a Token field require the long-lived tuple |
+| Tencent Cloud | Direct API 3.0 TC3 and v1 HmacSHA1/HmacSHA256 HTTPS, still-active qcloud API 2017 query/form HTTPS, COS/CLS signed HTTPS, TCR Enterprise Docker/OCI Registry HTTPS, and internally connected realtime ASR/virtual-number detection/SOE evaluation/speech translation/voice conversion/MPS recognition/MPS TTS/standard realtime TTS/streaming-text TTS/large-model podcast signed WSS | SecretId/SecretKey or CAM/STS temporary credentials injected into the server environment; TCR temporary Registry credentials remain internal, realtime ASR signs its documented temporary token, and WSS protocols without a Token field require the long-lived tuple |
 | Baidu AI Cloud | BCE signed HTTPS against validated `baidubce.com` endpoints plus guarded RTC AI Agent BCE-create/private-token-WSS/stop | BCE AK/SK or IAM/STS temporary AK/SK/session token; RTC product license is server-only entitlement material |
 
 The MCP server never returns, logs or writes credential material. Login,
@@ -269,6 +269,15 @@ remain available through the guarded resource gateway.
   the generic TC3 family rather than being misrouted through the old signer.
   `TestLiveTencentCLSReadOnly` is the opt-in real q-sign acceptance gate and
   requires an exact endpoint plus an existing logset ID.
+- Tencent TCR Enterprise Registry uses `auth_scheme=tcr-registry`, exact public
+  `<instance>.tencentcloudcr.com`, VPC `<instance>-vpc.tencentcloudcr.com`, or
+  operator-pinned custom endpoints. After all Registry paths and methods pass
+  validation, the server sends only the fixed internal TC3
+  `CreateInstanceToken(TokenType=temp)` request, rejects long-term or expired
+  results, and keeps temporary Basic credentials internal. Registry redirects
+  fail closed until an official redirect contract can be verified. Personal
+  Edition remains credential-bound because it requires a separately configured
+  Registry username/password rather than CAM AKSK/IAM.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an
@@ -393,6 +402,9 @@ Examples are navigation aids, not a support allowlist.
 - The dedicated Alibaba Enterprise ACR live gate requires an existing
   repository and exercises RAM `GetAuthorizationToken`, the internal Bearer
   exchange, ListTags, sanitized audit, and credential containment.
+- The dedicated Tencent Enterprise TCR live gate requires an existing instance
+  and repository and exercises CAM `CreateInstanceToken(TokenType=temp)`,
+  ListTags, sanitized audit, and temporary-credential containment.
 - Dedicated private and Public ECR live gates require existing repositories and
   exercise their distinct Basic/tags and Bearer/manifest contracts through the
   AWS SDK identity chain without printing response bodies or token material.

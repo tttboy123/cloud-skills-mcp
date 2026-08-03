@@ -678,7 +678,7 @@ func NewTencentRESTAdapter(config TencentRESTConfig) *TencentRESTAdapter {
 
 func (adapter *TencentRESTAdapter) Status(context.Context) (ProviderStatus, error) {
 	return ProviderStatus{
-		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS/WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+virtual-number-ws+soe-ws+speech-translate-ws+voice-convert-ws+mps-ws+mps-tts-ws+tts-ws+tts-stream-ws+podcast-ws+cos+cls",
+		Provider: ProviderTencent, Available: true, Adapter: "Tencent Cloud signed HTTPS, TCR Registry HTTPS, and WSS", Version: "tc3+tc1+tc1-sha256+qcloud+qcloud-sha256+asr-ws+virtual-number-ws+soe-ws+speech-translate-ws+voice-convert-ws+mps-ws+mps-tts-ws+tts-ws+tts-stream-ws+podcast-ws+cos+cls+tcr-registry",
 		CredentialSource: credentialSource(ProviderTencent), CredentialStatus: CredentialStatusUnverified,
 		Message: "AKSK or CAM temporary credentials are resolved lazily from the server environment; no cloud CLI is executed",
 	}, nil
@@ -702,13 +702,18 @@ func (adapter *TencentRESTAdapter) Discover(context.Context, DiscoveryRequest) (
 		"podcast_websocket":          "https://cloud.tencent.com/document/api/1073/124700",
 		"cos_signature":              "https://intl.cloud.tencent.com/document/product/436/7778",
 		"cls_signature":              "https://cloud.tencent.com/document/product/614/12445",
+		"tcr_temporary_credential":   "https://cloud.tencent.com/document/api/1141/41571",
+		"tcr_registry":               "https://cloud.tencent.com/document/product/1141/39287",
 	})
 }
 
 func (adapter *TencentRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeTencentTC3)
-	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS && scheme != authSchemeTencentCLS {
-		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, cos, or cls")
+	if scheme != authSchemeTencentTC3 && scheme != authSchemeTencentV1 && scheme != authSchemeTencentV1SHA256 && scheme != authSchemeTencentQCloud && scheme != authSchemeTencentQCloud256 && scheme != authSchemeTencentASRWS && scheme != authSchemeTencentVirtualWS && scheme != authSchemeTencentSOEWS && scheme != authSchemeTencentTranslateWS && scheme != authSchemeTencentVoiceWS && scheme != authSchemeTencentMPSWS && scheme != authSchemeTencentMPSTTSWS && scheme != authSchemeTencentTTSWS && scheme != authSchemeTencentTTSStreamWS && scheme != authSchemeTencentPodcastWS && scheme != authSchemeTencentCOS && scheme != authSchemeTencentCLS && scheme != authSchemeTencentTCR {
+		return InvocationResult{}, fmt.Errorf("Tencent Cloud auth_scheme must be tc3, tc1, tc1-sha256, qcloud, qcloud-sha256, asr-ws, virtual-number-ws, soe-ws, speech-translate-ws, voice-convert-ws, mps-ws, mps-tts-ws, tts-ws, tts-stream-ws, podcast-ws, cos, cls, or tcr-registry")
+	}
+	if scheme == authSchemeTencentTCR {
+		return invokeTencentTCR(ctx, adapter, invocation)
 	}
 	if scheme == authSchemeTencentASRWS || scheme == authSchemeTencentVirtualWS || scheme == authSchemeTencentSOEWS || scheme == authSchemeTencentTranslateWS || scheme == authSchemeTencentVoiceWS || scheme == authSchemeTencentMPSWS || scheme == authSchemeTencentMPSTTSWS || scheme == authSchemeTencentTTSWS || scheme == authSchemeTencentTTSStreamWS || scheme == authSchemeTencentPodcastWS {
 		if scheme == authSchemeTencentASRWS {
