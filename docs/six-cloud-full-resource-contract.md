@@ -245,6 +245,10 @@ remain available through the guarded resource gateway.
   ACS3, while its public message protocol is an explicit credential-bound
   exclusion because the provider requires instance ACL username/password rather
   than the Goal's RAM AKSK/IAM entrypoint.
+  `TestLiveAlibabaMQMutation` is the opt-in real-data-plane acceptance gate. It
+  requires an operator-staged message and explicit mutation enablement, defaults
+  to `release`, and fails if credentials or receipt-handle fields appear in the
+  atomic output.
 - Direct REST adapters allow HTTPS only and provider-owned hostname suffixes.
   Redirects are disabled so credentials cannot cross host boundaries.
 - Local file references are rejected unless their resolved path is below an

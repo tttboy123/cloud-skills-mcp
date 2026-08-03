@@ -191,6 +191,83 @@ func TestLiveBaiduRTCAgentMutation(t *testing.T) {
 	t.Logf("provider=baiducloud operation=RealtimeInteraction outcome=succeeded response_bytes=%d request_id=%q", len(data), succeeded.RequestID)
 }
 
+func TestLiveAlibabaMQMutation(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_ALIBABA_MQ") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_ALIBABA_MQ=1 for an explicitly approved RocketMQ 4.x HTTP consume probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Alibaba RocketMQ live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_ALIBABA_MQ_ENDPOINT"), "/")
+	topic := required("CLOUD_SKILLS_LIVE_ALIBABA_MQ_TOPIC")
+	consumer := required("CLOUD_SKILLS_LIVE_ALIBABA_MQ_CONSUMER")
+	settlement := envDefault("CLOUD_SKILLS_LIVE_ALIBABA_MQ_SETTLEMENT", "release")
+	if settlement != "release" && settlement != "acknowledge" {
+		t.Fatal("CLOUD_SKILLS_LIVE_ALIBABA_MQ_SETTLEMENT must be release or acknowledge")
+	}
+	root := t.TempDir()
+	responseFile := filepath.Join(root, "alibaba-mq.ndjson")
+	runtime := DefaultRuntime()
+	if !runtime.AllowMutations {
+		t.Fatal("CLOUD_SKILLS_ALLOW_MUTATIONS=1 is required after explicit approval")
+	}
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	parameters := map[string]any{"consumer": consumer, "numOfMessages": 1, "waitseconds": 1}
+	if instance := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_LIVE_ALIBABA_MQ_INSTANCE")); instance != "" {
+		parameters["ns"] = instance
+	}
+	if tag := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_LIVE_ALIBABA_MQ_TAG")); tag != "" {
+		parameters["tag"] = tag
+	}
+	c := newTestClient(t, runtime)
+	result := callCloudTool(t, c, "alicloud_api_mutate", map[string]any{
+		"force": true, "auth_scheme": "mq", "service": "rocketmq", "operation": "ConsumeMessages",
+		"method": "GET", "url": endpoint + "/topics/" + topic + "/messages", "parameters": parameters,
+		"body": map[string]any{"settlement": settlement}, "response_file": responseFile,
+	})
+	if result.IsError {
+		t.Fatalf("Alibaba RocketMQ live mutation failed (stage one matching message before the probe): %s", cloudToolText(t, result))
+	}
+	data, err := os.ReadFile(responseFile)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("read Alibaba RocketMQ live response: bytes=%d err=%v", len(data), err)
+	}
+	combined := string(data) + cloudToolText(t, result)
+	if strings.Contains(strings.ToLower(combined), "receipthandle") || strings.Contains(strings.ToLower(combined), "receipt_handle") {
+		t.Fatal("Alibaba RocketMQ live result leaked an internal receipt handle field")
+	}
+	for _, secret := range []string{os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_ID"), os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET"), os.Getenv("ALIBABA_CLOUD_SECURITY_TOKEN")} {
+		if secret != "" && strings.Contains(combined, secret) {
+			t.Fatal("Alibaba RocketMQ live result leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAlicloud && events[index].Mode == ModeMutate && events[index].Operation == "ConsumeMessages" && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Alibaba RocketMQ mutation audit event: %#v", events)
+	}
+	t.Logf("provider=alicloud operation=ConsumeMessages settlement=%s outcome=succeeded response_bytes=%d request_id=%q", settlement, len(data), succeeded.RequestID)
+}
+
 func parseLiveProviderStatus(text string) (ProviderStatus, error) {
 	var status ProviderStatus
 	if err := json.Unmarshal([]byte(text), &status); err != nil {

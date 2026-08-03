@@ -337,6 +337,18 @@ Alibaba Cloud ApsaraMQ for RocketMQ 4.x 的 AKSK HTTP 数据面使用 `auth_sche
 
 该入口只接受 HTTPS、官方 `mqrest` host（或 operator 固定的精确 endpoint host）、精确 topic path、单次 1–16 条和 0–30 秒长轮询；所有 headers 与 `body_file` 均禁止。RocketMQ 5.x 控制面仍可经 ACS3 调用；其公开消息收发协议要求实例 username/password/ACL user，而不是本项目允许的 RAM AKSK/IAM 身份入口，因此不会把这类密码凭证扩展到 MCP surface。4.x HTTP API 仍是官方维护的 AKSK 数据面。
 
+真实数据面验收使用显式 mutation probe。先在目标 topic 预置一条匹配消息，再注入 credentials-go 支持的 AKSK/STS；endpoint 即使控制台显示 `http://` 也必须改用同 host 的 `https://` 形式。默认 `release` 不会 ACK，只在 broker 可见性超时后重投；只有另行设置 `CLOUD_SKILLS_LIVE_ALIBABA_MQ_SETTLEMENT=acknowledge` 才确认消费：
+
+```bash
+CLOUD_SKILLS_ALLOW_MUTATIONS=1 \
+CLOUD_SKILLS_LIVE_ALIBABA_MQ=1 \
+CLOUD_SKILLS_LIVE_ALIBABA_MQ_ENDPOINT=https://<account-id>.mqrest.<region>.aliyuncs.com \
+CLOUD_SKILLS_LIVE_ALIBABA_MQ_TOPIC=<topic> \
+CLOUD_SKILLS_LIVE_ALIBABA_MQ_CONSUMER=<group-id> \
+CLOUD_SKILLS_LIVE_ALIBABA_MQ_INSTANCE=<instance-id> \
+go test ./internal/mcp/cloud -run TestLiveAlibabaMQMutation -v
+```
+
 Azure Web PubSub MQTT 3.1.1/5.0 使用 `auth_scheme=webpubsub-mqtt-ws`；Event Grid Namespace MQTT v5 使用 `auth_scheme=eventgrid-mqtt-ws` 和内部 Entra `OAUTH2-JWT` CONNECT/AUTH；Service Bus/Event Hubs 数据面使用 `servicebus-amqp-ws|eventhubs-amqp-ws` 和内部 Entra/CBS AMQP 1.0 over WSS。它们都把凭证、临时 token、CBS claim 和消息/会话锁留在 server 内部。
 
 Azure OpenAI Realtime、Voice Live 与 Web PubSub JSON/Protobuf WSS 分别使用 `auth_scheme=realtime-ws|voice-live-ws|webpubsub-ws`，GCP 原生 HTTP/2 使用 `auth_scheme=grpc`，AWS 有限原始帧 SigV4 WSS、Connect Health Medical Scribe、Transcribe、IoT MQTT、Kinesis Video Signaling、AppSync Events 与 AppSync GraphQL WebSocket 使用 `sigv4-ws|connect-health-ws|transcribe-ws|iot-mqtt-ws|kinesisvideo-signaling-ws|appsync-event-ws|appsync-graphql-ws`。Alibaba ACS3 使用 `auth_scheme=acs3`；旧版 RPC/ROA V2 使用 `rpc|roa`；DataHub 和 OpenSearch 分别使用 `datahub|opensearch`；MaxCompute 项目/数据/Tunnel API 使用当前 `odps4` 或旧端点 `odps`；Function Compute 经典资源/旧 `/proxy` Trigger、新 `fcapp.run` Trigger、自定义域名分别使用 `fc|fc3|fc-custom`；OSS Header 签名使用 `oss|oss4`（V4 推荐），SLS 使用 `sls|sls4`，MNS 使用 `mns`，RocketMQ 4.x HTTP 数据面使用 `mq`，Tablestore 使用 `ots|ots4`，NLS 使用 `nls-rest|nls-ws`。Tencent API 3.0 推荐使用 `tc3`；仍要求 GET/query 或 `application/x-www-form-urlencoded` 的 v1 调用使用 `tc1|tc1-sha256`；仍保留在 `*.api.qcloud.com/v2/index.php` 的旧版资源 API 使用 `qcloud|qcloud-sha256`；COS 使用 `cos`；实时 ASR、虚拟号真人判定、口语评测、实时语音翻译、实时音色变换、MPS 私有音频识别/翻译、MPS 流式语音合成、标准实时语音合成、流式文本语音合成和大模型播客分别使用 `asr-ws|virtual-number-ws|soe-ws|speech-translate-ws|voice-convert-ws|mps-ws|mps-tts-ws|tts-ws|tts-stream-ws|podcast-ws`，MCP server 内部完成 WSS Upgrade、帧传输和签名，绝不返回带签名连接 URL。Baidu REST 使用 `auth_version=v1|v2`；RTC AI Agent 使用 `auth_scheme=rtc-aiagent-ws`，server 内部完成 BCE v1 create、license 激活、双工 WSS，并在所有 create 后路径尝试签名 stop，禁止 caller 使用 AK/SK query 或接触实例 token。六云二进制或媒体 request body 都可使用受控 `body_file`；大响应、gRPC 原始响应或 WebSocket 输出使用 `response_file`。OSS POST policy 和预签名 URL 会生成可转交的临时授权，不作为 MCP 通用代签出口。
