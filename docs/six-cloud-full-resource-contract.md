@@ -99,6 +99,13 @@ remain available through the guarded resource gateway.
   `/graphql` requests, keeps dynamic subprotocol/start authorization internal,
   validates the realtime message lifecycle, and atomically publishes sanitized
   data payloads before sending `stop`.
+- AWS IoT WSS accepts finite read-only MQTT 3.1.1 and MQTT 5 subscriptions over
+  the exact `/mqtt` endpoint. It keeps SigV4/STS query authorization internal,
+  supports only AWS QoS 0/1, validates MQTT 5 properties and reason codes,
+  advertises bounded receive/128 KiB packet limits and zero topic aliases,
+  honors broker keepalive, and atomically publishes Base64 NDJSON. Persistent
+  sessions, subscription identifiers, QoS 2 and caller-provided handshake
+  material are excluded; publishing remains available through signed HTTPS.
 - Generic AWS SigV4 WSS signs only exact official or operator-approved
   endpoints and allowed non-credential headers, keeps Authorization and STS
   tokens inside the Upgrade, accepts bounded JSON/text/Base64 client frames,

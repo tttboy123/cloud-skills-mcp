@@ -145,13 +145,13 @@ Amazon Transcribe 标准、Medical 和 Call Analytics 的交互式 WebSocket 使
 
 PCM 默认按 100ms 分片；压缩音频或特殊采样布局可显式设置 `stream_chunk_bytes`/`stream_interval_ms`。Medical 改用 `/medical-stream-transcription-websocket`、`StartMedicalStreamTranscriptionWebSocket` 并提供 `specialty`/`type`；Call Analytics 改用 `/call-analytics-stream-transcription-websocket` 和对应 operation。需要 `ConfigurationEvent` 时把配置对象放在 `body`，音频仍放在 `body_file`；它和后述 Connect Health 是允许二者并用的两个受控协议。
 
-AWS IoT Core 的 IAM/SigV4 MQTT 订阅使用 `auth_scheme=iot-mqtt-ws`。普通 SigV4 HTTPS 已能发布 `/topics/<topic>`，但不能订阅；该模式由 server 内部生成五分钟 WSS 签名、协商 `mqtt`、发送 clean-session CONNECT/SUBSCRIBE、验证 CONNACK/SUBACK、确认 QoS 1 消息，并在消息数或超时边界到达后原子发布 Base64 NDJSON：
+AWS IoT Core 的 IAM/SigV4 MQTT 3.1.1/5.0 订阅使用 `auth_scheme=iot-mqtt-ws`。普通 SigV4 HTTPS 已能发布 `/topics/<topic>`，但不能订阅；该模式由 server 内部生成五分钟 WSS 签名、协商 `mqtt`、发送 clean-start CONNECT/SUBSCRIBE、验证对应版本的 CONNACK/SUBACK reason code、确认 QoS 1 消息，并在消息数或超时边界到达后原子发布 Base64 NDJSON。`protocol_version` 可为 `4`（默认）或 `5`：
 
 ```json
-{"name":"aws_api_read","arguments":{"auth_scheme":"iot-mqtt-ws","service":"iotdevicegateway","operation":"SubscribeMQTT","region":"us-west-2","method":"GET","url":"wss://<account>-ats.iot.us-west-2.amazonaws.com/mqtt","body":{"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/+/temperature","qos":1}],"max_messages":10,"timeout_seconds":30},"response_file":"/approved/results/mqtt.ndjson"}}
+{"name":"aws_api_read","arguments":{"auth_scheme":"iot-mqtt-ws","service":"iotdevicegateway","operation":"SubscribeMQTT","region":"us-west-2","method":"GET","url":"wss://<account>-ats.iot.us-west-2.amazonaws.com/mqtt","body":{"protocol_version":5,"client_id":"observer-1","subscriptions":[{"topic_filter":"sensors/+/temperature","qos":1}],"max_messages":10,"timeout_seconds":30},"response_file":"/approved/results/mqtt.ndjson"}}
 ```
 
-STS session token 遵循 AWS IoT 官网的特殊规则：只在 canonical query 签名完成后追加；签名 URL、Token 和 MQTT 握手控制都不进入 MCP 输出。调用方不能提交 query/header、持久会话或无边界订阅。
+MQTT 5 CONNECT 显式限制 Receive Maximum 和 128 KiB Maximum Packet Size，并把 Topic Alias Maximum 保持为 0；下行支持 Payload Format、Message Expiry、Content Type、Response Topic、Correlation Data 和有序 User Properties，拒绝 AWS 不支持的 QoS 2/Subscription Identifier 以及未协商的 Topic Alias。STS session token 遵循 AWS IoT 官网的特殊规则：只在 canonical query 签名完成后追加；签名 URL、Token 和 MQTT 握手控制都不进入 MCP 输出。调用方不能提交 query/header、持久会话或无边界订阅。
 
 AWS AppSync Events 的 IAM 频道订阅使用 `auth_scheme=appsync-event-ws`。server 从标准 realtime host 推导官方 HTTP `/event` host（自定义域名必须由 operator allowlist 批准），分别对连接正文 `{}` 和订阅频道正文执行 `appsync` SigV4，把授权对象只放入内部 `header-<Base64URL>` 子协议和 `subscribe.authorization`，然后按消息数或超时收集并显式退订：
 
