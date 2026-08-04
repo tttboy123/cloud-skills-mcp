@@ -1,0 +1,43 @@
+{
+  "name": "cloud-skills-mcp",
+  "version": "0.4.0",
+  "description": "Six-cloud Skills for the cloud-skills-mcp MCP server: operate AWS, Azure, Google Cloud, Alibaba Cloud, Tencent Cloud, and Baidu AI Cloud through official HTTPS/WSS APIs with internal identity-chain credentials.",
+  "author": {
+    "name": "tttboy123",
+    "url": "https://github.com/tttboy123"
+  },
+  "homepage": "https://github.com/tttboy123/cloud-skills-mcp",
+  "repository": "https://github.com/tttboy123/cloud-skills-mcp",
+  "license": "MIT",
+  "keywords": [
+    "aws",
+    "azure",
+    "google-cloud",
+    "alibaba-cloud",
+    "tencent-cloud",
+    "baidu-cloud",
+    "mcp",
+    "cloud-skills",
+    "six-cloud"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Six-Cloud Skills",
+    "shortDescription": "Operate six clouds through the cloud-skills-mcp MCP server.",
+    "longDescription": "Six direct-network skills (AWS, Azure, Google Cloud, Alibaba Cloud, Tencent Cloud, Baidu AI Cloud) that drive the cloud-skills-mcp stdio MCP server's 19 tools. Credentials never enter MCP arguments: each provider's official identity chain is resolved lazily in the server process, and every protocol family is covered by hermetic tests, protocol smoke, and a scheme mapping audit.",
+    "developerName": "tttboy123",
+    "category": "Coding",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use the AWS skill to inspect my cloud resources safely.",
+      "Show me how to read Azure resources with Entra identity.",
+      "Summarize the six-cloud skill mapping and live gate checklist."
+    ],
+    "websiteURL": "https://github.com/tttboy123/cloud-skills-mcp",
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}

@@ -1,0 +1,5 @@
+# Google Cloud Skill
+
+本目录把 GCP 资源意图路由到统一 `cloud-skills-mcp` server 的 `gcp_api_discover`、`gcp_api_read` 和 `gcp_api_mutate`。底层通过官方 Google Auth ADC 链访问 authenticated REST API；`auth_scheme=artifact-registry` 直接覆盖精确 `docker.pkg.dev` 与 Artifact Registry-backed `gcr.io` 的 OCI Distribution 1.1 HTTP，内部使用 ADC Bearer 并拒绝 chunked upload；`auth_scheme=grpc` 既可通过原生 HTTP/2 传输已有的标准五字节 framed protobuf，也可用 `payload_mode=protobuf-json` 和 operator-approved `FileDescriptorSet` 在 server 内完成 ProtoJSON↔protobuf、有限流和原子 NDJSON 输出；`auth_scheme=vertex-live-ws` 支持 setup-first、有限时长/消息数、动态函数响应、内部 session resumption 和原子 NDJSON；`auth_scheme=firebase-sse` 使用 Firebase 官方双 scope OAuth、受控 307 和有限 SSE 事件输出。REST API 使用 public Discovery Service 做发现，Registry、Firebase 和 gRPC-only API 使用各自官方 reference。运行时不调用 gcloud、Docker、credential helper、grpcurl、protoc 或其他 CLI。
+
+凭证仅使用 ADC、workload identity、impersonation 或 metadata identity；运行时不调用 gcloud。具体规则见 [SKILL.md](SKILL.md)，官方来源见 [references/official-docs.md](references/official-docs.md)。

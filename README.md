@@ -62,6 +62,18 @@ cd cloud-skills-mcp
 ./build-mcp-servers.sh
 ```
 
+六套 Skill 也打包为开源 Codex 插件（`plugin/`，marketplace 清单在
+`.agents/plugins/marketplace.json`），可直接从本仓库安装：
+
+```bash
+codex plugin marketplace add https://github.com/tttboy123/cloud-skills-mcp.git
+codex plugin add cloud-skills-mcp@cloud-skills-mcp
+```
+
+插件包由 `scripts/ci/mapping-audit.sh` 校验：`plugin/skills/<provider>` 与仓库根
+的 `<provider>` 技能目录逐文件一致，漂移即失败。插件只包含技能说明；
+MCP server 二进制仍按上面的 `install.sh` 安装并注册。
+
 ## 注册统一 MCP server
 
 Codex CLI：

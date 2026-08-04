@@ -90,8 +90,20 @@ for provider in aws azure google-cloud alicloud tencent-cloud baiducloud; do
       echo "mapping audit: missing ${provider}/${file}" >&2
       failed=1
     fi
+    if [[ ! -f "${ROOT}/plugin/skills/${provider}/${file}" ]]; then
+      echo "mapping audit: plugin/skills/${provider}/${file} is missing from the plugin bundle" >&2
+      failed=1
+    fi
   done
+  if ! diff -rq "${ROOT}/${provider}" "${ROOT}/plugin/skills/${provider}" >/dev/null 2>&1; then
+    echo "mapping audit: plugin/skills/${provider} drifted from the canonical ${provider} skill" >&2
+    failed=1
+  fi
 done
+if [[ ! -f "${ROOT}/plugin/.codex-plugin/plugin.json" || ! -f "${ROOT}/.agents/plugins/marketplace.json" ]]; then
+  echo "mapping audit: open-source plugin manifest is incomplete" >&2
+  failed=1
+fi
 
 # Matrix gate status: every table row except the observable-acceptance row must
 # not carry a pending or partial protocol status.
@@ -110,4 +122,4 @@ if [[ ${failed} -ne 0 ]]; then
   echo "mapping audit failed" >&2
   exit 1
 fi
-echo "mapping audit: ${count} schemes and six skill suites verified"
+echo "mapping audit: ${count} schemes, six skill suites, and the open-source plugin bundle verified"

@@ -1,0 +1,11 @@
+interface:
+  display_name: "AWS Cloud"
+  short_description: "Operate every AWS API through a guarded MCP gateway"
+  default_prompt: "Use $aws-cloud to inspect or operate AWS resources safely."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "cloud-skills-mcp"
+      description: "Local universal six-cloud MCP server"
+policy:
+  allow_implicit_invocation: true
