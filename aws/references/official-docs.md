@@ -78,6 +78,9 @@
 - Connect Participant `CreateParticipantConnection` (`POST /participant/connection`, `X-Amz-Bearer` participant token, 100-second WebSocket URL expiry) with the official `{"topic":"aws/subscribe","content":{"topics":["aws/chat"]}}` subscription frame: https://docs.aws.amazon.com/connect-participant/latest/APIReference/API_CreateParticipantConnection.html
 - Amazon Connect chat participant WebSocket topic framing (subscribe/heartbeat/ping and `aws/chat` events) in the open-source chat JS SDK: https://github.com/amazon-connect/amazon-connect-chatjs
 - Connect Participant `SendMessage` (`POST /participant/message` with `X-Amz-Bearer` connection token, `Content`/`ContentType`/`ClientToken`): https://docs.aws.amazon.com/connect-participant/latest/APIReference/API_SendMessage.html
+- Chime SDK real-time meetings component model with WebRTC audio/video media as the media plane: https://docs.aws.amazon.com/chime-sdk/latest/dg/components.html
+- Elemental MediaPackage endpoint stream formats (Apple HLS, DASH-ISO, Microsoft Smooth Streaming, CMAF) as media delivery: https://docs.aws.amazon.com/mediapackage/latest/userguide/endpoints.html
+- AppStream 2.0 streaming sessions with SAML 2.0 and certificate-based client authentication as a credential-bound client surface: https://aws.amazon.com/appstream2/
 - Amazon IVS real-time Stage publish/subscribe over WebRTC/RTMPS as the media plane: https://docs.aws.amazon.com/ivs/latest/RealTimeUserGuide/getting-started-pub-sub.html
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
