@@ -74,6 +74,8 @@
 - Kinesis Video Streams RTMP media ingest and HLS playback as the media plane, separate from the IAM-signed WebRTC signaling implemented here: https://docs.aws.amazon.com/kinesisvideostreams/latest/dg/what-is-kinesis-video.html and https://docs.aws.amazon.com/kinesisvideostreams/latest/dg/how-rtmp.html
 - Amazon MQ ActiveMQ broker access protocols (AMQP, OpenWire, STOMP, MQTT, WebSocket) and RabbitMQ AMQP 0-9-1 with broker user/LDAP authentication as non-resource client line protocols: https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/security-authentication-authorization.html
 - MediaLive input classes and supported containers/codecs (RTMP push/pull, RTP, transport stream) as the media plane: https://docs.aws.amazon.com/medialive/latest/ug/inputs-supported-containers-and-codecs.html
+- Amazon Connect chat participant flow (`StartChatContact` then `CreateParticipantConnection`) and the WebSocket `ConnectionToken` credential-bound transport: https://docs.aws.amazon.com/connect-participant/latest/APIReference/API_CreateParticipantConnection.html
+- Amazon IVS real-time Stage publish/subscribe over WebRTC/RTMPS as the media plane: https://docs.aws.amazon.com/ivs/latest/RealTimeUserGuide/getting-started-pub-sub.html
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
 
