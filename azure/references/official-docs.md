@@ -82,6 +82,7 @@ ACR data-plane calls first obtain `https://containerregistry.azure.net/.default`
 - IoT Hub device-plane authentication with device SAS tokens (device symmetric key) and X.509 certificates: https://learn.microsoft.com/en-us/azure/iot-hub/authenticate-authorize-sas
 - Azure Cache for Redis authentication with cache access keys or an in-client Microsoft Entra token over the RESP client protocol: https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/cache-azure-active-directory-for-authentication
 - Azure Relay Hybrid Connections WebSocket client with SAS-token authentication as a credential-bound client transport: https://learn.microsoft.com/en-us/azure/azure-relay/relay-hybrid-connections-python-get-started
+- Azure Database for PostgreSQL flexible server Microsoft Entra and password authentication over the PostgreSQL wire protocol: https://learn.microsoft.com/en-us/azure/postgresql/security/security-entra-concepts
 - Azure Government Azure OpenAI model availability list, which states that it includes all models offered there: https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure-gov
 - Azure Foundry regional availability, including its sovereign-cloud section: https://learn.microsoft.com/en-us/azure/foundry/reference/region-support
 - Azure Voice Live WSS endpoints, Entra scopes, model/Agent query parameters, events, audio enhancements, and avatar boundary: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to

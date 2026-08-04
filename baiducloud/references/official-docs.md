@@ -30,6 +30,7 @@
 - Voice-clone streaming TTS (API Key or OAuth access token only): https://cloud.baidu.com/doc/SPEECH/s/qmjiax60m
 - Message Service for Kafka access protocols (PLAINTEXT, SASL_PLAINTEXT, SASL_SSL with SASL/PLAIN or SASL/SCRAM, SSL) and the Kafka binary client protocol: https://cloud.baidu.com/doc/Kafka/s/Ik0enfo04 and https://intl.cloud.baidu.com/zh/doc/Kafka/s/6l4f7bl0i-intl
 - Message Service for RabbitMQ full AMQP protocol compatibility with open-source RabbitMQ: https://cloud.baidu.com/product/rabbitmq.html
+- Cloud Database SCS (Redis) BCE-signed control-plane REST API alongside the open-source Redis RESP data plane: https://cloud.baidu.com/doc/SCS/s/Ljwvxttjs/
 
 The adapter follows `bce-auth-v1/{accessKeyId}/{timestamp}/{expiration}/{signedHeaders}/{signature}`, signs `host` plus applicable standard and `x-bce-*` headers, and carries the IAM/STS session token only inside the signed request.
 
