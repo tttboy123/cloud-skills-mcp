@@ -3,6 +3,8 @@ package cloud
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +34,7 @@ const (
 	awsConnectChatMaxAttributes      = 16
 	awsConnectChatMaxAttributeKey    = 64
 	awsConnectChatMaxAttributeValue  = 4096
+	awsConnectChatMaxMessages        = 16
 	awsConnectChatMaxDisplayName     = 256
 	awsConnectChatMaxInitialMessage  = 64 * 1024
 	awsConnectChatMaxWebSocketURL    = 8 * 1024
@@ -59,13 +62,19 @@ var (
 )
 
 type awsConnectChatPlan struct {
-	InstanceID     string            `json:"instance_id"`
-	ContactFlowID  string            `json:"contact_flow_id"`
-	DisplayName    string            `json:"display_name"`
-	InitialMessage string            `json:"initial_message,omitempty"`
-	Attributes     map[string]string `json:"attributes,omitempty"`
-	MaxEvents      int               `json:"max_events"`
-	TimeoutSeconds int               `json:"timeout_seconds"`
+	InstanceID     string                  `json:"instance_id"`
+	ContactFlowID  string                  `json:"contact_flow_id"`
+	DisplayName    string                  `json:"display_name"`
+	InitialMessage string                  `json:"initial_message,omitempty"`
+	Attributes     map[string]string       `json:"attributes,omitempty"`
+	Messages       []awsConnectChatMessage `json:"messages,omitempty"`
+	MaxEvents      int                     `json:"max_events"`
+	TimeoutSeconds int                     `json:"timeout_seconds"`
+}
+
+type awsConnectChatMessage struct {
+	Content     string `json:"content"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 func validateAWSConnectChatInvocation(invocation Invocation) error {
@@ -138,6 +147,20 @@ func parseAWSConnectChatPlan(body any) (awsConnectChatPlan, error) {
 			return awsConnectChatPlan{}, fmt.Errorf("AWS Connect chat attribute %q is invalid", key)
 		}
 	}
+	if len(plan.Messages) > awsConnectChatMaxMessages {
+		return awsConnectChatPlan{}, fmt.Errorf("AWS Connect chat messages exceed the bounded count")
+	}
+	for index := range plan.Messages {
+		message := &plan.Messages[index]
+		if len(message.Content) == 0 || len(message.Content) > awsConnectChatMaxMessageBytes || strings.ContainsAny(message.Content, "\x00\r\n") {
+			return awsConnectChatPlan{}, fmt.Errorf("AWS Connect chat message %d content is outside the bounded text bound", index)
+		}
+		switch message.ContentType {
+		case "", "text/plain", "text/markdown":
+		default:
+			return awsConnectChatPlan{}, fmt.Errorf("AWS Connect chat message %d content_type must be text/plain or text/markdown", index)
+		}
+	}
 	if plan.MaxEvents < 1 || plan.MaxEvents > awsConnectChatMaxEvents || plan.TimeoutSeconds < 1 || plan.TimeoutSeconds > awsConnectChatMaxTimeoutSeconds {
 		return awsConnectChatPlan{}, fmt.Errorf("AWS Connect chat response count or timeout is outside the finite bound")
 	}
@@ -157,7 +180,7 @@ func invokeAWSConnectChatWebSocket(ctx context.Context, adapter *AWSRESTAdapter,
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	websocketURL, err := awsConnectChatCreateParticipantConnection(ctx, adapter, region, participantToken)
+	websocketURL, connectionToken, err := awsConnectChatCreateParticipantConnection(ctx, adapter, region, participantToken)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -180,6 +203,15 @@ func invokeAWSConnectChatWebSocket(ctx context.Context, adapter *AWSRESTAdapter,
 	}
 	if err := connection.Write(sessionCtx, cloudWebSocketMessageText, subscribe); err != nil {
 		return InvocationResult{}, fmt.Errorf("AWS Connect chat subscribe frame failed")
+	}
+	sent := 0
+	if len(plan.Messages) > 0 {
+		for index := range plan.Messages {
+			if err := awsConnectChatSendMessage(ctx, adapter, region, connectionToken, plan.Messages[index], index); err != nil {
+				return InvocationResult{}, err
+			}
+			sent++
+		}
 	}
 	sink, err := newWebSocketOutputSink(invocation, adapter.config.MaxBodyBytes, "AWS Connect chat WebSocket")
 	if err != nil {
@@ -226,6 +258,7 @@ func invokeAWSConnectChatWebSocket(ctx context.Context, adapter *AWSRESTAdapter,
 		return InvocationResult{}, fmt.Errorf("decode AWS Connect chat output metadata")
 	}
 	summary["messages"] = received
+	summary["sent_messages"] = sent
 	if contactID != "" {
 		summary["contact_id"] = contactID
 	}
@@ -304,39 +337,39 @@ func awsConnectChatStartContact(ctx context.Context, adapter *AWSRESTAdapter, cr
 	return payload.ParticipantToken, payload.ContactID, nil
 }
 
-func awsConnectChatCreateParticipantConnection(ctx context.Context, adapter *AWSRESTAdapter, region, participantToken string) (string, error) {
+func awsConnectChatCreateParticipantConnection(ctx context.Context, adapter *AWSRESTAdapter, region, participantToken string) (websocketURL, connectionToken string, err error) {
 	if participantToken == "" {
-		return "", fmt.Errorf("AWS Connect participant token is missing")
+		return "", "", fmt.Errorf("AWS Connect participant token is missing")
 	}
 	body, err := json.Marshal(map[string]any{
 		"Type":               []string{"WEBSOCKET", "CONNECTION_CREDENTIALS"},
 		"ConnectParticipant": true,
 	})
 	if err != nil {
-		return "", fmt.Errorf("encode AWS Connect CreateParticipantConnection request")
+		return "", "", fmt.Errorf("encode AWS Connect CreateParticipantConnection request")
 	}
 	endpoint := "https://participant.connect." + region + ".amazonaws.com/participant/connection"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("build AWS Connect CreateParticipantConnection request")
+		return "", "", fmt.Errorf("build AWS Connect CreateParticipantConnection request")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Amz-Bearer", participantToken)
 	response, err := adapter.config.HTTP.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("AWS Connect CreateParticipantConnection request failed")
+		return "", "", fmt.Errorf("AWS Connect CreateParticipantConnection request failed")
 	}
 	if response == nil || response.Body == nil {
-		return "", fmt.Errorf("AWS Connect CreateParticipantConnection returned no response")
+		return "", "", fmt.Errorf("AWS Connect CreateParticipantConnection returned no response")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("AWS Connect CreateParticipantConnection failed with HTTP %d", response.StatusCode)
+		return "", "", fmt.Errorf("AWS Connect CreateParticipantConnection failed with HTTP %d", response.StatusCode)
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, awsConnectChatMaxResponseBytes+1))
 	if err != nil || len(responseBody) == 0 || len(responseBody) > awsConnectChatMaxResponseBytes {
-		return "", fmt.Errorf("AWS Connect CreateParticipantConnection response was invalid")
+		return "", "", fmt.Errorf("AWS Connect CreateParticipantConnection response was invalid")
 	}
 	var payload struct {
 		Websocket struct {
@@ -351,13 +384,79 @@ func awsConnectChatCreateParticipantConnection(ctx context.Context, adapter *AWS
 	decoder := json.NewDecoder(bytes.NewReader(responseBody))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&payload) != nil || ensureJSONDecoderEOF(decoder) != nil {
-		return "", fmt.Errorf("AWS Connect CreateParticipantConnection response was invalid")
+		return "", "", fmt.Errorf("AWS Connect CreateParticipantConnection response was invalid")
 	}
 	if payload.Websocket.URL == "" || len(payload.Websocket.URL) > awsConnectChatMaxWebSocketURL ||
 		payload.ConnectionCredentials.ConnectionToken == "" || len(payload.ConnectionCredentials.ConnectionToken) > awsConnectChatMaxResponseBytes {
-		return "", fmt.Errorf("AWS Connect CreateParticipantConnection returned invalid connection material")
+		return "", "", fmt.Errorf("AWS Connect CreateParticipantConnection returned invalid connection material")
 	}
-	return payload.Websocket.URL, nil
+	return payload.Websocket.URL, payload.ConnectionCredentials.ConnectionToken, nil
+}
+
+func awsConnectChatSendMessage(ctx context.Context, adapter *AWSRESTAdapter, region, connectionToken string, message awsConnectChatMessage, index int) error {
+	if connectionToken == "" {
+		return fmt.Errorf("AWS Connect chat connection token is missing")
+	}
+	clientToken, err := adapter.config.ConnectChatClientToken()
+	if err != nil {
+		return fmt.Errorf("generate AWS Connect chat client token: %w", err)
+	}
+	contentType := message.ContentType
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	body, err := json.Marshal(map[string]any{
+		"Content":     message.Content,
+		"ContentType": contentType,
+		"ClientToken": clientToken,
+	})
+	if err != nil {
+		return fmt.Errorf("encode AWS Connect SendMessage request")
+	}
+	endpoint := "https://participant.connect." + region + ".amazonaws.com/participant/message"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build AWS Connect SendMessage request")
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Amz-Bearer", connectionToken)
+	response, err := adapter.config.HTTP.Do(request)
+	if err != nil {
+		return fmt.Errorf("AWS Connect SendMessage request failed")
+	}
+	if response == nil || response.Body == nil {
+		return fmt.Errorf("AWS Connect SendMessage returned no response")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("AWS Connect SendMessage message %d failed with HTTP %d", index, response.StatusCode)
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, awsConnectChatMaxResponseBytes+1))
+	if err != nil || len(responseBody) == 0 || len(responseBody) > awsConnectChatMaxResponseBytes {
+		return fmt.Errorf("AWS Connect SendMessage message %d response was invalid", index)
+	}
+	var payload struct {
+		ID           string `json:"Id"`
+		AbsoluteTime string `json:"AbsoluteTime"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&payload) != nil || ensureJSONDecoderEOF(decoder) != nil || payload.ID == "" || len(payload.ID) > 256 {
+		return fmt.Errorf("AWS Connect SendMessage message %d response was invalid", index)
+	}
+	return nil
+}
+
+func newAWSConnectChatClientToken() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate AWS Connect chat client token")
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(value)
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }
 
 func validateAWSConnectChatWebSocketURL(rawURL, region string) error {

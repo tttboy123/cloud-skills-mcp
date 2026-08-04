@@ -127,6 +127,7 @@ type AWSRESTConfig struct {
 	IVSChatWebSocketDial        func(context.Context, string, []string) (cloudWebSocketConnection, error)
 	ChimeMessagingWebSocketDial func(context.Context, string) (cloudWebSocketConnection, error)
 	ConnectChatWebSocketDial    func(context.Context, string) (cloudWebSocketConnection, error)
+	ConnectChatClientToken      func() (string, error)
 	SigV4WebSocketDial          func(context.Context, string, http.Header) (cloudWebSocketConnection, error)
 	ConnectHealthWebSocketDial  func(context.Context, string) (cloudWebSocketConnection, error)
 	StreamPause                 func(context.Context, time.Duration) error
@@ -168,6 +169,9 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 	}
 	if config.ConnectChatWebSocketDial == nil {
 		config.ConnectChatWebSocketDial = defaultAWSConnectChatWebSocketDial
+	}
+	if config.ConnectChatClientToken == nil {
+		config.ConnectChatClientToken = newAWSConnectChatClientToken
 	}
 	if config.SigV4WebSocketDial == nil {
 		config.SigV4WebSocketDial = defaultAWSSigV4WebSocketDial

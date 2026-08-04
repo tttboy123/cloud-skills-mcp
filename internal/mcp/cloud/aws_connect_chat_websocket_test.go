@@ -85,6 +85,26 @@ func TestAWSConnectChatBoundaryRequiresExactOfficialProtocol(t *testing.T) {
 		"oversized attr value": func(v *Invocation) {
 			v.Body.(map[string]any)["attributes"] = map[string]any{"k": strings.Repeat("a", awsConnectChatMaxAttributeValue+1)}
 		},
+		"too many messages": func(v *Invocation) {
+			messages := make([]any, awsConnectChatMaxMessages+1)
+			for i := range messages {
+				messages[i] = map[string]any{"content": "x"}
+			}
+			v.Body.(map[string]any)["messages"] = messages
+		},
+		"empty message": func(v *Invocation) { v.Body.(map[string]any)["messages"] = []any{map[string]any{"content": ""}} },
+		"oversized message": func(v *Invocation) {
+			v.Body.(map[string]any)["messages"] = []any{map[string]any{"content": strings.Repeat("a", awsConnectChatMaxMessageBytes+1)}}
+		},
+		"newline message content": func(v *Invocation) {
+			v.Body.(map[string]any)["messages"] = []any{map[string]any{"content": "bad\nmessage"}}
+		},
+		"bad content type": func(v *Invocation) {
+			v.Body.(map[string]any)["messages"] = []any{map[string]any{"content": "x", "content_type": "text/html"}}
+		},
+		"message credential": func(v *Invocation) {
+			v.Body.(map[string]any)["messages"] = []any{map[string]any{"content": "x", "connection_token": "caller"}}
+		},
 		"zero events":    func(v *Invocation) { v.Body.(map[string]any)["max_events"] = 0 },
 		"excess timeout": func(v *Invocation) { v.Body.(map[string]any)["timeout_seconds"] = 301 },
 		"stream pace":    func(v *Invocation) { v.StreamIntervalMS = 100 },
@@ -111,12 +131,15 @@ func TestAWSConnectChatObservesSanitizedChatEvents(t *testing.T) {
 		[]byte(`{"topic":"aws/subscribe","content":{"status":"success","topics":["aws/chat"]}}`),
 		[]byte(`{"topic":"aws/heartbeat"}`),
 		[]byte(`{"topic":"aws/chat","content":{"Type":"MESSAGE","Id":"msg-1","AbsoluteTime":"2024-05-01T12:00:01Z","Content":"hello world","ContentType":"text/plain","ParticipantRole":"CUSTOMER","ParticipantId":"participant-1","DisplayName":"Observer"}}`),
+		[]byte(`{"topic":"aws/chat","content":{"Type":"MESSAGE","Id":"msg-2","AbsoluteTime":"2024-05-01T12:00:03Z","Content":"sent first","ContentType":"text/plain","ParticipantRole":"CUSTOMER","ParticipantId":"participant-1","DisplayName":"Observer"}}`),
 		[]byte(`{"topic":"aws/chat","content":{"Type":"PARTICIPANT_JOINED","Id":"evt-1","AbsoluteTime":"2024-05-01T12:00:02Z","ContentType":"application/vnd.amazonaws.connect.event.participant.joined","ParticipantRole":"AGENT","DisplayName":"Agent Smith"}}`),
 	}}
 	var dialURL string
 	var startRequest *http.Request
 	var participantRequest *http.Request
 	var participantBearer string
+	var sendRequests []*http.Request
+	var sendBearer string
 	adapter := NewAWSRESTAdapter(AWSRESTConfig{
 		Credentials: staticAWSCredentialsProvider{AWSCredentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "private-secret", SessionToken: "private-session"}},
 		Now:         func() time.Time { return now },
@@ -127,6 +150,12 @@ func TestAWSConnectChatObservesSanitizedChatEvents(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(
 					`{"ContactId":"contact-1","ParticipantId":"participant-1","ParticipantToken":"participant-token-secret"}`))}, nil
 			case request.URL.Host == "participant.connect.us-east-1.amazonaws.com":
+				if request.URL.Path == "/participant/message" {
+					sendRequests = append(sendRequests, request.Clone(request.Context()))
+					sendBearer = request.Header.Get("X-Amz-Bearer")
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(
+						`{"Id":"msg-2","AbsoluteTime":"2024-05-01T12:00:03Z"}`))}, nil
+				}
 				participantRequest = request.Clone(request.Context())
 				participantBearer = request.Header.Get("X-Amz-Bearer")
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(
@@ -139,7 +168,17 @@ func TestAWSConnectChatObservesSanitizedChatEvents(t *testing.T) {
 			return connection, nil
 		},
 	})
-	result, err := adapter.Invoke(t.Context(), awsConnectChatInvocation(responseFile))
+	invocation := awsConnectChatInvocation(responseFile)
+	invocation.Body = map[string]any{
+		"instance_id": connectChatTestInstance, "contact_flow_id": connectChatTestFlow,
+		"display_name": "Observer",
+		"messages": []any{
+			map[string]any{"content": "sent first"},
+			map[string]any{"content": "sent second", "content_type": "text/markdown"},
+		},
+		"max_events": 4, "timeout_seconds": 30,
+	}
+	result, err := adapter.Invoke(t.Context(), invocation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +203,38 @@ func TestAWSConnectChatObservesSanitizedChatEvents(t *testing.T) {
 	if participantRequest == nil || participantRequest.Method != http.MethodPost || participantRequest.URL.String() != "https://participant.connect.us-east-1.amazonaws.com/participant/connection" || participantBearer != "participant-token-secret" {
 		t.Fatalf("participant request=%#v bearer=%q", participantRequest, participantBearer)
 	}
+	if len(sendRequests) != 2 || sendRequests[0].Method != http.MethodPost || sendRequests[0].URL.String() != "https://participant.connect.us-east-1.amazonaws.com/participant/message" || sendBearer != "connection-token-secret" {
+		t.Fatalf("send requests=%d bearer=%q", len(sendRequests), sendBearer)
+	}
+	sendBody, err := io.ReadAll(sendRequests[0].Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedSend map[string]any
+	if err := json.Unmarshal(sendBody, &decodedSend); err != nil {
+		t.Fatal(err)
+	}
+	if decodedSend["Content"] != "sent first" || decodedSend["ContentType"] != "text/plain" {
+		t.Fatalf("send body=%s", sendBody)
+	}
+	secondSendBody, err := io.ReadAll(sendRequests[1].Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedSecondSend map[string]any
+	if err := json.Unmarshal(secondSendBody, &decodedSecondSend); err != nil {
+		t.Fatal(err)
+	}
+	if decodedSecondSend["Content"] != "sent second" || decodedSecondSend["ContentType"] != "text/markdown" {
+		t.Fatalf("second send body=%s", secondSendBody)
+	}
+	clientToken, _ := decodedSend["ClientToken"].(string)
+	if len(clientToken) != 36 || strings.Count(clientToken, "-") != 4 {
+		t.Fatalf("send client token=%q", clientToken)
+	}
+	if strings.Contains(string(sendBody), "connection-token-secret") {
+		t.Fatalf("send body leaked the connection token")
+	}
 	if dialURL != "wss://participant.connect.us-east-1.amazonaws.com/participant/connect?X-Amz-Credential=opaque-signature" {
 		t.Fatalf("dial URL=%q", dialURL)
 	}
@@ -175,7 +246,7 @@ func TestAWSConnectChatObservesSanitizedChatEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
-	if len(lines) != 2 || !strings.Contains(string(content), `"Content":"hello world"`) || !strings.Contains(string(content), `"Type":"PARTICIPANT_JOINED"`) {
+	if len(lines) != 3 || !strings.Contains(string(content), `"Content":"hello world"`) || !strings.Contains(string(content), `"Content":"sent first"`) || !strings.Contains(string(content), `"Type":"PARTICIPANT_JOINED"`) {
 		t.Fatalf("output=%s", content)
 	}
 	for _, secret := range []string{"participant-token-secret", "connection-token-secret", "private-secret", "private-session", "AKIDEXAMPLE", "opaque-signature"} {
@@ -184,7 +255,7 @@ func TestAWSConnectChatObservesSanitizedChatEvents(t *testing.T) {
 		}
 	}
 	var metadata map[string]any
-	if err := json.Unmarshal(result.Output, &metadata); err != nil || metadata["messages"] != float64(2) || metadata["contact_id"] != "contact-1" {
+	if err := json.Unmarshal(result.Output, &metadata); err != nil || metadata["messages"] != float64(3) || metadata["sent_messages"] != float64(2) || metadata["contact_id"] != "contact-1" {
 		t.Fatalf("metadata=%v err=%v", metadata, err)
 	}
 }
@@ -201,6 +272,9 @@ func TestAWSConnectChatFailureNeverPublishesOutput(t *testing.T) {
 		startBody  string
 		partHTTP   int
 		partBody   string
+		sendHTTP   int
+		sendBody   string
+		send       bool
 		dialErr    error
 		writeErr   error
 		emptyCreds bool
@@ -221,6 +295,9 @@ func TestAWSConnectChatFailureNeverPublishesOutput(t *testing.T) {
 		"participant bad url":      {partBody: `{"Websocket":{"Url":"wss://evil.example/x"}}`},
 		"participant empty url":    {partBody: `{"Websocket":{"Url":""},"ConnectionCredentials":{"ConnectionToken":"t"}}`},
 		"participant invalid json": {partBody: `{"Websocket":{`},
+		"send http error":          {send: true, sendHTTP: http.StatusForbidden, sendBody: `{"Message":"forbidden","token":"super-secret-token-value"}`},
+		"send invalid response":    {send: true, sendBody: `{"Id":123}`},
+		"send missing id":          {send: true, sendBody: `{}`},
 		"dial error":               {dialErr: io.ErrUnexpectedEOF},
 		"write error":              {writeErr: io.ErrClosedPipe},
 		"empty credentials":        {emptyCreds: true},
@@ -254,6 +331,17 @@ func TestAWSConnectChatFailureNeverPublishesOutput(t *testing.T) {
 						}
 						return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 					}
+					if request.URL.Path == "/participant/message" {
+						status := http.StatusOK
+						if test.sendHTTP != 0 {
+							status = test.sendHTTP
+						}
+						body := test.sendBody
+						if body == "" {
+							body = `{"Id":"msg-sent","AbsoluteTime":"2024-05-01T12:00:03Z"}`
+						}
+						return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+					}
 					status := http.StatusOK
 					if test.partHTTP != 0 {
 						status = test.partHTTP
@@ -274,11 +362,20 @@ func TestAWSConnectChatFailureNeverPublishesOutput(t *testing.T) {
 					return connection, nil
 				},
 			})
-			_, err := adapter.Invoke(t.Context(), awsConnectChatInvocation(responseFile))
+			invocation := awsConnectChatInvocation(responseFile)
+			if test.send {
+				invocation.Body = map[string]any{
+					"instance_id": connectChatTestInstance, "contact_flow_id": connectChatTestFlow,
+					"display_name": "Observer",
+					"messages":     []any{map[string]any{"content": "sent first"}},
+					"max_events":   4, "timeout_seconds": 30,
+				}
+			}
+			_, err := adapter.Invoke(t.Context(), invocation)
 			if err == nil {
 				t.Fatal("unsafe AWS Connect chat stream accepted")
 			}
-			if name == "start http error" && strings.Contains(err.Error(), "super-secret-token-value") {
+			if (name == "start http error" || name == "send http error") && strings.Contains(err.Error(), "super-secret-token-value") {
 				t.Fatalf("provider error leaked secret material: %v", err)
 			}
 			if _, statErr := os.Stat(responseFile); !os.IsNotExist(statErr) {
