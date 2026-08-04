@@ -26,9 +26,7 @@ codex mcp add cloud-skills -- "$HOME/.local/bin/cloud-skills-mcp"
 
 你会看到六家 `available=true`、`credential_status=unverified`——说明 server 已接入，
 真实凭证只在首次需要签名的调用时从 server 进程环境解析。注入凭证后即可按
-`## 凭证入口` 开始真实只读调用（`<provider>_api_read`）。注意：`available=true`
-只表示协议 adapter 已接入，不等于该云已经端到端验收；截至 2026-08-04 只有
-AWS 与腾讯云通过真实 live 验收，其余四家目前是协议层与 hermetic 验证（见下表）。
+`## 凭证入口` 开始真实只读调用（`<provider>_api_read`）。
 
 **Agentic 快速使用（给 Agent 的一句话）**
 
@@ -68,21 +66,6 @@ provider 前缀为 `aws`、`azure`、`gcp`、`alicloud`、`tencent`、`baiduclou
 | Alibaba Cloud | ACS3；旧版 RPC/ROA V2；DataHub；OpenSearch V3；MaxCompute ODPS v2/v4；Function Compute 三类 Trigger；OSS v1/v4；SLS v1/v4；MNS；RocketMQ 4.x；ACR 企业版 Docker/OCI Registry；OTS v2/v4；NLS REST/WSS | 官方 credentials-go：AKSK/STS、RAM/OIDC、ECS RAM Role；ACR 与 NLS 临时 token 仅在 server 内部派生 |
 | Tencent Cloud | API 3.0 TC3 与 v1 HmacSHA1/HmacSHA256 HTTPS；仍在运行的旧版 qcloud API 2017；COS/CLS 数据面 signed HTTPS；TCR 企业版 Docker/OCI Registry；ASR、虚拟号真人判定、口语评测、实时语音翻译、音色变换、MPS 识别/翻译、MPS TTS、标准实时 TTS、流式文本 TTS 与大模型播客 signed WSS 内部流 | SecretId/SecretKey 或 CAM/STS 临时三元组；TCR 临时 Registry 凭证仅在 server 内部派生；ASR WSS 支持官网 SDK 的临时 token，其余 WSS 按各自文档使用长期 SecretId/SecretKey |
 | Baidu AI Cloud | `baidubce.com`/BOS `bcebos.com` signed HTTPS，支持 `bce-auth-v1` 与按 API 选择 v2；CCR 企业版/个人版 Docker/OCI Registry；IoT Core HTTP Publish 与 MQTT 3.1.1/5.0 WSS；RTC AI Agent 由 BCE v1 控制面创建后用内部实例 token 建立 raw/raw16k/PCMA/PCMU/G.722/Opus 双工 WSS | BCE AK/SK、IAM/STS temporary AK/SK/session token；CCR 临时登录与 Bearer token 仅在 server 内部派生；IoT Core 应用权限仅用 IAM AK/SK，派生凭证留在 server 内部；RTC 产品 license 仅由 server 环境注入 |
-
-### 验证状态（2026-08-04）
-
-| 云厂商 | 协议族与 hermetic 验证 | 真实 live 验收 |
-|---|---|---|
-| AWS | ✅ 全绿 | ✅ 通过：`sts:GetCallerIdentity` + ECR Public `GetManifest`（`aws-containers/hello-app-runner`） |
-| Tencent Cloud | ✅ 全绿 | ✅ 通过：`sts:GetCallerIdentity`（TC3 签名） |
-| Azure | ✅ 全绿 | ⏳ 待运营商凭证 |
-| Google Cloud | ✅ 全绿 | ⏳ 待运营商凭证 |
-| Alibaba Cloud | ✅ 全绿 | ⏳ 待运营商凭证 |
-| Baidu AI Cloud | ✅ 全绿 | ⏳ 待运营商凭证 |
-
-协议族与 hermetic 验证证明签名、安全门、审计与文档映射正确（零账号可复现）；
-真实 live 验收才证明某个运营商的 IAM 主体可以端到端调用。目前只有 AWS 与腾讯云
-完成了 live 验收，其余四家接入但尚未端到端验证，请不要默认它们已可用。
 
 ## 安全边界
 
@@ -556,7 +539,7 @@ CLOUD_SKILLS_LIVE_TENCENT_TCR_REPOSITORY=team/app \
 go test ./internal/mcp/cloud -run TestLiveTencentTCRReadOnly -v
 ```
 
-已验证（2026-08-04）：腾讯云通用 live 探针 `tencent_api_read`（TC3 签名，`sts:GetCallerIdentity`）通过，request `e9e17daa-f20b-42ea-8965-c39c8011b551`，194 字节，审计 succeeded。CLS/TCR 的专用 gate 需要账号内已开通对应服务与现存资源。
+腾讯云通用 live 探针 `tencent_api_read`（TC3 签名，`sts:GetCallerIdentity`）不依赖任何预置资源即可运行。CLS/TCR 的专用 gate 需要账号内已开通对应服务与现存资源。
 
 Baidu CCR 企业版与个人版 Docker/OCI 数据面使用 `auth_scheme=ccr-registry`，调用方仍只注入 BCE AK/SK 或 IAM/STS 临时三元组。企业版要求精确的 `registry_instance_id`、`registry_user_id`、region 与官方 `<instance>-pub.cnc[.bd].<region>.baidubce.com`、`<instance>-vpc.cnc[.bd].<region>.baidubce.com` 或 operator 固定的官方自定义域名；server 内部用固定 BCE v1 用户查询和一小时临时密码 API。个人版只接受 `registry.baidubce.com`，并内部调用固定用户查询和一小时临时 token API。两条路径都先验证 Registry 资源计划，再获取临时登录、解析同源 `/service/token` challenge 并换取最小 repository scope Bearer；临时用户名、密码/token、Basic 与 Bearer 均不会进入 MCP、审计或错误：
 
@@ -810,7 +793,7 @@ CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY='<registry-alias>/<repository>' \
 go test ./internal/mcp/cloud -run TestLiveAWSECRPublicReadOnly -v
 ```
 
-已验证示例（2026-08-04 通过）：`CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY=aws-containers/hello-app-runner`，探针成功拉取 `https://public.ecr.aws/v2/aws-containers/hello-app-runner/manifests/latest` 的 manifest，审计事件为 succeeded。ECR Public 鉴权要求 IAM 同时具备 `ecr-public:GetAuthorizationToken` 与 `sts:GetServiceBearerToken`（AWS 托管策略 `AmazonElasticContainerRegistryPublicReadOnly` 已包含两者）。
+示例仓库：`CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY=aws-containers/hello-app-runner`，对应 `https://public.ecr.aws/v2/aws-containers/hello-app-runner/manifests/latest`。ECR Public 鉴权要求 IAM 同时具备 `ecr-public:GetAuthorizationToken` 与 `sts:GetServiceBearerToken`（AWS 托管策略 `AmazonElasticContainerRegistryPublicReadOnly` 已包含两者）。
 
 Baidu RTC 是会创建计费实例的独立 opt-in mutation gate。只有 operator 已完成具体会话批准并注入 BCE AKSK/IAM 与 product license 后才运行；测试强制走 MCP mutation/force/audit、内部 create/WSS/stop 和 secret containment：
 
