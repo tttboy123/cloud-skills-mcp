@@ -707,12 +707,46 @@ Google Cloud Storage 分段下载示例（其他五云同样使用各自官方 G
 无需凭证的 hermetic gate：
 
 ```bash
+gofmt -l . && go vet ./...
 go test -race ./...
-go vet ./...
-go build -trimpath ./cmd/cloud-skills-mcp
-./scripts/ci/protocol-smoke.sh ./bin/cloud-skills-mcp
+go build -trimpath -o /tmp/cloud-skills-mcp ./cmd/cloud-skills-mcp
+./scripts/ci/protocol-smoke.sh /tmp/cloud-skills-mcp
+./scripts/ci/mapping-audit.sh "$PWD"
 ./scripts/ci/install-smoke.sh
 ```
+
+以上全部不依赖任何云账号：协议冒烟用 72 个 `auth_scheme` 的预凭证扫描，
+mapping audit 证明每个 scheme 有定义、分发、测试、冒烟与文档。
+
+## 没有云账号？先本地验证，再选真实路径
+
+如果你还没有 AWS/Azure/GCP/阿里/腾讯/百度账号，按优先级三条路：
+
+1. **本地全绿（零账号，必做）**：上面的 hermetic gate 全部通过即证明协议族、
+   签名、安全门与文档映射正确，这一步你可以完整跑完。
+2. **AWS 本地模拟（可选，有前提）**：本 server 的安全边界只接受官方 HTTPS 443 +
+   受信任证书，而 LocalStack 默认是 http/自签证书，直接连会被拒绝。要用它演练，
+   需把 LocalStack 放到 443 且证书被本机信任（例如把 LocalStack 的 CA 加入系统
+   信任后映射到 443，或用可信证书的反向代理），再
+   `export CLOUD_SKILLS_AWS_ALLOWED_ENDPOINT_HOSTS=localhost` 放行。这属于社区
+   演练路径，不在审计过的 live gate 之内，也不能代表真实 IAM 权限语义。
+3. **真实 live 验收（最终标准）**：任选一家开免费/试用账号即可跑只读 gate，成本
+   最低路径是“开账号 + 只读调用 + 用完即弃”，不需要预置生产资源：
+
+   - AWS Free Tier：注册需信用卡验证；EC2 `DescribeInstances` 空结果也算通过
+   - Azure 免费账号：$200 额度 + 12 个月常用免费服务，注册需手机/卡验证
+   - GCP $300 试用：需卡验证；用默认项目跑只读查询
+   - 阿里/腾讯/百度：免费账号 + 实名认证，多数只读 OpenAPI 可直接跑
+
+   统一入口（一次跑全部已启用 gate）：
+
+   ```bash
+   CLOUD_SKILLS_LIVE_TEST=1 scripts/ci/live-acceptance.sh
+   ```
+
+   每家 gate 的必填环境变量见 `docs/goal-completion-matrix.md`。也可以把
+   `live-acceptance.sh` 交给有对应账号的同事/朋友跑，把结果回填矩阵即可，无需你
+   自己注册全部六家。
 
 真实云只读验收必须由 operator 显式打开，并只从进程环境读取凭证：
 
