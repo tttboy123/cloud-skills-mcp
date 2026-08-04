@@ -539,6 +539,8 @@ CLOUD_SKILLS_LIVE_TENCENT_TCR_REPOSITORY=team/app \
 go test ./internal/mcp/cloud -run TestLiveTencentTCRReadOnly -v
 ```
 
+已验证（2026-08-04）：腾讯云通用 live 探针 `tencent_api_read`（TC3 签名，`sts:GetCallerIdentity`）通过，request `e9e17daa-f20b-42ea-8965-c39c8011b551`，194 字节，审计 succeeded。CLS/TCR 的专用 gate 需要账号内已开通对应服务与现存资源。
+
 Baidu CCR 企业版与个人版 Docker/OCI 数据面使用 `auth_scheme=ccr-registry`，调用方仍只注入 BCE AK/SK 或 IAM/STS 临时三元组。企业版要求精确的 `registry_instance_id`、`registry_user_id`、region 与官方 `<instance>-pub.cnc[.bd].<region>.baidubce.com`、`<instance>-vpc.cnc[.bd].<region>.baidubce.com` 或 operator 固定的官方自定义域名；server 内部用固定 BCE v1 用户查询和一小时临时密码 API。个人版只接受 `registry.baidubce.com`，并内部调用固定用户查询和一小时临时 token API。两条路径都先验证 Registry 资源计划，再获取临时登录、解析同源 `/service/token` challenge 并换取最小 repository scope Bearer；临时用户名、密码/token、Basic 与 Bearer 均不会进入 MCP、审计或错误：
 
 ```json
