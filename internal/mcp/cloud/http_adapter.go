@@ -126,6 +126,7 @@ type AWSRESTConfig struct {
 	AppSyncGraphQLID            func() (string, error)
 	IVSChatWebSocketDial        func(context.Context, string, []string) (cloudWebSocketConnection, error)
 	ChimeMessagingWebSocketDial func(context.Context, string) (cloudWebSocketConnection, error)
+	ConnectChatWebSocketDial    func(context.Context, string) (cloudWebSocketConnection, error)
 	SigV4WebSocketDial          func(context.Context, string, http.Header) (cloudWebSocketConnection, error)
 	ConnectHealthWebSocketDial  func(context.Context, string) (cloudWebSocketConnection, error)
 	StreamPause                 func(context.Context, time.Duration) error
@@ -164,6 +165,9 @@ func NewAWSRESTAdapter(config AWSRESTConfig) *AWSRESTAdapter {
 	}
 	if config.ChimeMessagingWebSocketDial == nil {
 		config.ChimeMessagingWebSocketDial = defaultAWSChimeMessagingWebSocketDial
+	}
+	if config.ConnectChatWebSocketDial == nil {
+		config.ConnectChatWebSocketDial = defaultAWSConnectChatWebSocketDial
 	}
 	if config.SigV4WebSocketDial == nil {
 		config.SigV4WebSocketDial = defaultAWSSigV4WebSocketDial
@@ -210,18 +214,21 @@ func (adapter *AWSRESTAdapter) Discover(context.Context, DiscoveryRequest) ([]by
 		"chime_messaging_connect":            "https://docs.aws.amazon.com/chime-sdk/latest/dg/connect-api.html",
 		"chime_messaging_endpoint":           "https://docs.aws.amazon.com/chime-sdk/latest/APIReference/API_GetMessagingSessionEndpoint.html",
 		"chime_messaging_events":             "https://docs.aws.amazon.com/chime-sdk/latest/dg/message-structures.html",
+		"connect_chat_start":                 "https://docs.aws.amazon.com/connect/latest/APIReference/API_StartChatContact.html",
+		"connect_chat_connection":            "https://docs.aws.amazon.com/connect-participant/latest/APIReference/API_CreateParticipantConnection.html",
+		"connect_chat_websocket":             "https://docs.aws.amazon.com/connect/latest/adminguide/chat.html",
 	})
 }
 
 func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation) (InvocationResult, error) {
 	scheme := normalizedAuthScheme(invocation.AuthScheme, authSchemeAWSSigV4)
-	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSECR && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS && scheme != authSchemeAWSIVSChatWS && scheme != authSchemeAWSLexV2Conversation && scheme != authSchemeAWSChimeMessagingWS {
-		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, ecr, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, appsync-graphql-ws, ivs-chat-ws, lex-v2-conversation, or chime-messaging-ws")
+	if scheme != authSchemeAWSSigV4 && scheme != authSchemeAWSSigV4a && scheme != authSchemeAWSECR && scheme != authSchemeAWSSigV4WS && scheme != authSchemeAWSConnectHealthWS && scheme != authSchemeAWSTranscribeWS && scheme != authSchemeAWSIoTMQTTWS && scheme != authSchemeAWSKinesisVideoSignalingWS && scheme != authSchemeAWSAppSyncEventWS && scheme != authSchemeAWSAppSyncGraphQLWS && scheme != authSchemeAWSIVSChatWS && scheme != authSchemeAWSLexV2Conversation && scheme != authSchemeAWSChimeMessagingWS && scheme != authSchemeAWSConnectChatWS {
+		return InvocationResult{}, fmt.Errorf("AWS auth_scheme must be sigv4, sigv4a, ecr, sigv4-ws, connect-health-ws, transcribe-ws, iot-mqtt-ws, kinesisvideo-signaling-ws, appsync-event-ws, appsync-graphql-ws, ivs-chat-ws, lex-v2-conversation, chime-messaging-ws, or connect-chat-ws")
 	}
 	if scheme == authSchemeAWSECR {
 		return invokeAWSECR(ctx, adapter, invocation)
 	}
-	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS || scheme == authSchemeAWSIVSChatWS || scheme == authSchemeAWSLexV2Conversation || scheme == authSchemeAWSChimeMessagingWS {
+	if scheme == authSchemeAWSSigV4WS || scheme == authSchemeAWSConnectHealthWS || scheme == authSchemeAWSTranscribeWS || scheme == authSchemeAWSIoTMQTTWS || scheme == authSchemeAWSKinesisVideoSignalingWS || scheme == authSchemeAWSAppSyncEventWS || scheme == authSchemeAWSAppSyncGraphQLWS || scheme == authSchemeAWSIVSChatWS || scheme == authSchemeAWSLexV2Conversation || scheme == authSchemeAWSChimeMessagingWS || scheme == authSchemeAWSConnectChatWS {
 		var validationErr error
 		switch scheme {
 		case authSchemeAWSSigV4WS:
@@ -244,6 +251,8 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 			validationErr = validateAWSLexV2Invocation(invocation)
 		case authSchemeAWSChimeMessagingWS:
 			validationErr = validateAWSChimeMessagingInvocation(invocation)
+		case authSchemeAWSConnectChatWS:
+			validationErr = validateAWSConnectChatInvocation(invocation)
 		}
 		if validationErr != nil {
 			return InvocationResult{}, validationErr
@@ -281,6 +290,9 @@ func (adapter *AWSRESTAdapter) Invoke(ctx context.Context, invocation Invocation
 		}
 		if scheme == authSchemeAWSChimeMessagingWS {
 			return invokeAWSChimeMessagingWebSocket(ctx, adapter, credentials, invocation)
+		}
+		if scheme == authSchemeAWSConnectChatWS {
+			return invokeAWSConnectChatWebSocket(ctx, adapter, credentials, invocation)
 		}
 		return invokeAWSAppSyncGraphQLWebSocket(ctx, adapter, credentials, invocation)
 	}

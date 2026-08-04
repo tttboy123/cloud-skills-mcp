@@ -1185,6 +1185,77 @@ func TestLiveAWSChimeMessagingSubscribeReadOnly(t *testing.T) {
 	t.Logf("provider=aws service=chime-messaging operation=SubscribeMessages outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
 }
 
+func TestLiveAWSConnectChatObserve(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_CONNECT_CHAT") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AWS_CONNECT_CHAT=1 for a real SigV4 Amazon Connect chat participant WebSocket probe")
+	}
+	if !DefaultRuntime().AllowMutations {
+		t.Fatal("CLOUD_SKILLS_ALLOW_MUTATIONS=1 is required after explicit approval; ObserveChat starts a new chat contact")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Amazon Connect chat live validation", name)
+		}
+		return value
+	}
+	region := envDefault("CLOUD_SKILLS_LIVE_AWS_CONNECT_CHAT_REGION", "us-east-1")
+	instanceID := required("CLOUD_SKILLS_LIVE_AWS_CONNECT_CHAT_INSTANCE_ID")
+	contactFlowID := required("CLOUD_SKILLS_LIVE_AWS_CONNECT_CHAT_CONTACT_FLOW_ID")
+	displayName := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_LIVE_AWS_CONNECT_CHAT_DISPLAY_NAME"))
+	if displayName == "" {
+		displayName = "MCP Observer"
+	}
+	runtime := DefaultRuntime()
+	runtime.AllowMutations = true
+	root := t.TempDir()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	responseFile := filepath.Join(root, "connect-chat.ndjson")
+	result := callCloudTool(t, c, "aws_api_mutate", map[string]any{
+		"auth_scheme": "connect-chat-ws", "service": "connect", "operation": "ObserveChat",
+		"region": region, "method": "POST", "url": "wss://participant.connect." + region + ".amazonaws.com/participant/connect",
+		"response_file": responseFile, "force": true,
+		"body": map[string]any{
+			"instance_id": instanceID, "contact_flow_id": contactFlowID, "display_name": displayName,
+			"max_events": 4, "timeout_seconds": 30,
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Amazon Connect chat live observe failed: %s", cloudToolText(t, result))
+	}
+	output, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"), os.Getenv("AWS_SESSION_TOKEN")} {
+		if secret != "" && bytes.Contains(output, []byte(secret)) {
+			t.Fatal("Amazon Connect chat live output leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAWS && events[index].Mode == ModeMutate && events[index].Operation == "ObserveChat" && events[index].AuthScheme == authSchemeAWSConnectChatWS && events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Amazon Connect chat mutation audit event: %#v", events)
+	}
+	t.Logf("provider=aws service=connect operation=ObserveChat outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
+}
+
 func runLiveAWSECRRegistryRead(t *testing.T, public bool) {
 	t.Helper()
 	required := func(name string) string {

