@@ -791,6 +791,8 @@ CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY='<registry-alias>/<repository>' \
 go test ./internal/mcp/cloud -run TestLiveAWSECRPublicReadOnly -v
 ```
 
+已验证示例（2026-08-04 通过）：`CLOUD_SKILLS_LIVE_AWS_ECR_PUBLIC_REPOSITORY=aws-containers/hello-app-runner`，探针成功拉取 `https://public.ecr.aws/v2/aws-containers/hello-app-runner/manifests/latest` 的 manifest，审计事件为 succeeded。ECR Public 鉴权要求 IAM 同时具备 `ecr-public:GetAuthorizationToken` 与 `sts:GetServiceBearerToken`（AWS 托管策略 `AmazonElasticContainerRegistryPublicReadOnly` 已包含两者）。
+
 Baidu RTC 是会创建计费实例的独立 opt-in mutation gate。只有 operator 已完成具体会话批准并注入 BCE AKSK/IAM 与 product license 后才运行；测试强制走 MCP mutation/force/audit、内部 create/WSS/stop 和 secret containment：
 
 ```bash
