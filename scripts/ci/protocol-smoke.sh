@@ -51,6 +51,7 @@ trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}"' EXIT
   printf '%s\n' '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"aws_api_mutate","arguments":{"auth_scheme":"lex-v2-conversation","service":"lex","operation":"StartConversation","region":"us-west-2","method":"POST","url":"https://runtime-v2-lex.us-west-2.amazonaws.com.attacker.example","body":{"bot_id":"ABCDEFGHIJ","bot_alias_id":"alias-1","locale_id":"en_US","session_id":"session-1","texts":[{"text":"hello","event_id":"lex-evt-1"}],"max_events":1,"timeout_seconds":5},"response_file":"/tmp/aws-lex.ndjson","force":true}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"signalr-ws","service":"signalr","operation":"Subscribe","method":"GET","url":"wss://demo.service.signalr.net.attacker.example/client/?hub=chat","body":{"max_messages":1,"timeout_seconds":5},"response_file":"/tmp/signalr.ndjson"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"aws_api_read","arguments":{"auth_scheme":"chime-messaging-ws","service":"chime-messaging","operation":"SubscribeMessages","region":"us-east-1","method":"GET","url":"wss://data-messaging.chime.aws.attacker.example/connect","body":{"user_arn":"arn:aws:chime:us-east-1:123456789012:app-instance/app-1/user/observer","session_id":"session-1","max_messages":1,"timeout_seconds":5},"response_file":"/tmp/chime-messaging.ndjson"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"azure_api_read","arguments":{"auth_scheme":"openai-chat-stream","service":"openai","operation":"StreamChatCompletions","method":"POST","url":"https://demo.openai.azure.com.attacker.example/openai/deployments/gpt-4o-deployment/chat/completions","api_version":"2024-06-01","body":{"model":"gpt-4o-deployment","messages":[{"role":"user","content":"Hello"}],"max_events":1,"timeout_seconds":5},"response_file":"/tmp/chat-stream.ndjson"}}}'
 } | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${RESPONSES}"
 
 jq -e -s '
@@ -123,7 +124,9 @@ jq -e -s '
     ($responses | map(select(.id == 35))[0].result.isError == true) and
     ($responses | map(select(.id == 35))[0].result.content[0].text | contains("resource.service.signalr.net host")) and
     ($responses | map(select(.id == 36))[0].result.isError == true) and
-    ($responses | map(select(.id == 36))[0].result.content[0].text | contains("exact official data-messaging.chime.aws host"))
+    ($responses | map(select(.id == 36))[0].result.content[0].text | contains("exact official data-messaging.chime.aws host")) and
+    ($responses | map(select(.id == 37))[0].result.isError == true) and
+    ($responses | map(select(.id == 37))[0].result.content[0].text | contains("exact public-cloud resource.openai.azure.com host"))
 ' "${RESPONSES}" >/dev/null
 
 printf '%s\n' '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"baiducloud_api_mutate","arguments":{"auth_scheme":"iotcore-http-pub","service":"iotcore","operation":"PublishHTTP","method":"POST","url":"https://aop098js.iot.gz.baidubce.com.attacker.example/pub","body":{"topic":"commands/device-1","qos":1,"payload_base64":"dHVybi1vbg=="},"force":true}}}' |

@@ -889,6 +889,81 @@ func TestLiveAzureSignalRSubscribeReadOnly(t *testing.T) {
 	t.Logf("provider=azure service=signalr operation=Subscribe outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
 }
 
+func TestLiveAzureOpenAIStreamRead(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AZURE_OPENAI_STREAM") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AZURE_OPENAI_STREAM=1 for a real Entra-backed Azure OpenAI Chat Completions stream probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Azure OpenAI Chat Completions live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_AZURE_OPENAI_STREAM_ENDPOINT"), "/")
+	apiVersion := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_LIVE_AZURE_OPENAI_STREAM_API_VERSION"))
+	if apiVersion == "" {
+		apiVersion = "2024-06-01"
+	}
+	target, deployment, err := parseAzureOpenAIChatStreamTarget(endpoint)
+	if err != nil {
+		t.Fatalf("invalid Azure OpenAI Chat Completions live endpoint: %v", err)
+	}
+	_ = target
+	runtime := DefaultRuntime()
+	root := t.TempDir()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	responseFile := filepath.Join(root, "azure-openai-chat-stream.ndjson")
+	result := callCloudTool(t, c, "azure_api_read", map[string]any{
+		"auth_scheme": authSchemeAzureOpenAIChatStream, "service": "openai", "operation": "StreamChatCompletions",
+		"method": "POST", "url": endpoint, "api_version": apiVersion, "response_file": responseFile,
+		"body": map[string]any{
+			"model": deployment,
+			"messages": []any{
+				map[string]any{"role": "system", "content": "Reply with the single word ok."},
+				map[string]any{"role": "user", "content": "Hello"},
+			},
+			"max_events": 1, "timeout_seconds": 30,
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Azure OpenAI Chat Completions live read failed: %s", cloudToolText(t, result))
+	}
+	output, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{os.Getenv("AZURE_CLIENT_SECRET"), os.Getenv("AZURE_ACCESS_TOKEN")} {
+		if secret != "" && bytes.Contains(output, []byte(secret)) {
+			t.Fatal("Azure OpenAI Chat Completions live output leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAzure && events[index].Mode == ModeRead &&
+			events[index].Operation == "StreamChatCompletions" && events[index].AuthScheme == authSchemeAzureOpenAIChatStream &&
+			events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Azure OpenAI Chat Completions read audit event: %#v", events)
+	}
+	t.Logf("provider=azure service=openai operation=StreamChatCompletions outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
+}
+
 func TestLiveAWSECRReadOnly(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_ECR") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_AWS_ECR=1 for a real private ECR Registry token and ListTags probe")
