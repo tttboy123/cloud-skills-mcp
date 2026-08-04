@@ -2,6 +2,49 @@
 
 面向 AI Agent 的六云全资源 Skill + MCP 服务。统一 stdio MCP server 仅通过各云官方 HTTPS/WSS API 访问 AWS、Azure、Google Cloud、Alibaba Cloud、Tencent Cloud 和 Baidu AI Cloud 的已公开资源 API；新增服务或资源不需要再增加一个 Go handler，也不会启动云厂商 CLI 子进程。
 
+![CI](https://github.com/tttboy123/cloud-skills-mcp/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/tttboy123/cloud-skills-mcp)
+![Go](https://img.shields.io/badge/Go-1.25.12-blue)
+![Release](https://img.shields.io/github/v/release/tttboy123/cloud-skills-mcp)
+
+## 快速开始
+
+**用户 3 步上手（约 3 分钟，无需任何云凭证即可看到工具）**
+
+```bash
+git clone https://github.com/tttboy123/cloud-skills-mcp.git
+cd cloud-skills-mcp
+./install.sh --bin-dir "$HOME/.local/bin" --skills-dir "$HOME/.codex/skills"
+codex mcp add cloud-skills -- "$HOME/.local/bin/cloud-skills-mcp"
+```
+
+然后在任意 Codex 会话里让 Agent 执行第一条只读调用：
+
+```text
+调用 cloud_provider_status 查看六个云提供商的 adapter 状态。
+```
+
+你会看到六家 `available=true`、`credential_status=unverified`——说明 server 已接入，
+真实凭证只在首次需要签名的调用时从 server 进程环境解析。注入凭证后即可按
+`## 凭证入口` 开始真实只读调用（`<provider>_api_read`）。
+
+**Agentic 快速使用（给 Agent 的一句话）**
+
+本项目以“六套 Skill + 19 个 MCP 工具”的形式供 Agent 直接使用。每种 Agent 只需一条
+提示即可进入受控流程，后续由对应 Skill 的 SKILL.md 自动引导：
+
+```text
+用 aws 技能只读查看我的云资源，先 cloud_provider_status 再按 SKILL.md 的 Workflow 执行。
+```
+
+```text
+按 azure 技能的 MCP 参数说明，列出某资源组下的虚拟机（只读，不写、不碰凭证）。
+```
+
+每种 Agent 的完整提示词、安全规则与 live gate 清单见
+[docs/agentic-quickstart.md](docs/agentic-quickstart.md)。六套 Skill 也可作为
+Codex 插件一键安装（见 `## 安装`），安装后 Agent 会自动发现对应 SKILL.md。
+
 ## 能力模型
 
 服务暴露 19 个工具：
@@ -735,8 +778,11 @@ cmd/cloud-skills-mcp/       # 六云统一 stdio server
 internal/mcp/cloud/        # 通用 contract、policy 与六云 adapters
 aws/ azure/ google-cloud/ alicloud/ tencent-cloud/ baiducloud/
                             # 六份 Skills + 官方文档映射
+plugin/                     # 开源 Codex 插件打包（.codex-plugin + skills）
 docs/six-cloud-full-resource-contract.md
+docs/agentic-quickstart.md  # Agent 快速使用提示词与规则
 scripts/ci/                # 协议、安装与安全验证
+PROMOTION.md                # 宣传定位、渠道文案与演示脚本
 ```
 
 ## 官方文档
