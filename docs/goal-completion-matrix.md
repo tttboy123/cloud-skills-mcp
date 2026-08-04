@@ -33,6 +33,7 @@ and every provider has successful live acceptance with sanitized audit evidence.
 | Azure OpenAI Chat Completions streaming SSE resource protocol | Direct POST `text/event-stream` after an internal `https://cognitiveservices.azure.com/.default` Entra token; exact single-label `<resource>.openai.azure.com` host and official `/openai/deployments/<deployment>/chat/completions` path, date-structured `api_version`, internally injected `stream:true`, bounded model/messages/max_tokens/temperature plan, strict `chat.completion.chunk` shape and `[DONE]` termination, atomic sanitized NDJSON, and no exposed Entra token or api key | Boundary, plan, transport, chunk-shape, sentinel, atomic-failure and timeout tests; lookalike pre-credential protocol smoke; Skill/docs mapping; dedicated read-only streaming live gate | Implemented; live pending |
 | Azure OpenAI Responses streaming SSE resource protocol | Direct POST `text/event-stream` after an internal `https://cognitiveservices.azure.com/.default` Entra token; exact single-label `<resource>.openai.azure.com` host and official `/openai/v1/responses` path, optional documented `api_version` (`v1`, `preview`, date-structured, or omitted for the v1 GA default), internally injected `stream:true` and `store:false`, bounded model/input/max_output_tokens/temperature plan, strict documented `ResponseStreamEvent` type/sequence/per-type validation with `response.completed`/`response.incomplete` termination and fail-closed `error`/`response.failed`, atomic sanitized NDJSON, and no exposed Entra token or api key | Boundary, plan, transport, event-envelope, terminal, atomic-failure and timeout tests; lookalike pre-credential protocol smoke; Skill/docs mapping; dedicated read-only streaming live gate | Implemented; live pending |
 | Baidu IoT Core HTTP/MQTT resource protocols | Direct HTTP Publish and MQTT 3.1.1/5.0 over exact HTTPS/WSS with internal IAM application-permission HMAC, bounded wildcard/shared QoS 0/1/2 subscribe/unsubscribe/publish/Will plans, MQTT 5 properties, duplicate-safe bidirectional QoS 2, read/mutate separation, atomic output, and no exposed derived credential/token | Official signature and HTTP contract vectors, CONNECT/SUBSCRIBE/UNSUBSCRIBE/PUBLISH plus SUBACK/UNSUBACK/PUBACK/PUBREC/PUBREL/PUBCOMP transport tests, lookalike pre-credential protocol smoke, Skill/docs mapping, and dedicated MQTT read/HTTP mutation broker gates | Implemented; live pending |
+| Explicit retired / device-plane / media-plane / client-line-protocol exclusions | AWS MSK Kafka and ElastiCache/MemoryDB RESP are custom client line protocols (IAM/SASL/mTLS or RESP AUTH), AWS MediaConnect inputs are the Zixi/SRT/RTP UDP media plane, Azure Event Hubs Kafka requires SASL/PLAIN `$ConnectionString` plus connection-string password or an in-client OAuth path, Azure IoT Hub and Alibaba IoT Platform and Tencent IoT Explorer device planes authenticate with device SAS/device-secret/X.509 identities rather than operator IAM, Azure Speech TTS WebSocket V2 raw WSS is withdrawn to Speech-SDK-only, and Google Cloud IoT Core is retired (2023-08-16); every entry is recorded with official-source evidence in `api-protocol-coverage.md` and the control planes remain addressable | Provider table and explicit-mapping section updated with official documentation citations and non-resource/credential-bound/unavailable reasons | Implemented as documented exclusions |
 | Observable six-cloud acceptance | `TestLiveSixCloudReadOnly` selects providers and logs provider/outcome/bytes/request ID only; dedicated gates cover AWS IoT Core MQTT mutation, Amazon IVS Chat, Amazon Chime SDK Messaging, Baidu CCR, Baidu IoT Core MQTT, Baidu RTC, Alibaba MQ, Alibaba Enterprise ACR, Tencent CLS, Tencent Enterprise TCR, Azure ACR, Azure SignalR, Azure OpenAI Chat Completions, Azure OpenAI Responses, private/public Amazon ECR, and Google Artifact Registry without printing response bodies or secrets | Requires operator-injected credentials and opt-in live flags; product gates additionally require their exact endpoint and existing resource identifiers | **Pending** |
 
 Verified slices:
@@ -311,6 +312,19 @@ event-envelope, terminal, atomic-failure, and partial-timeout tests plus the
 lookalike pre-credential protocol smoke pass. A dedicated read-only streaming
 live gate remains pending an operator identity with the `Cognitive Services
 OpenAI User` role, an existing deployment, and a current Responses route.
+
+The remaining protocol-family audit is recorded as explicit mappings rather
+than open placeholders: AWS MSK Kafka and ElastiCache/MemoryDB ValKey/Redis
+RESP are custom client line protocols (IAM, SASL/SCRAM/mTLS, or RESP AUTH),
+AWS Elemental MediaConnect flow inputs are the Zixi/SRT/RTP/RIST UDP media
+plane, Azure Event Hubs Kafka requires SASL/PLAIN `$ConnectionString` plus the
+connection string as password or in-client Entra OAuth, Azure IoT Hub and the
+Alibaba IoT Platform and Tencent IoT Explorer device planes authenticate with
+device SAS/device-secret/X.509 identities rather than operator IAM, Azure
+Speech TTS WebSocket V2 raw WSS is withdrawn to Speech-SDK-only, and Google
+Cloud IoT Core was retired on 2023-08-16 with no active Device Manager API.
+Each entry names the official-source evidence and keeps the provider control
+plane addressable through the existing generic adapters.
 
 Google Cloud descriptor-driven ProtoJSON gRPC now gives every
 server-streaming method an explicit finite response-message and total-time
