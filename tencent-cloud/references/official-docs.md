@@ -38,6 +38,11 @@
 - Tencent Cloud API Explorer: https://console.cloud.tencent.com/api/explorer
 - COS GET Object and Range download: https://intl.cloud.tencent.com/document/product/436/7753
 - TRTC realtime ASR WebSocket, `SdkAppId`, and `UserSig` authentication: https://cloud.tencent.com/document/product/647/131297
+- CKafka network-connection instructions (SASL PLAIN and SCRAM-SHA-256/512) and the Kafka binary client protocol: https://cloud.tencent.com/document/product/597/122096
+- Cloud Streaming Services push/playback protocols (RTMP, HTTP-FLV, HLS, WebRTC) as the media plane: https://www.tencentcloud.com/document/product/267/42140
+- IM `UserSig` generation from `SDKAppID` plus SDK secret key (credential-bound, no CAM AKSK alternative): https://cloud.tencent.com/document/product/269/32688
+- TDMQ for Apache Pulsar client protocol (`pulsar://`, `pulsar+ssl://`) with cluster access username/password: https://intl.cloud.tencent.com/document/product/1110/42945
+- TDMQ for RabbitMQ full AMQP 0-9-1 compatibility with open-source RabbitMQ clients: https://www.tencentcloud.com/document/product/1112/73671
 
 The universal adapter signs API 3.0 requests with recommended TC3 or the still-documented v1 HmacSHA1/HmacSHA256 query/form protocol, legacy qcloud API 2017 requests at their exact `/v2/index.php` path, COS data-plane requests with the COS REST signature, legacy CLS data-plane requests with the separate q-sign protocol and internal `x-cls-token`, realtime ASR, virtual-number detection, SOE evaluation, speech-translation, voice-conversion, standard realtime TTS, streaming-text TTS, and large-model podcast WSS requests using their official raw canonical query plus HMAC-SHA1 algorithms, and MPS recognition/TTS WSS requests using their documented TC3 canonical `post` requests. TCR Enterprise Registry calls use a fixed internal TC3 `CreateInstanceToken(TokenType=temp)` request and keep the temporary Registry username/JWT inside the direct Docker/OCI HTTP exchange. CLS current management/new-feature APIs remain on TC3; `cls` exists only for the still-published old data-plane contract. Realtime ASR includes the operator-provided temporary credential token in the signed query when present. All signed WSS URLs remain internal to the connection dialer. It never executes TCCLI, Docker, or a credential helper.
 

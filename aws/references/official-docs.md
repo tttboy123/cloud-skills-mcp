@@ -68,6 +68,11 @@
 - Amazon Chime SDK Messaging `chime:Connect` and `chime:GetMessagingSessionEndpoint` IAM actions on AppInstanceUser resources: https://docs.aws.amazon.com/chime-sdk/latest/dg/define-iam-policy.html
 - Amazon Chime SDK Messaging WebSocket close codes and reconnect guidance: https://docs.aws.amazon.com/chime-sdk/latest/dg/handle-disconnects.html
 - Official Chime SDK JS messaging session implementation that retrieves the endpoint and SigV4-presigns `/connect` with service `chime`: https://github.com/aws/amazon-chime-sdk-js/tree/main/src/messagingsession
+- MSK Kafka client authentication (IAM, SASL/SCRAM, mTLS) and the Kafka binary client protocol: https://docs.aws.amazon.com/msk/latest/developerguide/client-auth.html
+- ElastiCache for Redis/ValKey and MemoryDB Redis AUTH token or IAM authentication through a RESP client: https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/auth.html
+- MediaConnect source ports (Zixi push 2088, VPC 2090–2099, SRT, RTP) as the media transmission plane: https://docs.aws.amazon.com/mediaconnect/latest/ug/source-ports.html
+- Kinesis Video Streams RTMP media ingest and HLS playback as the media plane, separate from the IAM-signed WebRTC signaling implemented here: https://docs.aws.amazon.com/kinesisvideostreams/latest/dg/what-is-kinesis-video.html and https://docs.aws.amazon.com/kinesisvideostreams/latest/dg/how-rtmp.html
+- Amazon MQ ActiveMQ broker access protocols (AMQP, OpenWire, STOMP, MQTT, WebSocket) and RabbitMQ AMQP 0-9-1 with broker user/LDAP authentication as non-resource client line protocols: https://docs.aws.amazon.com/amazon-mq/latest/developer-guide/security-authentication-authorization.html
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
 
