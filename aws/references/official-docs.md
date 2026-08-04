@@ -77,6 +77,7 @@
 - Amazon Connect `StartChatContact` (`PUT /contact/chat`, `connect` SigV4 signing name) and its ParticipantToken/ContactId response: https://docs.aws.amazon.com/connect/latest/APIReference/API_StartChatContact.html
 - Connect Participant `CreateParticipantConnection` (`POST /participant/connection`, `X-Amz-Bearer` participant token, 100-second WebSocket URL expiry) with the official `{"topic":"aws/subscribe","content":{"topics":["aws/chat"]}}` subscription frame: https://docs.aws.amazon.com/connect-participant/latest/APIReference/API_CreateParticipantConnection.html
 - Amazon Connect chat participant WebSocket topic framing (subscribe/heartbeat/ping and `aws/chat` events) in the open-source chat JS SDK: https://github.com/amazon-connect/amazon-connect-chatjs
+- Connect Participant `SendMessage` (`POST /participant/message` with `X-Amz-Bearer` connection token, `Content`/`ContentType`/`ClientToken`): https://docs.aws.amazon.com/connect-participant/latest/APIReference/API_SendMessage.html
 - Amazon IVS real-time Stage publish/subscribe over WebRTC/RTMPS as the media plane: https://docs.aws.amazon.com/ivs/latest/RealTimeUserGuide/getting-started-pub-sub.html
 
 `auth_scheme=ecr` signs the provider-fixed private or public GetAuthorizationToken request internally, validates the base64 `AWS:password` material without exposing it, applies the documented Basic or Bearer Registry header, binds endpoint/service/region/path exactly, and follows private layer redirects only to the exact regional Starport S3 bucket with Registry Authorization removed.
