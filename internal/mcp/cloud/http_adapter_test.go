@@ -1677,6 +1677,23 @@ func TestTencentV1AdapterInjectsCredentialsAndCallsHTTPS(t *testing.T) {
 	}
 }
 
+func TestTencentV1SHA256SchemeWired(t *testing.T) {
+	root := t.TempDir()
+	valid := Invocation{
+		Provider: ProviderTencent, AuthScheme: authSchemeTencentV1SHA256,
+		Service: "cvm", Operation: "DescribeInstances", APIVersion: "2017-03-12",
+		Region: "ap-guangzhou", Method: http.MethodGet, URL: "https://cvm.tencentcloudapi.com/",
+	}
+	if err := validateInvocation(valid, []string{root}); err != nil {
+		t.Fatalf("valid tc1-sha256 invocation rejected: %v", err)
+	}
+	lookalike := valid
+	lookalike.URL = "https://cvm.tencentcloudapi.com.attacker.example/"
+	if err := validateInvocation(lookalike, []string{root}); err == nil {
+		t.Fatal("lookalike Tencent tc1-sha256 host accepted")
+	}
+}
+
 func TestTencentQCloudLegacyAdapterSignsDocumentedPath(t *testing.T) {
 	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
 		if got, want := request.URL.EscapedPath(), "/v2/index.php"; got != want {

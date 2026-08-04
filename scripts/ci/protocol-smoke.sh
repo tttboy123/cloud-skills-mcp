@@ -13,7 +13,8 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
 
 RESPONSES=$(mktemp)
 MUTATION_RESPONSES=$(mktemp)
-trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}"' EXIT
+SWEEP_RESPONSES=$(mktemp)
+trap 'rm -f "${RESPONSES}" "${MUTATION_RESPONSES}" "${SWEEP_RESPONSES}"' EXIT
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"1"}}}'
@@ -143,5 +144,122 @@ jq -e '
   .result.isError == true and
   (.result.content[0].text | contains("exact single-instance official endpoint"))
 ' "${MUTATION_RESPONSES}" >/dev/null
+
+# Scheme registry sweep: every implemented auth_scheme must be routed through
+# the MCP boundary and rejected pre-credential on an allowlist-violating host.
+# The sweep calls the provider read tool with an attacker.example lookalike so
+# endpoint validation fails before any credential resolution or network I/O.
+{
+  id=100
+  while IFS='|' read -r provider scheme; do
+    case "${provider}" in
+      aws)
+        tool=aws_api_read
+        args="{\"auth_scheme\":\"${scheme}\",\"service\":\"ec2\",\"operation\":\"describe-instances\",\"region\":\"us-east-1\",\"method\":\"GET\",\"url\":\"https://ec2.us-east-1.amazonaws.com.attacker.example/\"}"
+        ;;
+      azure)
+        tool=azure_api_read
+        args="{\"auth_scheme\":\"${scheme}\",\"method\":\"GET\",\"url\":\"https://management.azure.com.attacker.example/subscriptions\"}"
+        ;;
+      gcp)
+        tool=gcp_api_read
+        args="{\"auth_scheme\":\"${scheme}\",\"method\":\"GET\",\"url\":\"https://compute.googleapis.com.attacker.example/v1/projects\"}"
+        ;;
+      alicloud)
+        tool=alicloud_api_read
+        args="{\"auth_scheme\":\"${scheme}\",\"service\":\"ecs\",\"operation\":\"describe-instances\",\"region\":\"cn-hangzhou\",\"method\":\"GET\",\"url\":\"https://ecs.aliyuncs.com.attacker.example/\"}"
+        ;;
+      tencent)
+        tool=tencent_api_read
+        args="{\"auth_scheme\":\"${scheme}\",\"service\":\"cvm\",\"operation\":\"describe-instances\",\"region\":\"ap-guangzhou\",\"method\":\"GET\",\"url\":\"https://cvm.tencentcloudapi.com.attacker.example/\"}"
+        ;;
+      baidu)
+        tool=baiducloud_api_read
+        args="{\"auth_scheme\":\"${scheme}\",\"service\":\"bcc\",\"operation\":\"describe-instances\",\"region\":\"bj\",\"method\":\"GET\",\"url\":\"https://bcc.bj.baidubce.com.attacker.example/\"}"
+        ;;
+      *)
+        echo "unknown sweep provider ${provider}" >&2
+        exit 2
+        ;;
+    esac
+    printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":${id},\"method\":\"tools/call\",\"params\":{\"name\":\"${tool}\",\"arguments\":${args}}}"
+    id=$((id + 1))
+  done <<'EOF'
+aws|sigv4
+aws|sigv4a
+aws|ecr
+aws|sigv4-ws
+aws|connect-health-ws
+aws|transcribe-ws
+aws|iot-mqtt-ws
+aws|kinesisvideo-signaling-ws
+aws|appsync-event-ws
+aws|appsync-graphql-ws
+aws|ivs-chat-ws
+aws|lex-v2-conversation
+aws|chime-messaging-ws
+aws|connect-chat-ws
+azure|acr
+azure|realtime-ws
+azure|voice-live-ws
+azure|openai-chat-stream
+azure|openai-responses-stream
+azure|webpubsub-ws
+azure|signalr-ws
+azure|webpubsub-mqtt-ws
+azure|eventgrid-mqtt-ws
+azure|servicebus-amqp-ws
+azure|eventhubs-amqp-ws
+gcp|artifact-registry
+gcp|firebase-sse
+gcp|grpc
+gcp|vertex-live-ws
+alicloud|acs3
+alicloud|rpc
+alicloud|roa
+alicloud|datahub
+alicloud|opensearch
+alicloud|odps
+alicloud|odps4
+alicloud|fc
+alicloud|fc3
+alicloud|fc-custom
+alicloud|oss
+alicloud|oss4
+alicloud|sls
+alicloud|sls4
+alicloud|mns
+alicloud|mq
+alicloud|acr-registry
+alicloud|ots
+alicloud|ots4
+alicloud|nls-rest
+alicloud|nls-ws
+tencent|tc3
+tencent|tc1
+tencent|tc1-sha256
+tencent|qcloud
+tencent|qcloud-sha256
+tencent|cos
+tencent|cls
+tencent|tcr-registry
+tencent|asr-ws
+tencent|virtual-number-ws
+tencent|soe-ws
+tencent|speech-translate-ws
+tencent|voice-convert-ws
+tencent|mps-ws
+tencent|mps-tts-ws
+tencent|tts-ws
+tencent|tts-stream-ws
+tencent|podcast-ws
+baidu|ccr-registry
+baidu|iotcore-http-pub
+baidu|iotcore-mqtt-ws
+baidu|rtc-aiagent-ws
+EOF
+} | env -i HOME=/nonexistent PATH=/usr/bin:/bin "${BINARY}" > "${SWEEP_RESPONSES}"
+
+jq -e -s '[.[] | select(.result.isError != true)] | length == 0' "${SWEEP_RESPONSES}" >/dev/null
 
 echo "protocol smoke: tool contract, mutation gate and pre-credential validation verified"
