@@ -29,6 +29,9 @@ GATES=(
 
 enabled=0
 mutation_enabled=0
+if [[ "${CLOUD_SKILLS_LIVE_TEST:-}" == "1" && -n "${CLOUD_SKILLS_LIVE_PROVIDERS:-}" ]]; then
+  enabled=1
+fi
 for entry in "${GATES[@]}"; do
   env_flag=${entry%%|*}
   if [[ "${!env_flag:-}" == "1" ]]; then

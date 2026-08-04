@@ -16,6 +16,7 @@ import (
 
 	aws "github.com/aws/aws-sdk-go-v2/aws"
 	awsv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/tttboy123/cloud-skills-mcp/internal/mcp/sdk"
 )
 
 const (
@@ -403,7 +404,9 @@ func (adapter *AWSRESTAdapter) getAWSECRAuthorization(ctx context.Context, targe
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", "", fmt.Errorf("Amazon ECR internal authorization returned HTTP %d", response.StatusCode)
+		limited := io.LimitReader(response.Body, 64*1024)
+		errorBody, _ := io.ReadAll(limited)
+		return "", "", fmt.Errorf("Amazon ECR internal authorization returned HTTP %d: %s", response.StatusCode, sdk.RedactSecret(string(errorBody)))
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxAWSECRAuthBytes+1))
 	if err != nil {
