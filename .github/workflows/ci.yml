@@ -37,6 +37,8 @@ jobs:
         run: go build -trimpath -o /tmp/cloud-skills-mcp ./cmd/cloud-skills-mcp
       - name: Protocol smoke tests
         run: ./scripts/ci/protocol-smoke.sh /tmp/cloud-skills-mcp
+      - name: Scheme mapping audit
+        run: ./scripts/ci/mapping-audit.sh "$PWD"
       - name: Installer smoke test
         run: ./scripts/ci/install-smoke.sh
       - name: Check shell syntax
