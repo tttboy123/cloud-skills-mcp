@@ -964,6 +964,77 @@ func TestLiveAzureOpenAIStreamRead(t *testing.T) {
 	t.Logf("provider=azure service=openai operation=StreamChatCompletions outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
 }
 
+func TestLiveAzureOpenAIResponsesRead(t *testing.T) {
+	if os.Getenv("CLOUD_SKILLS_LIVE_AZURE_OPENAI_RESPONSES") != "1" {
+		t.Skip("set CLOUD_SKILLS_LIVE_AZURE_OPENAI_RESPONSES=1 for a real Entra-backed Azure OpenAI Responses stream probe")
+	}
+	required := func(name string) string {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			t.Fatalf("%s is required for Azure OpenAI Responses live validation", name)
+		}
+		return value
+	}
+	endpoint := strings.TrimRight(required("CLOUD_SKILLS_LIVE_AZURE_OPENAI_RESPONSES_ENDPOINT"), "/")
+	model := required("CLOUD_SKILLS_LIVE_AZURE_OPENAI_RESPONSES_MODEL")
+	apiVersion := strings.TrimSpace(os.Getenv("CLOUD_SKILLS_LIVE_AZURE_OPENAI_RESPONSES_API_VERSION"))
+	if apiVersion == "" {
+		apiVersion = "v1"
+	}
+	if _, err := parseAzureOpenAIResponsesStreamTarget(endpoint); err != nil {
+		t.Fatalf("invalid Azure OpenAI Responses live endpoint: %v", err)
+	}
+	runtime := DefaultRuntime()
+	root := t.TempDir()
+	runtime.AllowedFileRoots = []string{root}
+	var auditLock sync.Mutex
+	var auditEvents []AuditEvent
+	runtime.Audit = func(_ context.Context, event AuditEvent) error {
+		auditLock.Lock()
+		defer auditLock.Unlock()
+		auditEvents = append(auditEvents, event)
+		return nil
+	}
+	c := newTestClient(t, runtime)
+	responseFile := filepath.Join(root, "azure-openai-responses.ndjson")
+	result := callCloudTool(t, c, "azure_api_read", map[string]any{
+		"auth_scheme": authSchemeAzureOpenAIResponsesStream, "service": "openai", "operation": "StreamResponses",
+		"method": "POST", "url": endpoint, "api_version": apiVersion, "response_file": responseFile,
+		"body": map[string]any{
+			"model":      model,
+			"input":      "Reply with the single word ok.",
+			"max_events": 4, "timeout_seconds": 30,
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Azure OpenAI Responses live read failed: %s", cloudToolText(t, result))
+	}
+	output, err := os.ReadFile(responseFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{os.Getenv("AZURE_CLIENT_SECRET"), os.Getenv("AZURE_ACCESS_TOKEN")} {
+		if secret != "" && bytes.Contains(output, []byte(secret)) {
+			t.Fatal("Azure OpenAI Responses live output leaked operator credential material")
+		}
+	}
+	auditLock.Lock()
+	events := append([]AuditEvent(nil), auditEvents...)
+	auditLock.Unlock()
+	var succeeded *AuditEvent
+	for index := range events {
+		if events[index].Provider == ProviderAzure && events[index].Mode == ModeRead &&
+			events[index].Operation == "StreamResponses" && events[index].AuthScheme == authSchemeAzureOpenAIResponsesStream &&
+			events[index].Outcome == "succeeded" {
+			succeeded = &events[index]
+		}
+	}
+	if succeeded == nil {
+		t.Fatalf("no succeeded Azure OpenAI Responses read audit event: %#v", events)
+	}
+	t.Logf("provider=azure service=openai operation=StreamResponses outcome=succeeded response_bytes=%d request_id=%q", len(output), succeeded.RequestID)
+}
+
 func TestLiveAWSECRReadOnly(t *testing.T) {
 	if os.Getenv("CLOUD_SKILLS_LIVE_AWS_ECR") != "1" {
 		t.Skip("set CLOUD_SKILLS_LIVE_AWS_ECR=1 for a real private ECR Registry token and ListTags probe")

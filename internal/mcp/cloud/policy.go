@@ -75,6 +75,9 @@ func classifyRead(provider Provider, request Invocation) bool {
 		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureOpenAIChatStream {
 			return strings.EqualFold(strings.TrimSpace(request.Operation), "StreamChatCompletions")
 		}
+		if normalizedAuthScheme(request.AuthScheme, "") == authSchemeAzureOpenAIResponsesStream {
+			return strings.EqualFold(strings.TrimSpace(request.Operation), "StreamResponses")
+		}
 		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
 		case "GET", "HEAD", "OPTIONS":
 			return true
@@ -259,6 +262,7 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	azureRealtimeScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureRealtimeWS
 	azureVoiceLiveScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureVoiceLiveWS
 	azureOpenAIChatStreamScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureOpenAIChatStream
+	azureOpenAIResponsesStreamScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureOpenAIResponsesStream
 	azureWebPubSubScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubWS
 	azureSignalRScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureSignalRWS
 	azureWebPubSubMQTTScheme := request.Provider == ProviderAzure && azureScheme == authSchemeAzureWebPubSubMQTTWS
@@ -420,6 +424,10 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 		if err := validateAzureOpenAIChatStreamInvocation(request); err != nil {
 			return err
 		}
+	} else if azureOpenAIResponsesStreamScheme {
+		if err := validateAzureOpenAIResponsesStreamInvocation(request); err != nil {
+			return err
+		}
 	} else if azureWebPubSubScheme {
 		if err := validateAzureWebPubSubInvocation(request); err != nil {
 			return err
@@ -467,8 +475,8 @@ func validateInvocationWithEndpointHosts(request Invocation, allowedFileRoots, a
 	}
 	switch request.Provider {
 	case ProviderAzure:
-		if azureScheme != "" && azureScheme != authSchemeAzureACR && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureVoiceLiveWS && azureScheme != authSchemeAzureOpenAIChatStream && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureSignalRWS && azureScheme != authSchemeAzureWebPubSubMQTTWS && azureScheme != authSchemeAzureEventGridMQTTWS && azureScheme != authSchemeAzureServiceBusAMQPWS && azureScheme != authSchemeAzureEventHubsAMQPWS {
-			return fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, openai-chat-stream, webpubsub-ws, signalr-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
+		if azureScheme != "" && azureScheme != authSchemeAzureACR && azureScheme != authSchemeAzureRealtimeWS && azureScheme != authSchemeAzureVoiceLiveWS && azureScheme != authSchemeAzureOpenAIChatStream && azureScheme != authSchemeAzureOpenAIResponsesStream && azureScheme != authSchemeAzureWebPubSubWS && azureScheme != authSchemeAzureSignalRWS && azureScheme != authSchemeAzureWebPubSubMQTTWS && azureScheme != authSchemeAzureEventGridMQTTWS && azureScheme != authSchemeAzureServiceBusAMQPWS && azureScheme != authSchemeAzureEventHubsAMQPWS {
+			return fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, openai-chat-stream, openai-responses-stream, webpubsub-ws, signalr-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 		}
 	case ProviderGCP:
 		if gcpScheme != "" && gcpScheme != authSchemeGCPArtifactRegistry && gcpScheme != authSchemeGCPFirebaseSSE && gcpScheme != authSchemeGCPGRPC && gcpScheme != authSchemeGCPVertexLiveWS {

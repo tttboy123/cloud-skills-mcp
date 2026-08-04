@@ -108,7 +108,7 @@ func NewAzureRESTAdapter(config AzureRESTConfig) *AzureRESTAdapter {
 func (adapter *AzureRESTAdapter) Status(ctx context.Context) (ProviderStatus, error) {
 	_ = ctx
 	return ProviderStatus{
-		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+acr-oauth2+realtime-ws+voice-live-ws+openai-chat-stream+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1+signalr-ws",
+		Provider: ProviderAzure, Available: true, Adapter: "Azure HTTPS/WSS + non-CLI Azure Identity", Version: "azidentity+acr-oauth2+realtime-ws+voice-live-ws+openai-chat-stream+openai-responses-stream+webpubsub-json-protobuf-reliable+mqtt5+eventgrid-mqtt5+servicebus-amqp1+eventhubs-amqp1+signalr-ws",
 		CredentialSource: credentialSource(ProviderAzure), CredentialStatus: CredentialStatusUnverified,
 		Message: "credentials are resolved lazily through Environment, Workload Identity, or Managed Identity; no Azure CLI credential is included",
 	}, nil
@@ -125,6 +125,7 @@ func (adapter *AzureRESTAdapter) Discover(ctx context.Context, _ DiscoveryReques
 		"openai_realtime":     "https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets",
 		"voice_live":          "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to",
 		"openai_chat_stream":  "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference",
+		"openai_responses":    "https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/responses?view=rest-microsoft-foundry-v1",
 		"openai_entra_auth":   "https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/managed-identity",
 		"webpubsub_protocol":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-webpubsub-subprotocol",
 		"webpubsub_reliable":  "https://learn.microsoft.com/en-us/azure/azure-web-pubsub/reference-json-reliable-webpubsub-subprotocol",
@@ -154,6 +155,9 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 	if scheme == authSchemeAzureOpenAIChatStream {
 		return invokeAzureOpenAIChatStream(ctx, adapter, request)
 	}
+	if scheme == authSchemeAzureOpenAIResponsesStream {
+		return invokeAzureOpenAIResponsesStream(ctx, adapter, request)
+	}
 	if scheme == authSchemeAzureWebPubSubWS {
 		return invokeAzureWebPubSub(ctx, adapter, request)
 	}
@@ -173,7 +177,7 @@ func (adapter *AzureRESTAdapter) Invoke(ctx context.Context, request Invocation)
 		return invokeAzureEventHubsAMQP(ctx, adapter, request)
 	}
 	if scheme != "" {
-		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, openai-chat-stream, webpubsub-ws, signalr-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
+		return InvocationResult{}, fmt.Errorf("Azure auth_scheme must be acr, realtime-ws, voice-live-ws, openai-chat-stream, openai-responses-stream, webpubsub-ws, signalr-ws, webpubsub-mqtt-ws, eventgrid-mqtt-ws, servicebus-amqp-ws, eventhubs-amqp-ws, or omitted for REST")
 	}
 	scope, err := azureScopeForInvocationWithEndpointHosts(request.URL, request.Audience, adapter.config.AllowedHosts)
 	if err != nil {
