@@ -38,6 +38,30 @@ and [Baidu BOS GetObject](https://cloud.baidu.com/doc/BOS/s/xkc5pcmcj).
 | Tencent Cloud | TC3 API 3.0, API 3.0 v1 HmacSHA1/HmacSHA256 query/form, still-active legacy `*.api.qcloud.com/v2/index.php` HmacSHA1/HmacSHA256 query/form, COS REST signatures, CLS legacy `q-sign-algorithm=sha1` HTTPS with exact public/internal regional endpoints and internal CAM `x-cls-token`, TCR Enterprise Docker/OCI Registry V2 with fixed internal TC3 `CreateInstanceToken(TokenType=temp)`, exact public/VPC/operator-custom endpoints, temporary Basic containment, manifests/blobs/tags/referrers/uploads/mounts, redirect rejection, and Personal Edition credential-bound exclusion, realtime ASR with documented CAM temporary-token signing, virtual-number human detection, SOE evaluation, speech-translation, standard realtime TTS, streaming-text TTS v2, and large-model podcast HMAC-SHA1 WSS, voice-conversion HMAC-SHA1 WSS with framed bidirectional PCM, MPS private-audio TC3 WSS recognition/translation with network-order framing, and MPS TC3 WSS streaming TTS with controlled text segments and atomic binary-audio output; AKSK/CAM credentials within each protocol's documented fields | Product-specific signatures outside implemented families; other remaining long-lived streaming/WebSocket protocols; Tencent Cloud IoT Explorer device MQTT is a documented device-credential-bound exclusion; CKafka is a documented non-resource Kafka client line protocol, CSS ingest/playback is a documented non-resource media plane, and IM is a documented UserSig credential-bound surface; TDMQ for Apache Pulsar (Pulsar binary) and TDMQ for RabbitMQ (AMQP 0-9-1) are documented non-resource client line protocols; TencentDB for Redis RESP is a documented non-resource client line protocol; service-by-service live vectors |
 | Baidu AI Cloud | BCE auth v1 and v2 signed HTTPS; AKSK/IAM-STS session token; CCR Enterprise and Personal Docker/OCI Registry V2 with fixed internal BCE v1 user/one-hour credential exchange, exact public/VPC/operator-custom endpoint validation, same-origin Bearer challenge binding, manifests/blobs/tags/referrers/uploads/mounts, redirect rejection, and internal temporary credential containment; IoT Core HTTP Publish through fixed internal `/auth` plus `/pub`, and MQTT 3.1.1/5.0 over exact WSS with internal IAM application-permission HMAC, 100 wildcard/shared subscriptions in eight-entry batches, bounded/rate-paced QoS 0/1/2 publish, duplicate-safe bidirectional QoS 2, MQTT 5 application properties/Will delay/Receive Maximum/server disconnect, Will/keepalive, 32–128 KiB instance payload bounds, atomic output, and no exported derived credential; RTC AI Agent BCE v1 create/private-instance-token WSS/stop lifecycle with exact official endpoints, operator-only license activation, all six documented upload codecs (`raw`, `raw16k`, `pcma`, `pcmu`, `g722`, `opus`), control/WSS codec agreement, 20–200 ms fixed-rate framing, variable-length Opus packet plans with official `ptime`/`plen`, strict credential-free parsing of the documented static break/text/TTS/device/GIS/player/ASR/prompt/variable/role/query/MCP/direct-control/meeting commands before or after audio, provider-event-correlated single-image upload with approved-root file validation and official 16 KiB/Base64 frame sequencing, current-format Function Call parsing with provider-session correlation to bounded credential-free `ok|error`/`post_function` templates, duplicate/unknown/call-limit rejection, serialized concurrent writes, bounded text/binary streaming, internal token containment, mutation-only policy, and atomic sanitized NDJSON | Product-specific legacy signatures or other long-lived transports outside BCE v1/v2, CCR, IoT Core HTTP/MQTT, and RTC AI Agent; Message Service for Kafka is a documented non-resource Kafka client line protocol; Message Service for RabbitMQ AMQP is a documented non-resource client line protocol; Cloud Database SCS (Redis) RESP is a documented non-resource client line protocol; Cloud Database RDS MySQL/PostgreSQL/SQL Server wire protocols are documented non-resource client line protocols; service-by-service live vectors |
 
+## Implemented auth_scheme identifiers
+
+Every implemented scheme identifier is listed here so the mapping audit can
+prove that each one is defined, wired, tested, smoke-covered, and documented:
+
+- AWS: `sigv4`, `sigv4a`, `ecr`, `sigv4-ws`, `connect-health-ws`,
+  `transcribe-ws`, `iot-mqtt-ws`, `kinesisvideo-signaling-ws`,
+  `appsync-event-ws`, `appsync-graphql-ws`, `ivs-chat-ws`,
+  `lex-v2-conversation`, `chime-messaging-ws`, `connect-chat-ws`
+- Azure: `acr`, `realtime-ws`, `voice-live-ws`, `openai-chat-stream`,
+  `openai-responses-stream`, `webpubsub-ws`, `signalr-ws`,
+  `webpubsub-mqtt-ws`, `eventgrid-mqtt-ws`, `servicebus-amqp-ws`,
+  `eventhubs-amqp-ws`
+- Google Cloud: `artifact-registry`, `firebase-sse`, `grpc`, `vertex-live-ws`
+- Alibaba Cloud: `acs3`, `rpc`, `roa`, `datahub`, `opensearch`, `odps`,
+  `odps4`, `fc`, `fc3`, `fc-custom`, `oss`, `oss4`, `sls`, `sls4`, `mns`,
+  `mq`, `acr-registry`, `ots`, `ots4`, `nls-rest`, `nls-ws`
+- Tencent Cloud: `tc3`, `tc1`, `tc1-sha256`, `qcloud`, `qcloud-sha256`,
+  `cos`, `cls`, `tcr-registry`, `asr-ws`, `virtual-number-ws`, `soe-ws`,
+  `speech-translate-ws`, `voice-convert-ws`, `mps-ws`, `mps-tts-ws`,
+  `tts-ws`, `tts-stream-ws`, `podcast-ws`
+- Baidu AI Cloud: `ccr-registry`, `iotcore-http-pub`, `iotcore-mqtt-ws`,
+  `rtc-aiagent-ws`
+
 Amazon ECR private and public Docker/OCI Registry HTTP is a first-class
 exception to generic AWS SigV4 request signing. `auth_scheme=ecr` derives
 GetAuthorizationToken through the AWS SDK identity chain and a provider-fixed
